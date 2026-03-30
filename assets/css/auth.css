@@ -1,0 +1,282 @@
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 1024px) {
+  .auth-shell {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.auth-side {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem;
+}
+
+@media (min-width: 1024px) {
+  .auth-side {
+    display: flex;
+  }
+}
+
+.auth-content {
+  max-width: 28rem;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.auth-form-wrap {
+  width: 100%;
+  max-width: 28rem;
+}
+
+.auth-kicker {
+  font-size: 0.68rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: #a1a1aa;
+}
+
+.auth-title {
+  margin-top: 0.7rem;
+  font-size: 2rem;
+  line-height: 1.15;
+  font-weight: 600;
+}
+
+.auth-subtitle {
+  margin-top: 0.55rem;
+  color: #a1a1aa;
+  font-size: 0.875rem;
+}
+
+.auth-form {
+  margin-top: 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid #27272a;
+  background: rgba(24, 24, 27, 0.35);
+  padding: 1.25rem;
+}
+
+/* Login-only animated maroon/green gradient background */
+.auth-login-bg {
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-login-bg::before {
+  content: "";
+  position: fixed;
+  inset: -35%;
+  z-index: -2;
+  background:
+    radial-gradient(circle at 12% 22%, rgba(111, 29, 45, 0.86), transparent 33%),
+    radial-gradient(circle at 86% 78%, rgba(21, 128, 61, 0.84), transparent 33%),
+    radial-gradient(circle at 74% 16%, rgba(136, 19, 55, 0.72), transparent 30%),
+    radial-gradient(circle at 22% 88%, rgba(22, 163, 74, 0.74), transparent 33%),
+    radial-gradient(circle at 52% 52%, rgba(16, 185, 129, 0.28), transparent 44%),
+    #09090b;
+  background-size: 185% 185%;
+  animation: authGradientFlow 4.8s linear infinite alternate;
+  filter: saturate(1.38) contrast(1.12) brightness(1.07);
+  will-change: transform, filter, background-position;
+}
+
+.auth-login-bg::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(9, 9, 11, 0.35), rgba(9, 9, 11, 0.7));
+}
+
+.interactive-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0; 
+  pointer-events: none;
+  background-image: url('/assets/bg.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity 0.5s ease-out;
+  filter: saturate(1.2) contrast(1.1) brightness(0.8);
+  -webkit-mask-image: radial-gradient(circle 180px at var(--mouse-x, 50%) var(--mouse-y, 50%), black 40%, rgba(0,0,0,0.8) 60%, transparent 100%);
+  mask-image: radial-gradient(circle 180px at var(--mouse-x, 50%) var(--mouse-y, 50%), black 40%, rgba(0,0,0,0.8) 60%, transparent 100%);
+}
+
+@keyframes authGradientFlow {
+  0% {
+    transform: translate3d(-8%, -6%, 0) scale(1.08) rotate(0deg);
+    background-position: 0% 0%;
+    filter: hue-rotate(0deg) saturate(1.3) brightness(1.05);
+  }
+  50% {
+    transform: translate3d(8%, -2%, 0) scale(1.12) rotate(1deg);
+    background-position: 60% 40%;
+    filter: hue-rotate(-6deg) saturate(1.45) brightness(1.12);
+  }
+  100% {
+    transform: translate3d(-4%, 8%, 0) scale(1.1) rotate(-1deg);
+    background-position: 100% 100%;
+    filter: hue-rotate(4deg) saturate(1.36) brightness(1.08);
+  }
+}
+
+.auth-links {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+}
+
+.auth-links a,
+.auth-foot a {
+  color: #e4e4e7;
+  text-decoration: none;
+}
+
+.auth-links a:hover,
+.auth-foot a:hover {
+  text-decoration: underline;
+}
+
+.auth-foot {
+  margin-top: 1rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+}
+
+.auth-copyright {
+  margin-top: 1.2rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #71717a;
+}
+
+.auth-feature-grid {
+  margin-top: 1.6rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.auth-feature {
+  border-radius: 0.75rem;
+  border: 1px solid #27272a;
+  background: rgba(24, 24, 27, 0.2);
+  padding: 0.9rem;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+}
+
+/* Logo Collision Animation */
+.logo-collision-wrapper {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2rem;
+  overflow: visible;
+}
+
+.logo-bsit, .logo-cs {
+  position: absolute;
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+  filter: drop-shadow(0 15px 25px rgba(0,0,0,0.6));
+  animation-duration: 9s;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+  z-index: 2;
+}
+
+.logo-bsit {
+  left: 10%;
+  animation-name: collideLeft;
+}
+
+.logo-cs {
+  right: 10%;
+  animation-name: collideRight;
+}
+
+.collision-flash {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fef3c7;
+  border-radius: 50%;
+  box-shadow: 0 0 80px 60px rgba(253, 230, 138, 0.9),
+              0 0 150px 100px rgba(245, 158, 11, 0.7),
+              0 0 200px 150px rgba(217, 119, 6, 0.5);
+  opacity: 0;
+  animation: flashBurst 9s infinite ease-out;
+  z-index: 1;
+}
+
+.logo-ccs {
+  position: absolute;
+  width: 170px;
+  height: 170px;
+  object-fit: contain;
+  opacity: 0;
+  animation: revealCCS 9s infinite ease-out;
+  z-index: 3;
+  filter: drop-shadow(0 15px 30px rgba(245, 158, 11, 0.4));
+}
+
+.collision-particles {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+@keyframes collideLeft {
+  0%, 5% { transform: translateX(0) scale(0.8) rotate(-15deg); opacity: 0; filter: drop-shadow(0 0 20px rgba(159, 18, 57, 0.5)); }
+  10% { opacity: 1; }
+  22% { transform: translateX(110%) scale(1.1) rotate(10deg); filter: drop-shadow(0 0 30px rgba(159, 18, 57, 0.8)); } /* Impact point */
+  25%, 100% { transform: translateX(110%) scale(1.3) rotate(15deg); opacity: 0; } /* Disappear into flash */
+}
+
+@keyframes collideRight {
+  0%, 5% { transform: translateX(0) scale(0.8) rotate(15deg); opacity: 0; filter: drop-shadow(0 0 20px rgba(22, 163, 74, 0.5)); }
+  10% { opacity: 1; }
+  22% { transform: translateX(-110%) scale(1.1) rotate(-10deg); filter: drop-shadow(0 0 30px rgba(22, 163, 74, 0.8)); } /* Impact point */
+  25%, 100% { transform: translateX(-110%) scale(1.3) rotate(-15deg); opacity: 0; } /* Disappear into flash */
+}
+
+@keyframes flashBurst {
+  0%, 21% { opacity: 0; transform: scale(0); }
+  22% { opacity: 1; transform: scale(1.5); }
+  28% { opacity: 0.8; transform: scale(3); }
+  45% { opacity: 0; transform: scale(4); }
+  100% { opacity: 0; }
+}
+
+@keyframes revealCCS {
+  0%, 22% { opacity: 0; transform: scale(0.5) translateY(20px); filter: blur(10px); }
+  25% { opacity: 1; transform: scale(1.1) translateY(0); filter: blur(0); }
+  28%, 85% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); } 
+  92%, 100% { opacity: 0; transform: scale(0.9) translateY(-20px); filter: blur(5px); }
+}
