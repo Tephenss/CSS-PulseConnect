@@ -105,14 +105,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <!doctype html>
 <html lang="en" class="dark">
+
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CSS PulseConnect — Login</title>
+    <title>CCS PulseConnect — Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/assets/css/app.css" />
     <link rel="stylesheet" href="/assets/css/auth.css" />
 </head>
+
 <body class="min-h-screen bg-zinc-950 text-zinc-100 auth-login-bg">
     <div class="interactive-bg"></div>
     <div class="min-h-screen grid grid-cols-1 lg:grid-cols-2 relative z-10">
@@ -122,13 +124,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <img src="/assets/BSIT.png" alt="BSIT" class="logo-bsit" />
                     <img src="/assets/CS.png" alt="CS" class="logo-cs" />
                     <div class="collision-flash"></div>
+                    <!-- Lightning & Spark Effects -->
+                    <div class="lightning-strike"></div>
+                    <div class="spark spark-1"></div>
+                    <div class="spark spark-2"></div>
+                    <div class="spark spark-3"></div>
+                    <div class="spark spark-4"></div>
                     <img src="/assets/CCS.png" alt="CCS" class="logo-ccs" />
                 </div>
                 <div class="text-center mt-6">
-                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CSS PulseConnect</div>
+                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CCS PulseConnect</div>
                     <h1 class="text-3xl font-semibold mt-2 leading-tight">Event Management System</h1>
-                    <p class="text-zinc-400 mt-4 text-sm leading-relaxed">
-                        Register for events, get your QR e-ticket, scan attendance, and download certificates.
+                    <p class="text-zinc-400 mt-4 text-sm leading-relaxed min-h-[48px]">
+                        <span
+                            id="loginDescTyped"
+                            data-full-text="Register for events, get your QR e-ticket, scan attendance, and download certificates."></span>
+                        <span id="loginDescCaret" class="inline-block w-2 text-zinc-400 align-baseline"></span>
+                        <noscript>Register for events, get your QR e-ticket, scan attendance, and download certificates.</noscript>
                     </p>
                 </div>
             </div>
@@ -149,36 +161,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
 
                 <form method="POST" class="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars((string) $_SESSION['csrf_token']) ?>" />
+                    <input type="hidden" name="csrf_token"
+                        value="<?= htmlspecialchars((string) $_SESSION['csrf_token']) ?>" />
 
                     <label class="block text-xs text-zinc-400 mb-1" for="email">Email</label>
-                    <input
-                        id="email"
-                        name="email"
-                        type="email"
-                        value="<?= htmlspecialchars((string) $old['email']) ?>"
+                    <input id="email" name="email" type="email" value="<?= htmlspecialchars((string) $old['email']) ?>"
                         required
                         class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
-                        placeholder="name@email.com"
-                        autocomplete="email"
-                    />
+                        placeholder="Enter Email" autocomplete="email" />
 
                     <div class="h-4"></div>
 
                     <label class="block text-xs text-zinc-400 mb-1" for="password">Password</label>
-                    <input
-                        id="password"
-                        name="password"
-                        type="password"
-                        required
+                    <input id="password" name="password" type="password" required
                         class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
-                        placeholder="Your password"
-                        autocomplete="current-password"
-                    />
+                        placeholder="Your password" autocomplete="current-password" />
 
                     <div class="h-5"></div>
 
-                    <button type="submit" class="w-full rounded-xl bg-zinc-100 text-zinc-900 px-4 py-3 font-medium hover:bg-zinc-200 transition">
+                    <button type="submit"
+                        class="w-full rounded-xl bg-zinc-100 text-zinc-900 px-4 py-3 font-medium hover:bg-zinc-200 transition">
                         Login
                     </button>
 
@@ -190,52 +192,105 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </form>
 
                 <div class="text-center text-xs text-zinc-500 mt-6">
-                    © <?= htmlspecialchars((string) date('Y')) ?> CSS PulseConnect
+                    © <?= htmlspecialchars((string) date('Y')) ?> CCS PulseConnect
                 </div>
             </div>
         </div>
-</div>
-<script>
-    let mouseTimeout;
-    let targetX = typeof window !== 'undefined' ? window.innerWidth / 2 : 0;
-    let targetY = typeof window !== 'undefined' ? window.innerHeight / 2 : 0;
-    let currentX = targetX, currentY = targetY;
+    </div>
+    <script>
+        // Typewriter effect for the login description (PC/desktop).
+        (function () {
+            var el = document.getElementById('loginDescTyped');
+            var caret = document.getElementById('loginDescCaret');
+            if (!el || !caret) return;
 
-    document.addEventListener('mousemove', function(e) {
-        targetX = e.clientX;
-        targetY = e.clientY;
-        
-        const bg = document.querySelector('.interactive-bg');
-        if(bg) {
-            bg.style.opacity = '0.85'; // Show on move
-            
-            clearTimeout(mouseTimeout);
-            mouseTimeout = setTimeout(() => {
-                bg.style.opacity = '0'; // Hide after stop
-            }, 500);
-        }
-    });
-    
-    document.addEventListener('mouseleave', function() {
-        const bg = document.querySelector('.interactive-bg');
-        if(bg) bg.style.opacity = '0';
-    });
+            var full = el.getAttribute('data-full-text') || '';
+            var i = 0;
+            var pauseAfterCompleteMs = 3000; // restart 3 seconds after typing finishes
+            var caretOn = true;
 
-    function animateBg() {
-        // Linear Interpolation for smooth trailing delay
-        currentX += (targetX - currentX) * 0.06;
-        currentY += (targetY - currentY) * 0.06;
-        
-        const bg = document.querySelector('.interactive-bg');
-        if(bg) {
-            bg.style.setProperty('--mouse-x', currentX + 'px');
-            bg.style.setProperty('--mouse-y', currentY + 'px');
+            function render() {
+                caret.textContent = caretOn ? '|' : '';
+                el.textContent = full.slice(0, i);
+            }
+
+            // Typing speed per character (ms).
+            // Keeps the typing readable; the 3s restart is handled after completion.
+            var typingSpeedMs = 22;
+            var typingTimer = null;
+            var restartTimeout = null;
+
+            function start() {
+                // Reset and start typing again.
+                i = 0;
+                el.textContent = '';
+                caret.textContent = caretOn ? '|' : '';
+
+                if (typingTimer) window.clearInterval(typingTimer);
+                if (restartTimeout) window.clearTimeout(restartTimeout);
+                typingTimer = window.setInterval(function () {
+                    i++;
+                    render();
+                    if (i >= full.length) {
+                        window.clearInterval(typingTimer);
+                        typingTimer = null;
+                        // Wait 3 seconds after completion before restarting.
+                        restartTimeout = window.setTimeout(function () {
+                            start();
+                        }, pauseAfterCompleteMs);
+                    }
+                }, typingSpeedMs);
+            }
+
+            // Blinking caret (independent of typing).
+            window.setInterval(function () {
+                caretOn = !caretOn;
+                render();
+            }, 520);
+
+            start();
+        })();
+
+        let mouseTimeout;
+        let targetX = typeof window !== 'undefined' ? window.innerWidth / 2 : 0;
+        let targetY = typeof window !== 'undefined' ? window.innerHeight / 2 : 0;
+        let currentX = targetX, currentY = targetY;
+
+        document.addEventListener('mousemove', function (e) {
+            targetX = e.clientX;
+            targetY = e.clientY;
+
+            const bg = document.querySelector('.interactive-bg');
+            if (bg) {
+                bg.style.opacity = '0.85'; // Show on move
+
+                clearTimeout(mouseTimeout);
+                mouseTimeout = setTimeout(() => {
+                    bg.style.opacity = '0'; // Hide after stop
+                }, 500);
+            }
+        });
+
+        document.addEventListener('mouseleave', function () {
+            const bg = document.querySelector('.interactive-bg');
+            if (bg) bg.style.opacity = '0';
+        });
+
+        function animateBg() {
+            // Linear Interpolation for smooth trailing delay
+            currentX += (targetX - currentX) * 0.06;
+            currentY += (targetY - currentY) * 0.06;
+
+            const bg = document.querySelector('.interactive-bg');
+            if (bg) {
+                bg.style.setProperty('--mouse-x', currentX + 'px');
+                bg.style.setProperty('--mouse-y', currentY + 'px');
+            }
+
+            requestAnimationFrame(animateBg);
         }
-        
-        requestAnimationFrame(animateBg);
-    }
-    animateBg();
-</script>
+        animateBg();
+    </script>
 </body>
-</html>
 
+</html>

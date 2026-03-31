@@ -280,3 +280,67 @@
   28%, 85% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); } 
   92%, 100% { opacity: 0; transform: scale(0.9) translateY(-20px); filter: blur(5px); }
 }
+
+/* ⚡ Lightning & Sparks Elements ⚡ */
+.lightning-strike {
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  width: 15px;
+  height: 120px;
+  background: #fff;
+  opacity: 0;
+  box-shadow: 0 0 20px #fff, 0 0 40px #fde047, 0 0 80px #facc15;
+  filter: blur(1px) drop-shadow(0 0 15px #fef08a);
+  clip-path: polygon(30% 0, 100% 0, 60% 40%, 100% 40%, 10% 100%, 40% 60%, 0% 60%);
+  z-index: 5;
+  animation: lightningBolt 9s infinite linear;
+  transform-origin: top center;
+}
+
+.spark {
+  position: absolute;
+  width: 3px;
+  height: 40px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 0 10px #fff, 0 0 20px #fde047, 0 0 40px #eab308;
+  opacity: 0;
+  z-index: 4;
+}
+
+.spark-1 { top: 50%; left: 50%; animation: spark1 9s infinite cubic-bezier(0.1, 1, 0.3, 1); }
+.spark-2 { top: 50%; left: 50%; animation: spark2 9s infinite cubic-bezier(0.1, 1, 0.3, 1); }
+.spark-3 { top: 50%; left: 50%; animation: spark3 9s infinite cubic-bezier(0.1, 1, 0.3, 1); }
+.spark-4 { top: 50%; left: 50%; animation: spark4 9s infinite cubic-bezier(0.1, 1, 0.3, 1); }
+
+/* Sparks shoot outwards at exactly 22% (collision point) */
+@keyframes spark1 {
+  0%, 21% { opacity: 0; transform: translate(-50%, -50%) rotate(45deg) scaleY(0); }
+  22% { opacity: 1; transform: translate(60px, -60px) rotate(45deg) scaleY(2); }
+  25%, 100% { opacity: 0; transform: translate(120px, -120px) rotate(45deg) scaleY(0); }
+}
+@keyframes spark2 {
+  0%, 21% { opacity: 0; transform: translate(-50%, -50%) rotate(-45deg) scaleY(0); }
+  22% { opacity: 1; transform: translate(-60px, -60px) rotate(-45deg) scaleY(2); }
+  25%, 100% { opacity: 0; transform: translate(-120px, -120px) rotate(-45deg) scaleY(0); }
+}
+@keyframes spark3 {
+  0%, 21% { opacity: 0; transform: translate(-50%, -50%) rotate(135deg) scaleY(0); }
+  22% { opacity: 1; transform: translate(60px, 60px) rotate(135deg) scaleY(1.5); }
+  25%, 100% { opacity: 0; transform: translate(100px, 100px) rotate(135deg) scaleY(0); }
+}
+@keyframes spark4 {
+  0%, 21% { opacity: 0; transform: translate(-50%, -50%) rotate(-135deg) scaleY(0); }
+  22% { opacity: 1; transform: translate(-60px, 60px) rotate(-135deg) scaleY(1.5); }
+  25%, 100% { opacity: 0; transform: translate(-100px, 100px) rotate(-135deg) scaleY(0); }
+}
+
+@keyframes lightningBolt {
+  0%, 21.8% { opacity: 0; transform: translateX(-50%) scaleY(0); }
+  22% { opacity: 1; transform: translateX(-50%) scaleY(1.2); filter: blur(0px) brightness(1.5); }
+  23% { opacity: 0.2; transform: translateX(-50%) scaleY(1); }
+  23.5% { opacity: 0.8; transform: translateX(-50%) scaleY(1.1) scaleX(-1); }
+  24.5% { opacity: 0; transform: translateX(-50%) scaleY(1); }
+  100% { opacity: 0; }
+}

@@ -1,4 +1,4 @@
-## Supabase setup (CSS PulseConnect)
+## Supabase setup (CCS PulseConnect)
 
 ### Required config
 - `SUPABASE_URL`: your project URL

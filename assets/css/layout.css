@@ -10,11 +10,11 @@ body { overflow-x: hidden; }
   border-radius: 0.65rem;
   font-size: 0.825rem;
   font-weight: 450;
-  color: #a1a1aa;
+  color: #52525b;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.sidebar-link:hover { color: #f4f4f5; background: rgba(39,39,42,0.6); }
-.sidebar-link.active { color: #f4f4f5; background: rgba(39,39,42,0.8); }
+.sidebar-link:hover { color: #18181b; background: rgba(244,244,245,0.9); }
+.sidebar-link.active { color: #18181b; background: rgba(244,244,245,1); }
 .sidebar-link.active::before {
   content: "";
   position: absolute;
@@ -24,7 +24,7 @@ body { overflow-x: hidden; }
   width: 3px;
   height: 60%;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #a78bfa, #c084fc);
+  background: linear-gradient(180deg, #fb923c, #ea580c);
 }
 .sidebar-link svg {
   width: 18px;
@@ -42,25 +42,109 @@ body { overflow-x: hidden; }
   color: #52525b;
   padding: 0.5rem 0.85rem 0.35rem;
   margin-top: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: opacity 0.25s ease, height 0.3s ease, padding 0.3s ease, margin 0.3s ease;
 }
-#sidebar { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
+
+/* Sidebar overall transition */
+#sidebar {
+  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1);
+}
 #sidebar-overlay { transition: opacity 0.3s; }
+
 .glass-card {
-  background: rgba(24,24,27,0.5);
+  background: rgba(255,255,255,0.92);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(63,63,70,0.4);
+  border: 1px solid rgba(228,228,231,0.95);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 20px rgba(15, 23, 42, 0.04);
 }
-.content-area { scrollbar-width: thin; scrollbar-color: #3f3f46 transparent; }
+.content-area { scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent; }
 .content-area::-webkit-scrollbar { width: 6px; }
 .content-area::-webkit-scrollbar-track { background: transparent; }
-.content-area::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+.content-area::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
 
+/* ── Animated label and logo text ── */
+.sidebar-label,
+.sidebar-logo-text {
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 0.2s ease, max-width 0.3s cubic-bezier(0.4,0,0.2,1);
+  max-width: 200px;
+  opacity: 1;
+}
+
+/* ── Desktop: Collapsible icon-only sidebar ── */
+@media (min-width: 1024px) {
+  #sidebar { transform: translateX(0) !important; width: 260px; }
+
+  /* Main content offset */
+  .main-offset {
+    margin-left: 260px;
+    transition: margin-left 0.3s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  /* Collapsed state — driven by JS toggling .collapsed on #sidebar */
+  #sidebar.collapsed { width: 68px; }
+  body.sidebar-collapsed #main-wrapper,
+  body.sidebar-collapsed .main-offset { margin-left: 68px; }
+
+  #sidebar.collapsed .sidebar-label,
+  #sidebar.collapsed .sidebar-logo-text {
+    opacity: 0;
+    max-width: 0;
+    pointer-events: none;
+  }
+  #sidebar.collapsed .sidebar-section {
+    opacity: 0;
+    height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+  }
+  #sidebar.collapsed .sidebar-link {
+    justify-content: center;
+    padding: 0.65rem;
+    gap: 0;
+  }
+  #sidebar.collapsed .sidebar-link.active::before { display: none; }
+  #sidebar.collapsed .sidebar-link.active {
+    background: rgba(244,244,245,1);
+    border-radius: 0.65rem;
+  }
+
+  /* Tooltip for collapsed links */
+  #sidebar.collapsed .sidebar-link {
+    position: relative;
+  }
+  #sidebar.collapsed .sidebar-link::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: #18181b;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.3rem 0.65rem;
+    border-radius: 0.5rem;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 100;
+  }
+  #sidebar.collapsed .sidebar-link:hover::after {
+    opacity: 1;
+  }
+}
+
+/* ── Mobile: Off-canvas drawer ── */
 @media (max-width: 1023px) {
-  #sidebar { transform: translateX(-100%); position: fixed; z-index: 50; }
+  #sidebar { transform: translateX(-100%); position: fixed; z-index: 50; width: 260px; }
   #sidebar.open { transform: translateX(0); }
   #sidebar-overlay.open { opacity: 1; pointer-events: auto; }
-}
-@media (min-width: 1024px) {
-  #sidebar { transform: translateX(0) !important; }
+  .main-offset { margin-left: 0; }
 }

@@ -98,7 +98,7 @@ $body = str_replace(['{{name}}', '{{event}}'], [$name, $eventTitle], $body);
 
   <div class="max-w-4xl mx-auto bg-white text-zinc-900 rounded-2xl p-10 border border-zinc-200">
     <div class="text-center">
-      <div class="text-xs tracking-widest uppercase text-zinc-500">CSS PulseConnect</div>
+      <div class="text-xs tracking-widest uppercase text-zinc-500">CCS PulseConnect</div>
       <h1 class="text-3xl font-semibold mt-3"><?= htmlspecialchars((string) ($tpl['title'] ?? 'Certificate')) ?></h1>
       <div class="mt-10 text-lg text-zinc-700">This is to certify that</div>
       <div class="mt-3 text-4xl font-bold"><?= htmlspecialchars($name) ?></div>

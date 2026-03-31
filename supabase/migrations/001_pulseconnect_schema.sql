@@ -1,4 +1,4 @@
-                                                              -- CSS PulseConnect - Supabase schema
+                                                              -- CCS PulseConnect - Supabase schema
                                                               -- Run this in Supabase SQL Editor.
 
                                                               create extension if not exists pgcrypto;
@@ -185,3 +185,18 @@ grant all privileges on all sequences in schema public to anon, authenticated, s
                                                               create index if not exists certificates_event_idx on public.certificates(event_id);
                                                               create index if not exists certificates_student_idx on public.certificates(student_id);
 
+-- CCS PulseConnect - Supabase schema migration 002
+-- Add sections table and link to users
+
+create table if not exists public.sections (
+    id uuid primary key default gen_random_uuid(),
+    name text not null unique,
+    created_at timestamptz not null default now()
+);
+
+-- Give permissions
+grant all privileges on table public.sections to anon, authenticated, service_role;
+
+-- Alter users table to include section_id
+alter table public.users
+add column if not exists section_id uuid references public.sections(id) on delete set null;

@@ -35,7 +35,7 @@ render_header('Forgot password', null);
 
 <div class="max-w-md mx-auto">
   <div class="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
-    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CSS PulseConnect</div>
+    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CCS PulseConnect</div>
     <h1 class="text-3xl font-semibold mt-3">Forgot Password</h1>
     <p class="text-zinc-400 text-sm mt-2">Enter your email to request a password reset.</p>
 

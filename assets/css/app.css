@@ -1,12 +1,12 @@
 :root {
-  --pc-bg: #09090b;
-  --pc-surface: #111116;
-  --pc-surface-2: #0d0d12;
-  --pc-border: #27272a;
-  --pc-text: #f4f4f5;
-  --pc-muted: #a1a1aa;
-  --pc-accent: #f4f4f5;
-  --pc-accent-text: #111116;
+  --pc-bg: #fafafa;
+  --pc-surface: #ffffff;
+  --pc-surface-2: #f4f4f5;
+  --pc-border: #e4e4e7;
+  --pc-text: #18181b;
+  --pc-muted: #52525b;
+  --pc-accent: #18181b;
+  --pc-accent-text: #ffffff;
 }
 
 body {
@@ -15,14 +15,14 @@ body {
 }
 
 .pc-topbar {
-  border-bottom: 1px solid #18181b;
-  background: rgba(9, 9, 11, 0.8);
+  border-bottom: 1px solid var(--pc-border);
+  background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(6px);
 }
 
 .pc-card {
   border: 1px solid var(--pc-border);
-  background: rgba(24, 24, 27, 0.35);
+  background: rgba(255, 255, 255, 0.85);
   border-radius: 1rem;
 }
 
@@ -44,11 +44,11 @@ body {
 
 .pc-btn-outline {
   border: 1px solid var(--pc-border);
-  background: rgba(24, 24, 27, 0.35);
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .pc-btn-outline:hover {
-  background: rgba(39, 39, 42, 0.45);
+  background: rgba(244, 244, 245, 0.9);
 }
 
 .pc-input,
@@ -67,8 +67,8 @@ body {
 .pc-select:focus,
 .pc-textarea:focus {
   outline: none;
-  border-color: #3f3f46;
-  box-shadow: 0 0 0 2px rgba(63, 63, 70, 0.35);
+  border-color: #a1a1aa;
+  box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.35);
 }
 
 .pc-label {
@@ -87,12 +87,12 @@ body {
 
 .pc-alert-error {
   border-color: rgba(127, 29, 29, 0.6);
-  background: rgba(69, 10, 10, 0.35);
-  color: #fecaca;
+  background: rgba(254, 226, 226, 0.75);
+  color: #7f1d1d;
 }
 
 .pc-alert-success {
   border-color: rgba(6, 78, 59, 0.6);
-  background: rgba(6, 46, 27, 0.35);
-  color: #a7f3d0;
+  background: rgba(209, 250, 229, 0.8);
+  color: #065f46;
 }

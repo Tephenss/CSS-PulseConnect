@@ -12,59 +12,90 @@ $user = require_role(['teacher', 'admin']);
 render_header('QR Scanner', $user);
 ?>
 
-<div class="mb-6">
-  <p class="text-zinc-400 text-sm">Check-in and check-out using the student's QR e-ticket.</p>
+<div class="mb-8 flex items-center justify-between">
+  <div>
+    <h2 class="text-xl font-bold text-zinc-900 mb-1">Check-in Scanner</h2>
+    <p class="text-zinc-600 text-sm">Scan student QR e-tickets to instantly record attendance.</p>
+  </div>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-  <div class="lg:col-span-2 rounded-2xl glass-card p-5">
-    <div class="flex items-center justify-between gap-3 mb-4">
-      <div class="flex items-center gap-2.5">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600/20 to-fuchsia-600/20 border border-violet-500/20 flex items-center justify-center">
-          <svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"/></svg>
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+  <!-- Left Column: Camera Feed -->
+  <div class="xl:col-span-2">
+    <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm relative overflow-hidden p-1 border-t-[3px] border-t-orange-500">
+      <div class="absolute inset-x-0 -top-32 h-64 bg-orange-400/10 blur-3xl pointer-events-none rounded-t-full"></div>
+      
+      <div class="p-4 sm:p-5 relative z-10 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"/></svg>
+          </div>
+          <div>
+            <span class="text-sm font-bold text-zinc-900 block tracking-tight">Camera Feed</span>
+            <span class="text-xs text-zinc-500 block">Align QR code within the frame</span>
+          </div>
         </div>
-        <span class="text-sm font-medium text-zinc-200">Camera Feed</span>
+        
+        <div class="flex items-center p-1 bg-zinc-100 rounded-xl border border-zinc-200 relative z-10">
+          <button id="btnIn" class="rounded-lg bg-white border border-emerald-200 text-emerald-800 px-5 py-2 text-sm font-semibold transition-all shadow-sm flex-1 min-w-[110px]">Check-in</button>
+          <button id="btnOut" class="rounded-lg border border-transparent px-5 py-2 text-sm font-semibold text-zinc-500 hover:text-zinc-800 transition-all flex-1 min-w-[110px]">Check-out</button>
+        </div>
       </div>
-      <div class="flex gap-2">
-        <button id="btnIn" class="rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 text-sm font-medium hover:from-emerald-500 hover:to-emerald-400 transition-all shadow-lg shadow-emerald-600/20">Check-in</button>
-        <button id="btnOut" class="rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700/60 transition">Check-out</button>
-      </div>
-    </div>
 
-    <div class="rounded-xl overflow-hidden border border-zinc-800/60 bg-zinc-950/60">
-      <div id="reader" class="p-1"></div>
+      <div class="p-4 sm:p-5 relative z-10 w-full flex justify-center">
+        <div class="relative rounded-xl overflow-hidden shadow-inner flex items-center justify-center bg-zinc-900 border border-zinc-300 w-full max-w-2xl mx-auto aspect-square sm:aspect-video min-h-[300px]">
+           <div id="reader" class="w-full relative [&_video]:w-full [&_video]:h-full [&_video]:object-cover overflow-hidden rounded-lg"></div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="space-y-4">
-    <div class="rounded-2xl glass-card p-5">
-      <div class="flex items-center gap-2.5 mb-4">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-600/20 to-cyan-600/20 border border-sky-500/20 flex items-center justify-center">
-          <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <!-- Right Column: Status & Tips -->
+  <div class="space-y-6">
+    <!-- Result Card -->
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 border-b-[3px] border-b-sky-500 shadow-sm hover:shadow-md transition-all relative overflow-hidden group">
+      <div class="absolute -right-8 -top-8 w-32 h-32 bg-sky-400/10 blur-3xl rounded-full pointer-events-none"></div>
+
+      <div class="flex items-center gap-3 mb-5 relative z-10">
+        <div class="w-10 h-10 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-sky-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.125 2.25h-4.5c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125v-9M10.125 2.25h.375a9 9 0 019 9v.375M10.125 2.25A3.375 3.375 0 0113.5 5.625v1.5c0 .621.504 1.125 1.125 1.125h1.5a3.375 3.375 0 013.375 3.375M9 15l2.25 2.25L15 12"/></svg>
         </div>
-        <span class="text-sm font-medium text-zinc-200">Scan Result</span>
+        <div>
+           <h3 class="text-sm font-bold text-zinc-900 tracking-tight">Scan Status</h3>
+           <p class="text-[10px] text-zinc-500 tracking-wider uppercase font-semibold">Live Updates</p>
+        </div>
       </div>
-      <div id="status" class="text-sm text-zinc-300 flex items-center gap-2">
-        <span class="w-2 h-2 rounded-full bg-zinc-600 animate-pulse"></span>
-        Ready.
+      
+      <div class="rounded-xl bg-zinc-50 border border-zinc-200 p-5 relative z-10">
+        <div id="status" class="text-sm font-medium text-zinc-800 flex items-center gap-3">
+          <span class="relative flex h-3 w-3 flex-shrink-0">
+             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-500 opacity-75"></span>
+             <span class="relative inline-flex rounded-full h-3 w-3 bg-zinc-500"></span>
+          </span>
+          Initializing...
+        </div>
+        <div id="details" class="mt-4 pt-4 border-t border-zinc-200 text-xs text-zinc-600 break-all font-mono leading-relaxed hidden"></div>
       </div>
-      <div id="details" class="mt-3 text-xs text-zinc-500 break-all font-mono"></div>
     </div>
 
-    <div class="rounded-2xl glass-card p-5">
-      <div class="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wider">Quick Tips</div>
-      <ul class="space-y-2 text-xs text-zinc-400">
-        <li class="flex items-start gap-2">
-          <svg class="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
-          Point camera at the student's QR e-ticket
+    <!-- Tips Card -->
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <h3 class="text-xs font-bold text-zinc-600 uppercase tracking-widest mb-4 flex items-center gap-2">
+        <svg class="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>
+        Pro Tips
+      </h3>
+      <ul class="space-y-4">
+        <li class="flex items-start gap-3">
+          <div class="w-6 h-6 rounded-full bg-emerald-100 border border-emerald-200 text-emerald-800 flex items-center justify-center flex-shrink-0 mt-0.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div>
+          <span class="text-xs text-zinc-600 leading-relaxed font-medium">Ensure the QR code is well-lit and fits entirely within the camera feed.</span>
         </li>
-        <li class="flex items-start gap-2">
-          <svg class="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
-          Toggle between Check-in and Check-out
+        <li class="flex items-start gap-3">
+          <div class="w-6 h-6 rounded-full bg-amber-100 border border-amber-200 text-amber-900 flex items-center justify-center flex-shrink-0 mt-0.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/></svg></div>
+          <span class="text-xs text-zinc-600 leading-relaxed font-medium">Switch modes to track departures accurately using the Check-out toggle.</span>
         </li>
-        <li class="flex items-start gap-2">
-          <svg class="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
-          Auto-processing on successful scan
+        <li class="flex items-start gap-3">
+          <div class="w-6 h-6 rounded-full bg-sky-100 border border-sky-200 text-sky-800 flex items-center justify-center flex-shrink-0 mt-0.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg></div>
+          <span class="text-xs text-zinc-600 leading-relaxed font-medium">Auto-processing occurs securely upon a successful scan. Pauses 2 seconds between reads to prevent duplicates.</span>
         </li>
       </ul>
     </div>
@@ -80,14 +111,25 @@ render_header('QR Scanner', $user);
     const btnIn = document.getElementById('btnIn');
     const btnOut = document.getElementById('btnOut');
 
+    // Helper for styled status text
+    function updateStatus(msg, colorTailwindStr) {
+       statusEl.innerHTML = `
+          <span class="relative flex h-3 w-3 flex-shrink-0">
+             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-${colorTailwindStr} opacity-75"></span>
+             <span class="relative inline-flex rounded-full h-3 w-3 bg-${colorTailwindStr}"></span>
+          </span>
+          ${msg}
+       `;
+    }
+
     function setAction(a) {
       action = a;
       if (a === 'check_in') {
-        btnIn.className = 'rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 text-sm font-medium hover:from-emerald-500 hover:to-emerald-400 transition-all shadow-lg shadow-emerald-600/20';
-        btnOut.className = 'rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700/60 transition';
+        btnIn.className = 'rounded-lg bg-white border border-emerald-200 text-emerald-800 px-5 py-2 text-sm font-semibold transition-all shadow-sm flex-1 min-w-[110px]';
+        btnOut.className = 'rounded-lg border border-transparent px-5 py-2 text-sm font-semibold text-zinc-500 hover:text-zinc-800 hover:bg-white/80 transition-all flex-1 min-w-[110px]';
       } else {
-        btnOut.className = 'rounded-lg bg-gradient-to-r from-orange-600 to-amber-500 text-white px-4 py-2 text-sm font-medium hover:from-orange-500 hover:to-amber-400 transition-all shadow-lg shadow-orange-600/20';
-        btnIn.className = 'rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700/60 transition';
+        btnOut.className = 'rounded-lg bg-white border border-amber-200 text-amber-900 px-5 py-2 text-sm font-semibold transition-all shadow-sm flex-1 min-w-[110px]';
+        btnIn.className = 'rounded-lg border border-transparent px-5 py-2 text-sm font-semibold text-zinc-500 hover:text-zinc-800 hover:bg-white/80 transition-all flex-1 min-w-[110px]';
       }
     }
 
@@ -95,10 +137,11 @@ render_header('QR Scanner', $user);
     btnOut.addEventListener('click', () => setAction('check_out'));
 
     if (!window.Html5Qrcode) {
-      statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Scanner library failed to load.';
+      updateStatus('Scanner library failed to load.', 'red-500');
       return;
     }
 
+    // Use Html5Qrcode directly for more control over UI container
     const qr = new Html5Qrcode("reader");
     let lastToken = null;
     let lastAt = 0;
@@ -110,8 +153,9 @@ render_header('QR Scanner', $user);
       if (lastToken === token && (now - lastAt) < 2000) return;
       lastToken = token; lastAt = now;
 
-      statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Processing...';
-      detailsEl.textContent = token;
+      updateStatus('Processing...', 'amber-500');
+      detailsEl.textContent = "Token: " + token.substring(0, 8) + "...";
+      detailsEl.classList.remove('hidden');
 
       try {
         const res = await fetch('/api/scan_ticket.php', {
@@ -121,40 +165,55 @@ render_header('QR Scanner', $user);
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'Failed');
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500"></span> ' + (data.message || 'OK');
+        updateStatus(data.message || 'Verification Successful', 'emerald-500');
+        
+        // Show success detail
+        detailsEl.textContent = `Success: ${data.message}`;
+        detailsEl.className = "mt-4 pt-4 border-t border-emerald-200 text-xs text-emerald-800 break-all font-mono leading-relaxed";
       } catch (e) {
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> ' + (e.message || 'Failed');
+        updateStatus(e.message || 'Verification Failed', 'red-500');
+        detailsEl.textContent = `Error: ${e.message}`;
+        detailsEl.className = "mt-4 pt-4 border-t border-red-200 text-xs text-red-700 break-all font-mono leading-relaxed";
       }
+      
+      // Reset scan message after 3 seconds
+      setTimeout(() => {
+        updateStatus('Ready. Point at a QR e-ticket.', 'sky-500');
+        detailsEl.classList.add('hidden');
+      }, 3000);
     }
 
     async function startScanner() {
-      statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Starting camera...';
+      updateStatus('Starting camera...', 'amber-500');
 
       if (!window.isSecureContext) {
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Camera requires HTTPS. Localhost is OK.';
+        updateStatus('Camera requires HTTPS. Localhost is OK.', 'red-500');
       }
 
       try {
         if (Html5Qrcode.getCameras) {
+           // We do not need output from this, it just requests permissions if needed
           const cams = await Html5Qrcode.getCameras();
           if (!cams || cams.length === 0) {
-            statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> No camera devices found.';
+            updateStatus('No camera devices found.', 'red-500');
             return;
           }
         }
+        
+        // Ensure UI styling overrides for html5-qrcode
+        document.getElementById('reader').style.border = 'none';
+        
         await qr.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 260, height: 260 }, aspectRatio: 1.0 },
+          { fps: 10, qrbox: { width: 280, height: 280 }, aspectRatio: 1.0 },
           (decodedText) => handleToken(decodedText),
           (errorMessage) => {
-            if ((detailsEl.textContent || '').trim() === '') {
-              statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-sky-500 animate-pulse"></span> Scanning... Point at a QR e-ticket.';
-            }
+            // Ignore routine scanning errors so UI doesn't flicker
           }
         );
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Ready. Point at a QR e-ticket.';
+        updateStatus('Ready. Point at a QR e-ticket.', 'sky-500');
       } catch (err) {
-        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Camera error: ' + (err && err.message ? err.message : String(err));
+        updateStatus('Camera error: ' + (err && err.message ? err.message : String(err)), 'red-500');
       }
     }
 
@@ -171,5 +230,33 @@ render_header('QR Scanner', $user);
     });
   }
 </script>
+
+<!-- Add some scoped CSS to override Html5Qrcode's injected styles to look better -->
+<style>
+  #reader { background: transparent !important; }
+  #reader__dashboard_section_csr span { color: #71717a !important; }
+  #reader__dashboard_section_swaplink { color: #6d28d9 !important; text-decoration: none !important; margin-top: 10px; display: inline-block; }
+  #reader button { 
+    background: #f5f3ff !important;
+    border: 1px solid #ddd6fe !important;
+    color: #5b21b6 !important;
+    border-radius: 8px !important;
+    padding: 6px 16px !important;
+    font-size: 14px !important;
+    margin-top: 8px !important;
+    cursor: pointer !important;
+    transition: all 0.2s !important;
+  }
+  #reader button:hover { background: #ede9fe !important; }
+  #reader__camera_selection {
+    background: #fafafa !important;
+    border: 1px solid #e4e4e7 !important;
+    color: #18181b !important;
+    border-radius: 6px !important;
+    padding: 6px !important;
+    margin-bottom: 10px !important;
+    outline: none !important;
+  }
+</style>
 
 <?php render_footer(); ?>
