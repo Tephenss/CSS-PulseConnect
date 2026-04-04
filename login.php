@@ -76,23 +76,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (!password_verify($password, $storedHash)) {
                         $error = 'Invalid email or password.';
                     } else {
-                        // Prevent session fixation.
-                        session_regenerate_id(true);
-                        $first = (string) ($user['first_name'] ?? '');
-                        $middle = (string) ($user['middle_name'] ?? '');
-                        $last = (string) ($user['last_name'] ?? '');
-                        $suffix = (string) ($user['suffix'] ?? '');
-                        $fullName = build_display_name($first, $middle, $last, $suffix);
                         $role = isset($user['role']) ? (string) $user['role'] : 'student';
-                        $_SESSION['user'] = [
-                            'id' => isset($user['id']) ? (string) $user['id'] : '',
-                            'full_name' => $fullName,
-                            'email' => (string) ($user['email'] ?? $email),
-                            'role' => $role,
-                        ];
+                        
+                        if ($role !== 'admin') {
+                            $error = 'Students and Teachers must use the new mobile app to login.';
+                        } else {
+                            // Prevent session fixation.
+                            session_regenerate_id(true);
+                            $first = (string) ($user['first_name'] ?? '');
+                            $middle = (string) ($user['middle_name'] ?? '');
+                            $last = (string) ($user['last_name'] ?? '');
+                            $suffix = (string) ($user['suffix'] ?? '');
+                            $fullName = build_display_name($first, $middle, $last, $suffix);
+                            $_SESSION['user'] = [
+                                'id' => isset($user['id']) ? (string) $user['id'] : '',
+                                'full_name' => $fullName,
+                                'email' => (string) ($user['email'] ?? $email),
+                                'role' => $role,
+                            ];
 
-                        header('Location: home.php');
-                        exit;
+                            header('Location: home.php');
+                            exit;
+                        }
                     }
                 }
             }
@@ -133,7 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <img src="/assets/CCS.png" alt="CCS" class="logo-ccs" />
                 </div>
                 <div class="text-center mt-6">
-                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CCS PulseConnect</div>
+                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400 font-bold">PulseCONNECT</div>
                     <h1 class="text-3xl font-semibold mt-2 leading-tight">Event Management System</h1>
                     <p class="text-zinc-400 mt-4 text-sm leading-relaxed min-h-[48px]">
                         <span
@@ -184,15 +189,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         Login
                     </button>
 
-                    <div class="flex items-center justify-between text-xs text-zinc-400 mt-4">
-                        <a class="text-zinc-200 hover:underline" href="/forgot_password.php">Forgot password?</a>
-                        <a class="text-zinc-200 hover:underline" href="/register.php">Create account</a>
-                    </div>
-
                 </form>
 
                 <div class="text-center text-xs text-zinc-500 mt-6">
-                    © <?= htmlspecialchars((string) date('Y')) ?> CCS PulseConnect
+                    © <?= htmlspecialchars((string) date('Y')) ?> PulseCONNECT
                 </div>
             </div>
         </div>

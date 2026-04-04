@@ -16,9 +16,13 @@ require_csrf_from_json($data);
 
 $title = isset($data['title']) ? clean_string((string) $data['title']) : '';
 $location = isset($data['location']) ? clean_string((string) $data['location']) : '';
-$description = isset($data['description']) ? clean_string((string) $data['description']) : '';
+$description = isset($data['description']) ? clean_text((string) $data['description']) : '';
 $startAt = isset($data['start_at']) ? (string) $data['start_at'] : '';
 $endAt = isset($data['end_at']) ? (string) $data['end_at'] : '';
+$eventType = isset($data['event_type']) ? clean_string((string) $data['event_type']) : 'Event';
+$eventFor = isset($data['event_for']) ? clean_string((string) $data['event_for']) : 'All';
+$graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_time']) : '15';
+$eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 
 if ($title === '' || mb_strlen($title) > 150) {
     json_response(['ok' => false, 'error' => 'Invalid title'], 400);
@@ -38,7 +42,7 @@ if ($end <= $start) {
 }
 
 $role = (string) ($user['role'] ?? 'student');
-$status = $role === 'admin' ? 'published' : 'pending';
+$status = $role === 'admin' ? 'approved' : 'pending';
 
 $payload = [
     'title' => $title,
@@ -48,6 +52,10 @@ $payload = [
     'end_at' => $end->format('c'),
     'created_by' => (string) ($user['id'] ?? ''),
     'status' => $status,
+    'event_type' => $eventType,
+    'event_for' => $eventFor,
+    'grace_time' => $graceTime,
+    'event_span' => $eventSpan,
 ];
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at';

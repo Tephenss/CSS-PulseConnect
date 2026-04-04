@@ -9,15 +9,13 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 
 $user = require_role(['admin', 'teacher']);
-$input = get_json_input();
-
-if (!isset($input['csrf_token']) || !verify_csrf_token($input['csrf_token'])) {
-    json_response(['ok' => false, 'error' => 'Invalid CSRF token.'], 403);
-}
+$input = require_post_json();
+csrf_validate($input['csrf_token'] ?? null);
 
 $event_id = trim((string) ($input['event_id'] ?? ''));
-$name = trim((string) ($input['name'] ?? 'Custom Layout'));
+$name = trim((string) ($input['title'] ?? 'Custom Layout'));
 $canvas_state = $input['canvas_state'] ?? null;
+$thumbnail_url = $input['thumbnail_url'] ?? null;
 
 if (!$canvas_state) {
     json_response(['ok' => false, 'error' => 'Invalid canvas state data.'], 400);
@@ -25,8 +23,9 @@ if (!$canvas_state) {
 
 // Prepare payload
 $payload = [
-    'name' => $name,
-    'canvas_state' => is_string($canvas_state) ? json_decode($canvas_state, true) : $canvas_state
+    'title' => $name,
+    'canvas_state' => is_string($canvas_state) ? json_decode($canvas_state, true) : $canvas_state,
+    'thumbnail_url' => $thumbnail_url
 ];
 
 if (json_last_error() !== JSON_ERROR_NONE && is_string($canvas_state)) {

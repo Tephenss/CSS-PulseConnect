@@ -15,7 +15,7 @@ function supabase_request(string $method, string $url, array $headers, ?string $
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_TIMEOUT => 15,
+        CURLOPT_TIMEOUT => 60,
         // DEV ONLY: if you see "unable to get local issuer certificate", keep this true.
         // For production, configure a proper CA bundle instead.
         CURLOPT_SSL_VERIFYPEER => $skipSslVerify ? false : true,

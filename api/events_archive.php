@@ -27,6 +27,26 @@ $payload = [
     'updated_at' => gmdate('c'),
 ];
 
+// If restoring, we should also clean up the [REJECT_REASON] tag from the description
+if ($action === 'restore') {
+    // We need the current description first
+    $getUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=description';
+    $getHeaders = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $getRes = supabase_request('GET', $getUrl, $getHeaders);
+    if ($getRes['ok']) {
+        $rows = json_decode((string) $getRes['body'], true);
+        if (isset($rows[0]['description'])) {
+            $desc = (string)$rows[0]['description'];
+            $newDesc = preg_replace('/\[REJECT_REASON:.*?\]/', '', $desc);
+            $payload['description'] = trim($newDesc);
+        }
+    }
+}
+
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status';
 $headers = [
     'Content-Type: application/json',

@@ -8,8 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['admin', 'teacher']);
-$role = (string) ($user['role'] ?? 'teacher');
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 $userId = (string) ($user['id'] ?? '');
 
 $eventId = isset($_GET['event_id']) ? (string) $_GET['event_id'] : '';

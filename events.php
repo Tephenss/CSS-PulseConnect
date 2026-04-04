@@ -8,12 +8,12 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['student', 'teacher', 'admin']);
-$role = (string) ($user['role'] ?? 'student');
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 
 $select = 'select=id,title,description,location,start_at,end_at,status';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
-$url = $role === 'student' ? $base . '&status=eq.published' : $base;
+$url = $base . '&status=eq.published';
 
 $headers = [
     'Accept: application/json',
@@ -52,10 +52,21 @@ render_header('Events', $user);
   <?php foreach ($events as $e): ?>
     <?php
       $status = (string)($e['status'] ?? '');
+      $startAtStr = (string)($e['start_at'] ?? '');
+      
+      if ($status !== 'archived' && $startAtStr !== '') {
+          try {
+              if (new DateTimeImmutable($startAtStr) < new DateTimeImmutable()) {
+                  $status = 'expired';
+              }
+          } catch (Throwable $ex) {}
+      }
+
       $statusConfig = match($status) {
           'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-b-emerald-500'],
           'pending' => ['bg' => 'bg-amber-100', 'text' => 'text-amber-900', 'border' => 'border-amber-200', 'accent' => 'border-b-amber-500'],
           'approved' => ['bg' => 'bg-sky-100', 'text' => 'text-sky-900', 'border' => 'border-sky-200', 'accent' => 'border-b-sky-500'],
+          'expired' => ['bg' => 'bg-zinc-200', 'text' => 'text-zinc-600', 'border' => 'border-zinc-300', 'accent' => 'border-b-zinc-500'],
           default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-b-zinc-400'],
       };
 

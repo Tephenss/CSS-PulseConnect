@@ -151,7 +151,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <img src="/assets/CCS.png" alt="CCS" class="logo-ccs" />
                 </div>
                 <div class="text-center mt-6">
-                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400">CCS PulseConnect</div>
+                    <div class="text-xs tracking-[0.35em] uppercase text-zinc-400 font-bold">PulseCONNECT</div>
                     <h1 class="text-3xl font-semibold mt-2 leading-tight">Create your account</h1>
                     <p class="text-zinc-400 mt-4 text-sm leading-relaxed">
                         Students can register for events and get tickets. Teachers and Admin manage events, scanning,
@@ -269,7 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
 
                 <div class="text-center text-xs text-zinc-500 mt-6">
-                    © <?= htmlspecialchars((string) date('Y')) ?> CCS PulseConnect
+                    © <?= htmlspecialchars((string) date('Y')) ?> PulseCONNECT
                 </div>
             </div>
         </div>

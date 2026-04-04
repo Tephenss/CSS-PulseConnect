@@ -7,7 +7,8 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 
-$user = require_role(['student']);
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 $code = isset($_GET['code']) ? (string) $_GET['code'] : '';
 if ($code === '') {
     http_response_code(400);
@@ -33,7 +34,7 @@ if (!is_array($cert)) {
     echo 'Certificate not found';
     exit;
 }
-if ((string) ($cert['student_id'] ?? '') !== (string) ($user['id'] ?? '')) {
+if ($role !== 'admin' && (string) ($cert['student_id'] ?? '') !== (string) ($user['id'] ?? '')) {
     http_response_code(403);
     echo 'Forbidden';
     exit;
@@ -47,7 +48,7 @@ if (isset($cert['events']) && is_array($cert['events'])) {
 
 // Student name
 $uUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-    . '?select=first_name,middle_name,last_name,suffix&id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
+    . '?select=first_name,middle_name,last_name,suffix&id=eq.' . rawurlencode((string) ($cert['student_id'] ?? ''))
     . '&limit=1';
 $uRes = supabase_request('GET', $uUrl, $headers);
 $uRows = $uRes['ok'] ? json_decode((string) $uRes['body'], true) : null;

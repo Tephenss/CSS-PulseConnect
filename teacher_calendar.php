@@ -8,8 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['teacher', 'admin']);
-$role = (string) ($user['role'] ?? 'teacher');
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 $userId = (string) ($user['id'] ?? '');
 
 // Teachers see all published events + their own non-published events; admins see all (exclude archived)

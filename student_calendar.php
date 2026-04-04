@@ -8,7 +8,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['student']);
+$user = require_role(['admin']);
 
 // Fetch only published events
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=eq.published&order=start_at.asc';

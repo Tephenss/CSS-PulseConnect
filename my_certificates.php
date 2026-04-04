@@ -8,7 +8,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['student']);
+$user = require_role(['admin']);
 $headers = [
     'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,

@@ -30,12 +30,24 @@ if (isset($data['location'])) {
     if ($loc !== '') $fields['location'] = $loc;
 }
 if (isset($data['description'])) {
-    $desc = clean_string((string) $data['description']);
+    $desc = clean_text((string) $data['description']);
     $fields['description'] = $desc !== '' ? $desc : null;
 }
 if (isset($data['start_at']) && isset($data['end_at']) && $data['start_at'] !== '' && $data['end_at'] !== '') {
     $fields['start_at'] = (new DateTimeImmutable((string)$data['start_at']))->format('c');
     $fields['end_at'] = (new DateTimeImmutable((string)$data['end_at']))->format('c');
+}
+if (isset($data['event_type'])) {
+    $et = clean_string((string) $data['event_type']);
+    if ($et !== '') $fields['event_type'] = $et;
+}
+if (isset($data['event_for'])) {
+    $ef = clean_string((string) $data['event_for']);
+    if ($ef !== '') $fields['event_for'] = $ef;
+}
+if (isset($data['grace_time'])) {
+    $gt = clean_string((string) $data['grace_time']);
+    if ($gt !== '') $fields['grace_time'] = $gt;
 }
 
 if (count($fields) === 0) {
@@ -61,8 +73,19 @@ if ($role === 'teacher') {
     if ((string) ($ev['created_by'] ?? '') !== (string) ($user['id'] ?? '')) {
         json_response(['ok' => false, 'error' => 'Forbidden'], 403);
     }
-    if ((string) ($ev['status'] ?? '') !== 'pending') {
-        json_response(['ok' => false, 'error' => 'Only pending events can be edited'], 409);
+    
+    $currentStatus = (string) ($ev['status'] ?? '');
+    if (!in_array($currentStatus, ['pending', 'archived'], true)) {
+        json_response(['ok' => false, 'error' => 'Only pending or rejected events can be edited'], 409);
+    }
+
+    // If it was archived (rejected), move it back to pending for review
+    if ($currentStatus === 'archived') {
+        $fields['status'] = 'pending';
+        // Optional: clear the [REJECT_REASON] if they are updating the description
+        if (isset($fields['description'])) {
+            $fields['description'] = trim(preg_replace('/\[REJECT_REASON:.*?\]/', '', (string)$fields['description']));
+        }
     }
 }
 

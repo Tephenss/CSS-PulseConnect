@@ -25,13 +25,13 @@ function render_header(string $title, ?array $user): void
 
     echo '<!doctype html><html lang="en"><head>';
     echo '<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>';
-    echo '<title>' . htmlspecialchars($title) . ' — CCS PulseConnect</title>';
+    echo '<title>' . htmlspecialchars($title) . ' — PulseCONNECT</title>';
     echo '<script src="https://cdn.tailwindcss.com"></script>';
     echo '<link rel="preconnect" href="https://fonts.googleapis.com">';
     echo '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>';
     echo '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">';
-    echo '<link rel="stylesheet" href="/assets/css/app.css">';
-    echo '<link rel="stylesheet" href="/assets/css/layout.css">';
+    echo '<link rel="stylesheet" href="/assets/css/app.css?v=' . time() . '">';
+    echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . time() . '">';
     echo '<link rel="stylesheet" href="/assets/css/auth.css">';
     echo '</head><body class="min-h-screen bg-zinc-50 text-zinc-900">';
 
@@ -39,17 +39,22 @@ function render_header(string $title, ?array $user): void
     echo '<div id="sidebar-overlay" class="fixed inset-0 bg-black/40 z-40 opacity-0 pointer-events-none lg:hidden" onclick="closeMobileSidebar()"></div>';
 
     // ── SIDEBAR ──
-    echo '<aside id="sidebar" class="fixed top-0 left-0 h-screen bg-white border-r border-zinc-200 flex flex-col z-50 overflow-hidden">';
+    echo '<aside id="sidebar" class="fixed top-0 left-0 h-screen bg-[#450a0a] border-r border-red-900/50 flex flex-col z-50 overflow-hidden">';
 
     // Logo area
-    echo '<div class="px-4 pt-4 pb-3 flex items-center gap-2.5 flex-shrink-0 min-w-0">';
-    echo '  <a href="/home.php" class="flex items-center gap-2.5 group min-w-0">';
-    echo '    <div class="w-8 h-8 flex-shrink-0 flex items-center justify-center">';
-    echo '      <img src="/assets/CCS.png" alt="CCS Logo" class="w-full h-full object-contain" />';
+    echo '<div class="sidebar-header px-2 pt-8 pb-6 flex flex-col items-center justify-center flex-shrink-0 min-w-0 transition-all">';
+    echo '  <a href="/home.php" class="flex flex-col items-center text-center gap-3 group min-w-0">';
+    echo '    <div class="p-3 bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 shadow-lg group-hover:bg-white/10 transition-colors duration-300">';
+    echo '      <div class="sidebar-logo w-16 h-16 flex-shrink-0 flex items-center justify-center floating-logo relative transition-all duration-300 logo-container">';
+    echo '        <div class="hide-anatomy anatomy-left"><div class="anatomy-bracket-left"></div><div class="anatomy-diagonal-left"></div><span class="anatomy-text-left">BSIT</span></div>';
+    echo '        <div class="hide-anatomy anatomy-right"><div class="anatomy-bracket-right"></div><div class="anatomy-diagonal-right"></div><span class="anatomy-text-right">CS</span></div>';
+    echo '        <div class="absolute inset-0 bg-white/10 rounded-full blur-xl scale-110 opacity-0 group-hover:opacity-100 transition-opacity"></div>';
+    echo '        <img src="/assets/CCS.png" alt="CCS Logo" class="w-full h-full object-contain relative z-10 drop-shadow-md" />';
+    echo '      </div>';
     echo '    </div>';
-    echo '    <div class="sidebar-logo-text min-w-0">';
-    echo '      <div class="text-sm font-semibold text-zinc-900 tracking-tight group-hover:text-orange-700 transition truncate">CCS PulseConnect</div>';
-    echo '      <div class="text-[10px] text-zinc-500 -mt-0.5 truncate">CCS Event System</div>';
+    echo '    <div class="sidebar-logo-text min-w-0 mt-1">';
+    echo '      <div class="text-[15px] font-bold text-white tracking-tight group-hover:text-amber-300 transition truncate">PulseCONNECT</div>';
+    echo '      <div class="text-[10px] font-medium text-red-300 truncate tracking-wider uppercase mt-0.5">CCS Event System</div>';
     echo '    </div>';
     echo '  </a>';
     echo '</div>';
@@ -133,20 +138,20 @@ function render_header(string $title, ?array $user): void
     echo '</nav>';
 
     // User section at bottom
-    echo '<div class="border-t border-zinc-200 px-3 py-3 flex-shrink-0">';
-    echo '  <div class="flex items-center justify-between gap-2 px-2 py-2 rounded-xl hover:bg-zinc-100 transition cursor-pointer group" onclick="openPasswordModal()">';
+    echo '<div class="border-t border-red-900/50 px-3 py-3 flex-shrink-0">';
+    echo '  <div class="flex items-center justify-between gap-2 px-2 py-2 rounded-xl hover:bg-red-900/60 transition cursor-pointer group" onclick="openPasswordModal()">';
     echo '    <div class="flex items-center gap-3 min-w-0 flex-1">';
     echo '      <div class="w-9 h-9 rounded-full bg-gradient-to-br ' . $roleColor . ' flex items-center justify-center text-white text-xs font-bold shadow-sm flex-shrink-0">' . htmlspecialchars($initials) . '</div>';
     echo '      <div class="sidebar-logo-text flex-1 min-w-0">';
-    echo '        <div class="text-sm font-medium text-zinc-900 truncate group-hover:text-indigo-600 transition">' . $fullName . '</div>';
-    echo '        <div class="text-[11px] text-zinc-500">' . htmlspecialchars($roleBadge) . '</div>';
+    echo '        <div class="text-sm font-medium text-white truncate group-hover:text-orange-400 transition">' . $fullName . '</div>';
+    echo '        <div class="text-[11px] text-red-300">' . htmlspecialchars($roleBadge) . '</div>';
     echo '      </div>';
     echo '    </div>';
-    echo '    <button class="p-1.5 rounded-lg text-zinc-400 group-hover:text-indigo-600 transition flex-shrink-0 sidebar-logo-text" title="Profile Settings">';
+    echo '    <button class="p-1.5 rounded-lg text-red-300 group-hover:text-orange-400 transition flex-shrink-0 sidebar-logo-text" title="Profile Settings">';
     echo '      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>';
     echo '    </button>';
     echo '  </div>';
-    echo '  <a href="/logout.php" class="mt-1 flex items-center justify-center gap-2 w-full px-2 py-2 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700 rounded-lg transition sidebar-logo-text" title="Logout">';
+    echo '  <a href="/logout.php" class="mt-1 flex items-center justify-center gap-2 w-full px-2 py-2 text-xs font-medium text-red-400 hover:bg-red-900/80 hover:text-red-300 rounded-lg transition sidebar-logo-text" title="Logout">';
     echo '    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/></svg>';
     echo '    Sign out';
     echo '  </a>';
@@ -199,7 +204,7 @@ function render_footer(): void
     // Footer
     echo '<footer class="border-t border-zinc-200 px-5 lg:px-8 py-4">';
     echo '  <div class="flex items-center justify-between text-xs text-zinc-500">';
-    echo '    <span>© ' . date('Y') . ' CCS PulseConnect</span>';
+    echo '    <span>© ' . date('Y') . ' PulseCONNECT</span>';
     echo '    <span>Event Management System</span>';
     echo '  </div>';
     echo '</footer>';

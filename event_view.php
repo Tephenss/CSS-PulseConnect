@@ -7,6 +7,7 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/helpers.php';
 
 $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
@@ -43,7 +44,8 @@ if ($role === 'student' && (string) ($event['status'] ?? '') !== 'published') {
 }
 
 // 2. Fetch Participants to compute statistics
-$partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_participants?select=id,user_id,status&event_id=eq.' . rawurlencode($id);
+$childSelect = 'select=id,student_id,tickets(attendance(status))';
+$partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?' . $childSelect . '&event_id=eq.' . rawurlencode($id);
 $partRes = supabase_request('GET', $partUrl, $headers);
 $participants = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : [];
 
@@ -53,7 +55,19 @@ $nonCompletedCount = 0;
 
 if (is_array($participants)) {
     foreach ($participants as $p) {
-        if (($p['status'] ?? '') === 'completed') {
+        $statusStr = '';
+        $tickets = $p['tickets'] ?? null;
+        if (is_array($tickets) && isset($tickets[0])) {
+            $atts = $tickets[0]['attendance'] ?? null;
+            if (is_array($atts)) {
+                // attendance can be an array of objects or a single object depending on Supabase version/Prefer header.
+                // In our participants filtering we check if it's an array.
+                $firstAtt = isset($atts[0]) ? $atts[0] : $atts;
+                $statusStr = (string)($firstAtt['status'] ?? '');
+            }
+        }
+        
+        if ($statusStr !== '' && $statusStr !== 'unscanned') {
             $completedCount++;
         } else {
             $nonCompletedCount++;
@@ -70,6 +84,7 @@ $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
     'pending' => 'bg-amber-100 text-amber-900 border-amber-200',
     'approved' => 'bg-sky-100 text-sky-900 border-sky-200',
+    'draft' => 'bg-orange-100 text-orange-900 border-orange-200',
     default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
 };
 
@@ -77,11 +92,16 @@ $statusColor = match($status) {
 render_header('Event Details', $user);
 ?>
 
+<?php
+    $referer = $_SERVER['HTTP_REFERER'] ?? '';
+    // Make sure we only fallback safely 
+    $backUrl = str_contains($referer, 'events.php') ? '/events.php' : '/manage_events.php';
+?>
 <div class="mb-4">
     <!-- Back Button & Header Row -->
     <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
         <div class="flex items-center gap-3">
-            <a href="/manage_events.php" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
+            <a href="<?= htmlspecialchars($backUrl) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
                 <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
             </a>
             <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
@@ -125,10 +145,10 @@ render_header('Event Details', $user);
                     <a href="/participants.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
                         Event Participants
                     </a>
-                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
                         Event Feedback
                     </a>
-                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
                         Evaluation Questions
                     </a>
                 </nav>
@@ -152,11 +172,11 @@ render_header('Event Details', $user);
                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl">
                     <div class="rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
                         <div class="text-xs text-zinc-500 font-bold mb-1">Start Date & Time</div>
-                        <div class="text-[15px] font-bold text-zinc-900"><?= (new DateTimeImmutable((string)($event['start_at'] ?? '')))->format('F j, Y, g:i A') ?></div>
+                        <div class="text-[15px] font-bold text-zinc-900"><?= htmlspecialchars(format_date_local((string)($event['start_at'] ?? ''), 'F j, Y, g:i A')) ?></div>
                     </div>
                     <div class="rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
                         <div class="text-xs text-zinc-500 font-bold mb-1">End Date & Time</div>
-                        <div class="text-[15px] font-bold text-zinc-900"><?= (new DateTimeImmutable((string)($event['end_at'] ?? '')))->format('F j, Y, g:i A') ?></div>
+                        <div class="text-[15px] font-bold text-zinc-900"><?= htmlspecialchars(format_date_local((string)($event['end_at'] ?? ''), 'F j, Y, g:i A')) ?></div>
                     </div>
                     <div class="col-span-1 md:col-span-2 rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
                         <div class="text-xs text-zinc-500 font-bold mb-1">Location / Venue</div>
@@ -529,7 +549,7 @@ if (btnToggleReg && publishModal) {
             publishModal.classList.remove('hidden');
             publishModal.classList.add('flex');
         } else {
-            // Turning OFF instantly via API Archive or draft
+            // Turning OFF instantly via API sets status to draft
             triggerStatusUpdate('draft');
         }
     });

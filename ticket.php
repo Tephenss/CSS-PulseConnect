@@ -8,7 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['student']);
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 $token = isset($_GET['token']) ? (string) $_GET['token'] : '';
 if ($token === '') {
     http_response_code(400);
@@ -36,7 +37,7 @@ if (!is_array($ticket)) {
 }
 
 $reg = isset($ticket['event_registrations']) && is_array($ticket['event_registrations']) ? $ticket['event_registrations'] : null;
-if (!is_array($reg) || (string) ($reg['student_id'] ?? '') !== (string) ($user['id'] ?? '')) {
+if (!is_array($reg) || ($role !== 'admin' && (string) ($reg['student_id'] ?? '') !== (string) ($user['id'] ?? ''))) {
     http_response_code(403);
     echo 'Forbidden';
     exit;

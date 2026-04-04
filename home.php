@@ -8,8 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_login();
-$role = (string) ($user['role'] ?? 'student');
+$user = require_role(['admin']);
+$role = (string) ($user['role'] ?? 'admin');
 
 // Load events to show on homepage (students see published only).
 $select = 'select=id,title,description,location,start_at,end_at,status';
@@ -558,10 +558,18 @@ render_header('Dashboard', $user);
     </div>
   <?php endif; ?>
 
-  <?php foreach ($events as $i => $e): ?>
-    <?php if ($i >= 6) break; // Show max 6 on dashboard ?>
-    <?php
+  <?php 
+    $displayCount = 0;
+    foreach ($events as $e): 
       $status = (string)($e['status'] ?? '');
+      $endAt = !empty($e['end_at']) ? new DateTime($e['end_at']) : null;
+      $isPast = $endAt && $endAt < $now;
+
+      // Only show published (active) events that are not yet past (ongoing/upcoming)
+      if ($status !== 'published' || $isPast) continue;
+      if ($displayCount >= 6) break; 
+      $displayCount++;
+
       $statusConfig = match($status) {
           'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-b-emerald-500'],
           'pending' => ['bg' => 'bg-amber-100', 'text' => 'text-amber-900', 'border' => 'border-amber-200', 'accent' => 'border-b-amber-500'],
@@ -605,6 +613,16 @@ render_header('Dashboard', $user);
       </div>
     </a>
   <?php endforeach; ?>
+  
+  <?php if ($displayCount === 0 && count($events) > 0): ?>
+    <div class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-12 text-center">
+      <div class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
+        <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm3.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75z"/></svg>
+      </div>
+      <h3 class="text-lg font-medium text-zinc-800 mb-1">No active events</h3>
+      <p class="text-sm text-zinc-600 max-w-md mx-auto">There are currently no ongoing or upcoming published events. Past and archived events can be viewed in the <a href="/events.php" class="text-orange-600 font-bold hover:underline">Events Board</a>.</p>
+    </div>
+  <?php endif; ?>
 </div>
 
 <?php

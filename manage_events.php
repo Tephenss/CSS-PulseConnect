@@ -7,16 +7,19 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/helpers.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
 
-$select = 'select=id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at';
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&status=neq.archived&order=created_at.desc';
-if ($role === 'teacher') {
+$select = 'select=id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,users:created_by(first_name,last_name,suffix)';
+if ($role === 'admin') {
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&status=neq.archived&order=created_at.desc';
+} else {
     // Teacher sees their own events OR any published events
-    $url .= '&or=(created_by.eq.' . $userId . ',status.eq.published)';
+    // We remove status=neq.archived here so they can see rejected (archived) ones
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc';
 }
 
 $headers = [
@@ -314,6 +317,44 @@ render_header('Manage Events', $user);
               <input id="location" name="location" class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition placeholder:text-zinc-400" placeholder="e.g. CCS Auditorium" />
             </div>
           </div>
+          
+          <!-- NEW: Event Type & Target -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Type</label>
+              <select id="event_type" name="event_type" class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
+                <option value="Event" selected>Event</option>
+                <option value="Seminar">Seminar</option>
+                <option value="Off-Campus Activity">Off-Campus Activity</option>
+                <option value="Sports Event">Sports Event</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Participant</label>
+              <select id="event_for" name="event_for" class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
+                <option value="All" selected>All Levels</option>
+                <option value="1">1st Year</option>
+                <option value="2">2nd Year</option>
+                <option value="3">3rd Year</option>
+                <option value="4">4th Year</option>
+                <option value="None">None</option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- NEW: Batch Selection -->
+          <div id="batchSelectionContainer" class="pt-2">
+            <label class="relative flex items-start gap-3.5 p-3.5 mt-1 border border-zinc-200 rounded-xl cursor-pointer hover:border-orange-300 hover:bg-orange-50/50 transition-all shadow-sm group">
+              <div class="flex items-center h-5 mt-0.5">
+                <input type="checkbox" id="chkBatch2" value="1" class="peer w-4 h-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500 transition cursor-pointer accent-orange-600">
+              </div>
+              <div class="flex-1">
+                <p class="text-[13px] font-bold text-zinc-800 group-hover:text-orange-700 transition-colors">Split Event into 2 Batches</p>
+                <p class="text-[11px] text-zinc-500 leading-snug mt-0.5">Allows you to set up two completely separate schedules (Batch 1 & Batch 2) on the final step.</p>
+              </div>
+            </label>
+          </div>
         </div>
 
         <!-- Step 2: Details -->
@@ -336,6 +377,9 @@ render_header('Manage Events', $user);
             <div class="flex items-center justify-between mt-1.5 px-1">
               <span id="mainAiStatus" class="hidden text-[11px] text-orange-600 font-medium whitespace-nowrap"></span>
               <div class="flex items-center justify-end gap-3 ml-auto">
+                <button type="button" id="mainUndoBtn" class="hidden text-[11px] text-zinc-500 hover:text-zinc-800 font-semibold transition-colors outline-none flex items-center gap-1">
+                  ↶ Undo
+                </button>
                 <button type="button" id="mainExpandBtn" class="text-[11px] text-zinc-500 hover:text-zinc-800 font-semibold transition-colors outline-none flex items-center gap-1">
                   ⤢ Expand
                 </button>
@@ -347,21 +391,76 @@ render_header('Manage Events', $user);
           </div>
         </div>
 
+<!-- ── Flatpickr (Premium Picker) ── -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
+<style>
+  /* Flatpickr PulseConnect Branding */
+  .flatpickr-calendar {
+      border-radius: 1rem !important;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+      border: 1px solid #e4e4e7 !important;
+  }
+  .flatpickr-day.selected {
+      background: #ea580c !important;
+      border-color: #ea580c !important;
+  }
+  .flatpickr-time input:hover, .flatpickr-time .flatpickr-am-pm:hover {
+      background: #f4f4f5 !important;
+  }
+  /* Ensure the picker is readable */
+  .flatpickr-input[readonly] { background-color: #fff !important; cursor: pointer; }
+  .flatpickr-input[disabled] { background-color: #f4f4f5 !important; cursor: not-allowed; }
+</style>
+
         <!-- Step 3: Schedule -->
-        <div id="step3" class="space-y-4 hidden">
-          <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
-            <div class="field-icon-wrap">
-              <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
-              <input id="start_at_local" name="start_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+        <div id="step3" class="space-y-4 hidden pb-4">
+          <!-- Standard Single or Batch 1 Schedule -->
+          <div id="scheduleBatch1" class="space-y-4">
+            <div id="lblBatch1" class="hidden mb-1"><span class="text-[10px] font-black tracking-widest text-orange-600 uppercase bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">Batch 1 Schedule</span></div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
+              <div class="field-icon-wrap">
+                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <input id="grace_time" name="grace_time" type="number" min="0" value="15" class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
+              <div class="field-icon-wrap">
+                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+                <input id="start_at_local" name="start_at_local" type="text" placeholder="Select Start Date & Time..." class="datetime-picker w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">End Date & Time</label>
+              <div class="field-icon-wrap">
+                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <input id="end_at_local" name="end_at_local" type="text" placeholder="Select End Date & Time..." disabled class="datetime-picker w-full rounded-xl bg-zinc-50 border border-zinc-200 py-3 text-sm text-zinc-500 outline-none cursor-not-allowed transition" />
+              </div>
             </div>
           </div>
-          <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">End Date & Time</label>
-            <div class="field-icon-wrap">
-              <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              <input id="end_at_local" name="end_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+
+          <!-- Batch 2 Schedule -->
+          <div id="scheduleBatch2" class="space-y-4 pt-5 mt-5 border-t border-zinc-200 border-dashed hidden relative before:content-[''] before:absolute before:-top-px before:left-0 before:w-16 before:h-px before:bg-orange-500">
+            <div class="mb-1"><span class="text-[10px] font-black tracking-widest text-orange-600 uppercase bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">Batch 2 Schedule</span></div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Batch 2 - Start Date & Time</label>
+              <div class="field-icon-wrap">
+                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+                <input id="start_at_batch2" type="text" placeholder="Select Batch 2 Start..." class="datetime-picker w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+              </div>
             </div>
+            <div>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Batch 2 - End Date & Time</label>
+              <div class="field-icon-wrap">
+                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <input id="end_at_batch2" type="text" placeholder="Select Batch 2 End..." disabled class="datetime-picker w-full rounded-xl bg-zinc-50 border border-zinc-200 py-3 text-sm text-zinc-500 outline-none cursor-not-allowed transition" />
+              </div>
+            </div>
+
+
           </div>
         </div>
 
@@ -574,7 +673,7 @@ render_header('Manage Events', $user);
 </div>
 
 <!-- ═══════  FEATURED 3D SAMPLE EVENT  ═══════ -->
-<div class="mb-14 lg:mb-16 w-full relative overflow-visible mt-10 rounded-[1.5rem] bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] px-8 lg:px-14 py-6 lg:py-0 shadow-xl border border-indigo-500/20 flex flex-col lg:flex-row items-center justify-between lg:h-[260px]">
+<div class="mb-14 lg:mb-16 w-full relative overflow-visible mt-10 rounded-[1.5rem] bg-gradient-to-br from-[#450a0a] via-[#7f1d1d] to-[#450a0a] px-8 lg:px-14 py-6 lg:py-0 shadow-xl border border-red-500/30 flex flex-col lg:flex-row items-center justify-between lg:h-[260px]">
   <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjZmZmIiBmaWxsLW9wYWNpdHk9IjAuMDUiLz4KPC9zdmc+')] opacity-20 rounded-[1.5rem] mix-blend-overlay pointer-events-none"></div>
   
   <!-- LEFT: Text Content -->
@@ -586,7 +685,7 @@ render_header('Manage Events', $user);
       </span>
       <span class="text-[10px] font-bold tracking-[0.2em] text-emerald-400 uppercase">Interactive Sample</span>
     </div>
-    <h2 class="text-3xl sm:text-4xl lg:text-[2rem] font-extrabold text-white tracking-tight leading-none whitespace-nowrap">CSS Summit Featured Showcase</h2>
+    <h2 class="text-3xl sm:text-4xl lg:text-[2rem] font-extrabold text-white tracking-tight leading-none whitespace-nowrap">CSS Event Featured Showcase</h2>
   </div>
 
   <!-- RIGHT: 3D Laptop Container -->
@@ -616,7 +715,7 @@ render_header('Manage Events', $user);
       padding: 9px 9px 23px 9px;
       position: relative;
       display: flex; align-items: center; justify-content: center;
-      background-image: linear-gradient(15deg, #3f51b1 0%, #5a55ae 13%, #7b5fac 25%, #8f6aae 38%, #a86aa4 50%, #cc6b8e 62%, #f18271 75%, #f3a469 87%, #f7c978 100%);
+      background-image: linear-gradient(15deg, #7c2d12 0%, #9a3412 13%, #c2410c 25%, #ea580c 38%, #f97316 50%, #fb923c 62%, #fdba74 75%, #fed7aa 87%, #ffedd5 100%);
       transform-style: preserve-3d;
       transform: perspective(1900px) rotateX(-88.5deg);
       transform-origin: 50% 100%;
@@ -629,20 +728,14 @@ render_header('Manage Events', $user);
       100% { transform: perspective(1000px) rotateX(0deg); }
     }
 
-    @keyframes swapImage {
-      0% { background-image: url('assets/sample summit/image1.jpg'); }
-      49.9% { background-image: url('assets/sample summit/image1.jpg'); }
-      50% { background-image: url('assets/sample summit/image2.jpg'); }
-      100% { background-image: url('assets/sample summit/image2.jpg'); }
-    }
-
     .screen-bg {
       position: absolute; top: 9px; left: 9px; right: 9px; bottom: 23px;
       border-radius: 12px;
       background-size: cover; background-position: center;
-      animation: swapImage 16s infinite;
+      background-image: url('assets/sample summit/image1.jpg');
       z-index: 10; 
       box-shadow: inset 0 0 40px rgba(0,0,0,0.6);
+      transition: none;
     }
     
     .screen-bg::after {
@@ -702,13 +795,71 @@ render_header('Manage Events', $user);
         <div class="screen">
           <div class="screen-bg"></div>
           <div class="header-cam"></div>
-          <div class="laptop-text animate-pulse">CCS Summit Event</div>
+          <div class="laptop-text animate-pulse" id="laptopLabel">CCS Summit</div>
         </div>
         <div class="keyboard"></div>
       </div>
     </div>
   </div>
 </div>
+
+<script>
+(function() {
+  const showcaseSlides = [
+    { img: 'assets/sample summit/image1.jpg', label: 'CCS Summit' },
+    { img: 'assets/sample GA/image1.jpg', label: 'General Assembly' },
+    { img: 'assets/sample exhibit/image1.jpg', label: 'CCS Exhibit' },
+    { img: 'assets/sample CV/image1.jpg', label: 'Company Visit' }
+  ];
+  let currentSlide = 0;
+  const screenBg = document.querySelector('.screen-bg');
+  const laptopLabel = document.getElementById('laptopLabel');
+  const screenEl = document.querySelector('.screen');
+  if (!screenBg || !laptopLabel || !screenEl) return;
+
+  // The laptop animation is 4s alternate, so one full open+close = 8s.
+  // Swap the image every 8s (when laptop is closed).
+  setInterval(() => {
+    currentSlide = (currentSlide + 1) % showcaseSlides.length;
+    screenBg.style.backgroundImage = "url('" + showcaseSlides[currentSlide].img + "')";
+    laptopLabel.textContent = showcaseSlides[currentSlide].label;
+  }, 8000);
+})();
+</script>
+
+<style>
+  /* Animated List Styles */
+  .event-scroll-container {
+    max-height: 650px;
+    overflow-y: auto;
+    padding: 1rem;
+    scrollbar-width: thin;
+    scrollbar-color: #e4e4e7 transparent;
+    scroll-behavior: smooth;
+  }
+  .event-scroll-container::-webkit-scrollbar {
+    width: 6px;
+  }
+  .event-scroll-container::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .event-scroll-container::-webkit-scrollbar-thumb {
+    background: #e4e4e7;
+    border-radius: 10px;
+  }
+  
+  .event-card-animated {
+    opacity: 0;
+    transform: scale(0.7) translateY(10px);
+    transition: all 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform, opacity;
+  }
+  
+  .event-card-animated.in-view {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+</style>
 
 <!-- ═══════  EVENTS TABLE  ═══════ -->
 <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
@@ -731,7 +882,7 @@ render_header('Manage Events', $user);
       <button id="tabAll" class="pb-3 border-b-[2.5px] border-orange-500 font-bold text-orange-600 text-[13px] transition-colors w-24">All Events</button>
       <button id="tabPending" class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors flex items-center gap-1.5 px-2">
           Pending Proposals
-          <?php $pendingCount = count(array_filter($events, fn($e) => ($e['status'] ?? '') === 'pending' || ($e['status'] ?? '') === 'draft')); ?>
+          <?php $pendingCount = count(array_filter($events, fn($e) => ($e['status'] ?? '') === 'pending')); ?>
           <?php if ($pendingCount > 0): ?>
              <span class="bg-red-100 border border-red-200 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm"><?= $pendingCount ?></span>
           <?php endif; ?>
@@ -741,32 +892,87 @@ render_header('Manage Events', $user);
   <div class="mb-5"></div>
   <?php endif; ?>
 
-  <div class="space-y-2">
-    <?php foreach ($events as $e): ?>
+  <!-- Filter & Search Row -->
+  <div class="flex flex-col md:flex-row gap-3 mb-6 bg-zinc-50/50 p-3 rounded-2xl border border-zinc-100">
+    <div class="relative flex-1">
+      <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+      </div>
+      <input type="text" id="searchEvents" placeholder="Search events by title, location or teacher..." 
+             class="block w-full pl-10 pr-4 py-2.5 border border-zinc-200 rounded-xl text-[13px] placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-orange-500/10 focus:border-orange-500 transition-all bg-white shadow-sm ring-inset">
+    </div>
+    <div class="w-full md:w-56">
+      <div class="relative">
+        <select id="filterType" class="appearance-none block w-full px-4 py-2.5 pr-10 border border-zinc-200 rounded-xl text-[13px] text-zinc-700 focus:outline-none focus:ring-2 focus:ring-orange-500/10 focus:border-orange-500 transition-all bg-white shadow-sm cursor-pointer ring-inset font-medium">
+          <option value="all">All Event Types</option>
+          <?php
+            $types = array_unique(array_filter(array_map(fn($e) => (string)($e['event_type'] ?? ''), $events)));
+            sort($types);
+            foreach ($types as $type):
+          ?>
+            <option value="<?= htmlspecialchars($type) ?>"><?= htmlspecialchars($type) ?></option>
+          <?php endforeach; ?>
+        </select>
+        <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-400">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="relative overflow-hidden rounded-xl border border-zinc-100 bg-zinc-50/10 mt-4">
+    <!-- Edge Gradients -->
+    <div id="topEventGrad" class="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none opacity-0 transition-opacity duration-300 z-10"></div>
+    <div id="bottomEventGrad" class="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none opacity-100 transition-opacity duration-300 z-10"></div>
+    
+    <div id="eventScrollContainer" class="event-scroll-container">
+      <div class="space-y-3 pb-24">
+        <?php foreach ($events as $e): ?>
+      <?php
+        $status = (string)($e['status'] ?? '');
+        $description = (string)($e['description'] ?? '');
+        $isRejected = strpos($description, '[REJECT_REASON:') !== false;
+
+        // For teachers: If archived but NOT rejected, skip (it's a manual archive)
+        if ($role === 'teacher' && $status === 'archived' && !$isRejected) continue;
+      ?>
       <?php
         $eid = (string) ($e['id'] ?? '');
         $createdBy = (string) ($e['created_by'] ?? '');
-        $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && (string) ($e['status'] ?? '') === 'pending');
-        $status = (string)($e['status'] ?? '');
+        $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && ($status === 'pending' || ($status === 'archived' && $isRejected)));
+        $endAt = (string)($e['end_at'] ?? '');
+        $startAtStr = (string)($e['start_at'] ?? '');
+        
+        // Auto-expire events if their START DATE has already passed
+        // This ensures events are marked as expired once they begin, preventing late RSVPs.
+        if ($status !== 'archived' && $startAtStr !== '') {
+            try {
+                if (new DateTimeImmutable($startAtStr) < new DateTimeImmutable()) {
+                    $status = 'expired';
+                }
+            } catch (Throwable $ex) {}
+        }
 
         $statusConfig = match($status) {
             'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-l-emerald-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
             'pending' => ['bg' => 'bg-amber-100', 'text' => 'text-amber-900', 'border' => 'border-amber-200', 'accent' => 'border-l-amber-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
             'approved' => ['bg' => 'bg-sky-100', 'text' => 'text-sky-900', 'border' => 'border-sky-200', 'accent' => 'border-l-sky-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>'],
-            default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-l-zinc-400', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>'],
+            'expired' => ['bg' => 'bg-zinc-200', 'text' => 'text-zinc-600', 'border' => 'border-zinc-300', 'accent' => 'border-l-zinc-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
+            'archived' => ['bg' => 'bg-rose-100', 'text' => 'text-rose-900', 'border' => 'border-rose-200', 'accent' => 'border-l-rose-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
+            'draft' => ['bg' => 'bg-orange-100', 'text' => 'text-orange-900', 'border' => 'border-orange-200', 'accent' => 'border-l-orange-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"/>'],
+            default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-l-zinc-400', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125h-12.75V11.25a9 9 0 00-9-9z"/>'],
         };
 
         // Format date
         $rawDate = (string) ($e['start_at'] ?? '');
-        $formattedDate = $rawDate;
-        if ($rawDate) {
-            try {
-                $dt = new DateTimeImmutable($rawDate);
-                $formattedDate = $dt->format('M d, Y · g:i A');
-            } catch (Throwable $ex) {}
-        }
+        $formattedDate = format_date_local($rawDate);
       ?>
-      <div class="rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?>">
+      <div class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?>"
+           data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+           data-type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
+           data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
+           data-teacher="<?= htmlspecialchars($tName ?? '') ?>"
+           data-status="<?= htmlspecialchars($status) ?>">
         <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
           <!-- Event Info -->
@@ -778,9 +984,45 @@ render_header('Manage Events', $user);
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 mb-1">
                   <h3 class="text-sm font-semibold text-zinc-900 truncate"><?= htmlspecialchars((string) ($e['title'] ?? '')) ?></h3>
-                  <span class="text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0 capitalize"><?= htmlspecialchars($status) ?></span>
+                  <span class="text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
+                    <?= ($status === 'archived' && $isRejected) ? 'Rejected' : ucfirst(htmlspecialchars($status)) ?>
+                  </span>
+                  <?php if ($role === 'admin' && !empty($e['users'])): ?>
+                    <?php 
+                      $u = $e['users'];
+                      $tName = trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? '') . ' ' . ($u['suffix'] ?? ''));
+                    ?>
+                    <?php if ($tName !== ''): ?>
+                      <span class="text-[10px] font-bold text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded-full border border-zinc-200">
+                        By: <?= htmlspecialchars($tName) ?>
+                      </span>
+                    <?php endif; ?>
+                  <?php endif; ?>
                 </div>
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-600">
+
+                <?php if ($status === 'archived' && $isRejected): ?>
+                  <div class="mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm">
+                    <div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008h-.008v-.008z"/></svg>
+                      Admin Remark:
+                    </div>
+                    <?php 
+                      preg_match('/\[REJECT_REASON:\s*(.*?)\]/', $description, $m);
+                      echo htmlspecialchars($m[1] ?? 'Proposal review required.');
+                    ?>
+                  </div>
+                <?php endif; ?>
+
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-600 mt-1">
+                  <span class="flex items-center gap-1 font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
+                    <?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>
+                  </span>
+                  <span class="flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded font-medium border border-zinc-200">
+                    Yr: <?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>
+                  </span>
+                  <span class="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-100">
+                    Grace: <?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>m
+                  </span>
                   <span class="flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
                     <?= htmlspecialchars($formattedDate) ?>
@@ -799,14 +1041,22 @@ render_header('Manage Events', $user);
           <!-- Actions -->
           <div class="flex gap-1.5 flex-wrap items-center lg:flex-shrink-0 pl-0 sm:pl-[52px] lg:pl-0">
             <?php if ($role === 'admin'): ?>
-              <?php if ($status === 'pending' || $status === 'draft'): ?>
+              <?php if ($status === 'pending'): ?>
                 <button class="btnReject rounded-lg border border-red-200 bg-red-50 px-4 py-1.5 text-[13px] text-red-700 hover:bg-red-100 transition font-bold"
                         data-id="<?= htmlspecialchars($eid) ?>" data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Reject</button>
                 <button class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
                         data-id="<?= htmlspecialchars($eid) ?>" data-status="approved">Approve</button>
               <?php endif; ?>
-              <button class="btnArchive rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100 transition"
-                      data-id="<?= htmlspecialchars($eid) ?>" data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Archive</button>
+              
+              <?php if ($status === 'approved'): ?>
+                <button class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
+                        data-id="<?= htmlspecialchars($eid) ?>" data-status="draft">Publish</button>
+              <?php endif; ?>
+
+              <?php if ($status !== 'pending'): ?>
+                <button class="btnArchive rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100 transition"
+                        data-id="<?= htmlspecialchars($eid) ?>" data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Archive</button>
+              <?php endif; ?>
             <?php endif; ?>
             <?php if ($canEdit): ?>
               <button class="btnEdit rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50 transition font-medium"
@@ -816,9 +1066,12 @@ render_header('Manage Events', $user);
                       data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
                       data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
                       data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
-              >Edit</button>
+                      data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
+                      data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
+                      data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+              >View/Edit</button>
             <?php endif; ?>
-            <a href="/participants.php?event_id=<?= htmlspecialchars($eid) ?>" class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50 transition font-medium">Participants</a>
+
           </div>
 
         </div>
@@ -834,6 +1087,8 @@ render_header('Manage Events', $user);
         <p class="text-sm">Click <span class="text-orange-700 font-medium">"Create Event"</span> to get started.</p>
       </div>
     <?php endif; ?>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -883,18 +1138,99 @@ render_header('Manage Events', $user);
     if (e.key === 'Escape') { closeModal(eventModal); closeModal(archiveModal); }
   });
 
+  // ── Flatpickr Initialization ──
+  const fpConfig = {
+    enableTime: true,
+    dateFormat: "Y-m-d H:i",
+    altInput: true,
+    altFormat: "F j, Y · h:i K",
+    minuteIncrement: 30,
+    minDate: new Date().fp_incr(1),
+    disableMobile: true
+  };
+
+  function setPickerDisabled(fp, isDisabled) {
+      if (!fp) return;
+      fp.set('clickOpens', !isDisabled);
+      if (fp.altInput) {
+          fp.altInput.disabled = isDisabled;
+          fp.altInput.classList.toggle('bg-zinc-50', isDisabled);
+          fp.altInput.classList.toggle('text-zinc-500', isDisabled);
+          fp.altInput.classList.toggle('cursor-not-allowed', isDisabled);
+          fp.altInput.classList.toggle('bg-white', !isDisabled);
+          fp.altInput.classList.toggle('text-zinc-900', !isDisabled);
+      }
+  }
+
+  const startFp = flatpickr("#start_at_local", {
+    ...fpConfig,
+    onChange: (selectedDates, dateStr, instance) => {
+      if (selectedDates.length > 0) {
+        endFp.set('minDate', dateStr); // End cannot be before start
+        // Removed auto-sync setDate call as per user request
+        setPickerDisabled(endFp, false); // Unlock end picker
+      } else {
+        setPickerDisabled(endFp, true);
+      }
+    }
+  });
+
+  const endFp = flatpickr("#end_at_local", {
+    ...fpConfig,
+    clickOpens: false,
+    onReady: (sd, ds, fp) => setPickerDisabled(fp, true) // Start locked
+  });
+
+  const startFp2 = flatpickr("#start_at_batch2", {
+    ...fpConfig,
+    onChange: (selectedDates, dateStr, instance) => {
+      if (selectedDates.length > 0) {
+        endFp2.set('minDate', dateStr);
+        setPickerDisabled(endFp2, false);
+      } else {
+        setPickerDisabled(endFp2, true);
+      }
+    }
+  });
+
+  const endFp2 = flatpickr("#end_at_batch2", {
+    ...fpConfig,
+    clickOpens: false,
+    onReady: (sd, ds, fp) => setPickerDisabled(fp, true)
+  });
+
   // ── Create Event button ──
   document.getElementById('btnCreateEvent').addEventListener('click', () => {
+    // Reset Pickers
+    [startFp, endFp, startFp2, endFp2].forEach(fp => {
+        fp.clear();
+        fp.set('minDate', new Date().fp_incr(1));
+    });
+    
+    // Lock end pickers
+    setPickerDisabled(endFp, true);
+    setPickerDisabled(endFp2, true);
+
     document.getElementById('mode').value = 'create';
+
+
     document.getElementById('event_id').value = '';
     document.getElementById('title').value = '';
     document.getElementById('location').value = '';
     document.getElementById('description').value = '';
     document.getElementById('start_at_local').value = '';
     document.getElementById('end_at_local').value = '';
+    document.getElementById('start_at_batch2').value = '';
+    document.getElementById('end_at_batch2').value = '';
     document.getElementById('formMsg').textContent = '';
     document.getElementById('modalTitle').textContent = 'Create Event';
     document.getElementById('modalSubtitle').textContent = 'Fill in the details below';
+    
+    // Reset and show batch options for creation
+    document.getElementById('batchSelectionContainer').style.display = 'block';
+    if (document.getElementById('chkBatch2')) document.getElementById('chkBatch2').checked = false;
+    updateBatchScheduleView();
+
     step = 1;
     setWizardStep(1);
     openModal(eventModal);
@@ -907,7 +1243,8 @@ render_header('Manage Events', $user);
     if (!iso) return '';
     const d = new Date(iso);
     const pad = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    // Using space instead of 'T' for broader compatibility with Flatpickr/Date parsing
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   const subtitles = ['Fill in the event info', 'Add a description', 'Set the schedule'];
@@ -929,6 +1266,21 @@ render_header('Manage Events', $user);
       else if ((i + 1) < s) el.classList.add('completed');
     });
   }
+
+  // ── Batch Checkbox Logic ──
+  function updateBatchScheduleView() {
+    const isDoubleBatch = document.getElementById('chkBatch2')?.checked;
+    
+    if (isDoubleBatch) {
+      document.getElementById('scheduleBatch2').classList.remove('hidden');
+      document.getElementById('lblBatch1').classList.remove('hidden');
+    } else {
+      document.getElementById('scheduleBatch2').classList.add('hidden');
+      document.getElementById('lblBatch1').classList.add('hidden');
+    }
+  }
+
+  document.getElementById('chkBatch2')?.addEventListener('change', updateBatchScheduleView);
 
   let step = 1;
 
@@ -961,11 +1313,29 @@ render_header('Manage Events', $user);
       document.getElementById('title').value = btn.dataset.title || '';
       document.getElementById('location').value = btn.dataset.location || '';
       document.getElementById('description').value = btn.dataset.description || '';
-      document.getElementById('start_at_local').value = toLocalInput(btn.dataset.start_at);
-      document.getElementById('end_at_local').value = toLocalInput(btn.dataset.end_at);
+      if (document.getElementById('event_type')) document.getElementById('event_type').value = btn.dataset.event_type || 'Event';
+      if (document.getElementById('event_for')) document.getElementById('event_for').value = btn.dataset.event_for || 'All';
+      if (document.getElementById('grace_time')) document.getElementById('grace_time').value = btn.dataset.grace_time || '15';
+      // Load dates into Flatpickr
+      startFp.setDate(btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : null);
+      endFp.setDate(btn.dataset.end_at ? toLocalInput(btn.dataset.end_at) : null);
+      
+      // Enable end fields for editing
+      [document.getElementById('end_at_local'), document.getElementById('end_at_batch2')].forEach(el => {
+          el.disabled = false;
+          el.classList.remove('bg-zinc-50', 'text-zinc-500', 'cursor-not-allowed');
+          el._flatpickr.set('clickOpens', true);
+      });
+
       document.getElementById('formMsg').textContent = '';
       document.getElementById('modalTitle').textContent = 'Edit Event';
       document.getElementById('modalSubtitle').textContent = 'Update the event details';
+      
+      // Hide batch options when editing
+      document.getElementById('batchSelectionContainer').style.display = 'none';
+      if (document.getElementById('chkBatch2')) document.getElementById('chkBatch2').checked = false;
+      updateBatchScheduleView();
+
       step = 1;
       setWizardStep(1);
       openModal(eventModal);
@@ -996,36 +1366,79 @@ render_header('Manage Events', $user);
     });
   });
 
-  // ── Tabs Filtering (Admin) ──
+  // ── Unified Filtering Logic (Tabs + Search + Type) ──
   const tabAll = document.getElementById('tabAll');
   const tabPending = document.getElementById('tabPending');
-  
-  if (tabAll && tabPending) {
-      const allCards = document.querySelectorAll('.group.border-l-\\[3px\\]');
-      
-      tabAll.addEventListener('click', () => {
-          tabAll.classList.replace('border-transparent','border-orange-500');
-          tabAll.classList.replace('text-zinc-500','text-orange-600');
-          
-          tabPending.classList.replace('border-orange-500','border-transparent');
-          tabPending.classList.replace('text-orange-600','text-zinc-500');
-          
-          allCards.forEach(c => c.style.display = 'block');
+  const searchInput = document.getElementById('searchEvents');
+  const typeFilter = document.getElementById('filterType');
+  const eventCards = document.querySelectorAll('.event-card');
+
+  let activeTab = 'all'; // 'all' or 'pending'
+
+  function refreshEventVisibility() {
+      const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+      const selectedType = typeFilter ? typeFilter.value : 'all';
+
+      eventCards.forEach(card => {
+          const status = card.dataset.status;
+          const title = card.dataset.title.toLowerCase();
+          const location = card.dataset.location.toLowerCase();
+          const teacher = card.dataset.teacher.toLowerCase();
+          const type = card.dataset.type;
+
+          const matchesTab = (activeTab === 'all') || (status === 'pending');
+          const matchesSearch = searchTerm === '' || 
+                               title.includes(searchTerm) || 
+                               location.includes(searchTerm) || 
+                               teacher.includes(searchTerm);
+          const matchesType = selectedType === 'all' || type === selectedType;
+
+          if (matchesTab && matchesSearch && matchesType) {
+              card.style.display = 'block';
+              
+              // Trigger Animation Refresh
+              if (card.classList.contains('event-card-animated')) {
+                  card.classList.remove('in-view');
+                  // Use global observer if available
+                  if (typeof window.observer !== 'undefined') {
+                      window.observer.unobserve(card);
+                      window.observer.observe(card);
+                  }
+              }
+          } else {
+              card.style.display = 'none';
+          }
       });
-      
+
+      // Update gradients after visibility change
+      if (typeof window.syncEventListGradients === 'function') {
+          setTimeout(window.syncEventListGradients, 50);
+      }
+  }
+
+  if (tabAll && tabPending) {
+      tabAll.addEventListener('click', () => {
+          activeTab = 'all';
+          tabAll.classList.add('border-orange-500', 'text-orange-600');
+          tabAll.classList.remove('border-transparent', 'text-zinc-500');
+          tabPending.classList.remove('border-orange-500', 'text-orange-600');
+          tabPending.classList.add('border-transparent', 'text-zinc-500');
+          refreshEventVisibility();
+      });
+
       tabPending.addEventListener('click', () => {
-          tabPending.classList.replace('border-transparent','border-orange-500');
-          tabPending.classList.replace('text-zinc-500','text-orange-600');
-          
-          tabAll.classList.replace('border-orange-500','border-transparent');
-          tabAll.classList.replace('text-orange-600','text-zinc-500');
-          
-          allCards.forEach(c => {
-              if (c.classList.contains('border-l-amber-500')) c.style.display = 'block'; // 'pending' status accent
-              else c.style.display = 'none';
-          });
+          activeTab = 'pending';
+          tabPending.classList.add('border-orange-500', 'text-orange-600');
+          tabPending.classList.remove('border-transparent', 'text-zinc-500');
+          tabAll.classList.remove('border-orange-500', 'text-orange-600');
+          tabAll.classList.add('border-transparent', 'text-zinc-500');
+          refreshEventVisibility();
       });
   }
+
+  // Real-time input listeners
+  searchInput?.addEventListener('input', refreshEventVisibility);
+  typeFilter?.addEventListener('change', refreshEventVisibility);
 
   // ── Reject (Page 34 Modal) ──
   const rejectModal = document.getElementById('rejectModal');
@@ -1063,8 +1476,8 @@ render_header('Manage Events', $user);
         const res = await fetch('/api/events_approve.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // Archiving/Drafting as rejection
-          body: JSON.stringify({ event_id, status: 'draft', csrf_token: window.CSRF_TOKEN })
+          // Archiving as rejection
+          body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'Failed');
@@ -1075,6 +1488,7 @@ render_header('Manage Events', $user);
         btn.disabled = false; btn.textContent = 'Reject Proposal';
       }
   });
+
 
   // ── Archive (custom confirm modal) ──
   document.querySelectorAll('.btnArchive').forEach(btn => {
@@ -1111,49 +1525,112 @@ render_header('Manage Events', $user);
   // ── Form submit (Create / Edit) ──
   document.getElementById('eventForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    
+    if (step !== 3) {
+       // if they hit 'Enter' early, just go to the next step
+       document.getElementById('btnNext').click();
+       return;
+    }
+
     const mode = document.getElementById('mode').value;
     const msg = document.getElementById('formMsg');
-    const payload = {
-      title: document.getElementById('title').value.trim(),
-      location: document.getElementById('location').value.trim(),
-      description: document.getElementById('description').value.trim(),
-      start_at_local: document.getElementById('start_at_local').value,
-      end_at_local: document.getElementById('end_at_local').value,
-      csrf_token: window.CSRF_TOKEN
-    };
-    if (!payload.start_at_local || !payload.end_at_local) {
-      msg.textContent = 'Start/end are required.';
-      return;
+    
+    // Base inputs
+    const title = document.getElementById('title').value.trim();
+    const location = document.getElementById('location').value.trim();
+    const description = document.getElementById('description').value.trim();
+    
+    // Extracted Fields matching JADX Schema
+    const event_type = document.getElementById('event_type') ? document.getElementById('event_type').value : 'Event';
+    const event_for = document.getElementById('event_for') ? document.getElementById('event_for').value : 'All';
+    const grace_time = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
+
+    // Check batches
+    const isDoubleBatch = (mode === 'create' && document.getElementById('chkBatch2')?.checked);
+
+    const start1 = document.getElementById('start_at_local').value;
+    const end1 = document.getElementById('end_at_local').value;
+
+    let payloads = [];
+
+    if (isDoubleBatch) {
+      const start2 = document.getElementById('start_at_batch2').value;
+      const end2 = document.getElementById('end_at_batch2').value;
+
+      if (!start1 || !end1 || !start2 || !end2) { 
+        msg.textContent = 'All start and end dates are required for both batches.'; 
+        return; 
+      }
+      
+      const s1d = new Date(start1), e1d = new Date(end1);
+      const s2d = new Date(start2), e2d = new Date(end2);
+      
+      if (Number.isNaN(s1d.getTime()) || Number.isNaN(e1d.getTime()) || Number.isNaN(s2d.getTime()) || Number.isNaN(e2d.getTime())) { 
+        msg.textContent = 'Invalid datetime selection.'; return; 
+      }
+      if (e1d <= s1d || e2d <= s2d) { 
+        msg.textContent = 'End time must be after start time for both batches.'; return; 
+      }
+      
+      payloads.push({
+        title: title + " (Batch 1)", location, description, event_type, event_for, grace_time,
+        event_span: (s1d.toDateString() === e1d.toDateString()) ? 'single_day' : 'multi_day',
+        start_at: s1d.toISOString(), end_at: e1d.toISOString(), csrf_token: window.CSRF_TOKEN
+      });
+      payloads.push({
+        title: title + " (Batch 2)", location, description, event_type, event_for, grace_time,
+        event_span: (s2d.toDateString() === e2d.toDateString()) ? 'single_day' : 'multi_day',
+        start_at: s2d.toISOString(), end_at: e2d.toISOString(), csrf_token: window.CSRF_TOKEN
+      });
+      
+    } else {
+      if (!start1 || !end1) { msg.textContent = 'Start/end dates are required.'; return; }
+      
+      const s1d = new Date(start1), e1d = new Date(end1);
+      if (Number.isNaN(s1d.getTime()) || Number.isNaN(e1d.getTime())) { msg.textContent = 'Invalid datetime selection.'; return; }
+      if (e1d <= s1d) { msg.textContent = 'End time must be after start time.'; return; }
+      
+      payloads.push({
+        title: title, location, description, event_type, event_for, grace_time,
+        event_span: (s1d.toDateString() === e1d.toDateString()) ? 'single_day' : 'multi_day',
+        start_at: s1d.toISOString(), end_at: e1d.toISOString(), csrf_token: window.CSRF_TOKEN
+      });
     }
-    const startDate = new Date(payload.start_at_local);
-    const endDate = new Date(payload.end_at_local);
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-      msg.textContent = 'Invalid datetime.';
-      return;
-    }
-    if (endDate <= startDate) {
-      msg.textContent = 'End must be after start.';
-      return;
-    }
-    payload.start_at = startDate.toISOString();
-    payload.end_at = endDate.toISOString();
-    delete payload.start_at_local;
-    delete payload.end_at_local;
-    msg.textContent = mode === 'edit' ? 'Updating...' : 'Creating...';
+
+    msg.textContent = mode === 'edit' ? 'Updating...' : 'Building Event(s)...';
+    const submitBtn = document.getElementById('btnSubmit');
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
     const event_id = document.getElementById('event_id').value;
     const url = mode === 'edit' ? '/api/events_update.php' : '/api/events_create.php';
+
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode === 'edit' ? { event_id, ...payload } : payload)
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed');
-      window.location.reload();
+      if (mode === 'edit') {
+        const payload = { event_id, ...payloads[0] };
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed to update event');
+      } else {
+        // Execute creation of either single or double batch natively via Promise queue
+        const responses = await Promise.all(payloads.map(p => 
+           fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }).then(r => r.json())
+        ));
+        
+        for (let data of responses) {
+           if (!data.ok) throw new Error(data.error || 'Failed to construct event batches');
+        }
+      }
+      
+      msg.className = 'text-sm font-bold text-emerald-500 mt-2 text-center';
+      msg.textContent = 'Success!';
+      setTimeout(() => window.location.reload(), 400);
+      
     } catch (err) {
-      msg.textContent = err.message || 'Failed';
+      msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
+      msg.textContent = err.message || 'Server error encountered.';
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     }
   });
 
@@ -1508,10 +1985,26 @@ render_header('Manage Events', $user);
     const mainDesc = document.getElementById('description');
     const mainExpandBtn = document.getElementById('mainExpandBtn');
     const mainAiBtn = document.getElementById('mainAiImproveBtn');
+    const mainUndoBtn = document.getElementById('mainUndoBtn');
     const mainAiStatus = document.getElementById('mainAiStatus');
     const mainModalPanel = document.querySelector('#eventModal .modal-panel');
     
     let mainIsExpanded = false;
+    let originalMainDesc = '';
+    
+    if (mainUndoBtn && mainDesc) {
+        mainUndoBtn.addEventListener('click', () => {
+            if (originalMainDesc !== '') {
+                mainDesc.value = originalMainDesc;
+                if (mainAiStatus) {
+                    mainAiStatus.innerHTML = '↶ Reverted to original text.';
+                    mainAiStatus.classList.remove('hidden');
+                    setTimeout(() => mainAiStatus.classList.add('hidden'), 3500);
+                }
+                mainUndoBtn.classList.add('hidden');
+            }
+        });
+    }
     if (mainExpandBtn && mainDesc) {
         mainExpandBtn.addEventListener('click', () => {
             mainIsExpanded = !mainIsExpanded;
@@ -1541,6 +2034,9 @@ render_header('Manage Events', $user);
                 return;
             }
             
+            // Save original before overwriting
+            originalMainDesc = raw;
+            
             // UI Loading state
             mainAiBtn.disabled = true;
             mainAiBtn.style.opacity = '0.5';
@@ -1558,6 +2054,7 @@ render_header('Manage Events', $user);
                     mainDesc.value = json.improved_text;
                     mainAiStatus.innerHTML = '✅ Professionally Improved!';
                     setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
+                    if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
                 } else {
                     mainAiStatus.innerHTML = '❌ Error: ' + json.error;
                 }
@@ -1569,6 +2066,56 @@ render_header('Manage Events', $user);
             mainAiBtn.style.opacity = '1';
         });
     }
+
+    // ── Intersection Observer for Event Cards ──
+    const observerOptions = {
+        root: document.getElementById('eventScrollContainer'),
+        threshold: 0,
+        rootMargin: '100px'
+    };
+
+    window.observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('in-view');
+            } else if (entry.boundingClientRect.top > entry.rootBounds.bottom) {
+                entry.target.classList.remove('in-view');
+            }
+        });
+    }, observerOptions);
+
+    function reobserveCards() {
+        document.querySelectorAll('.event-card-animated').forEach(card => {
+            window.observer.observe(card);
+        });
+    }
+    reobserveCards();
+
+    // ── Edge Gradient Sync ──
+    const scrollContainer = document.getElementById('eventScrollContainer');
+    const topGrad = document.getElementById('topEventGrad');
+    const bottomGrad = document.getElementById('bottomEventGrad');
+
+    if (scrollContainer && topGrad && bottomGrad) {
+        const syncGradients = () => {
+            const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+            
+            // Top gradient opacity
+            const tOpacity = Math.min(scrollTop / 50, 1);
+            topGrad.style.opacity = tOpacity;
+
+            // Bottom gradient opacity
+            const bottomDistance = scrollHeight - (scrollTop + clientHeight);
+            const bOpacity = scrollHeight <= clientHeight ? 0 : Math.min(bottomDistance / 50, 1);
+            bottomGrad.style.opacity = bOpacity;
+        };
+
+        scrollContainer.addEventListener('scroll', syncGradients);
+        setTimeout(syncGradients, 100);
+        window.syncEventListGradients = syncGradients;
+    }
+
+    refreshEventVisibility();
 
     logDebug("STT Script fully loaded & event listeners attached.");
   })();

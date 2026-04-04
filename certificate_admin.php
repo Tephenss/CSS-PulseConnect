@@ -8,6 +8,7 @@ require_once __DIR__ . '/includes/supabase.php';
 
 $user = require_role(['admin', 'teacher']);
 $eventId = isset($_GET['event_id']) ? (string) $_GET['event_id'] : '';
+$templateId = isset($_GET['template_id']) ? (string) $_GET['template_id'] : '';
 
 $eventName = 'Sample Event One';
 if ($eventId !== '') {
@@ -24,10 +25,24 @@ if ($eventId !== '') {
     }
 }
 
-// Fetch saved templates for this event
+// Fetch saved templates for this workspace
 $customTemplates = [];
 if ($eventId !== '') {
-    $tplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,name,canvas_state&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
+    $tplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
+    $tplRes = supabase_request('GET', $tplUrl, [
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY
+    ]);
+    if ($tplRes['ok']) {
+        $arrTpl = json_decode((string) $tplRes['body'], true);
+        if (is_array($arrTpl)) {
+            $customTemplates = $arrTpl;
+        }
+    }
+} else {
+    // Fetch all recent templates if no event context
+    $limit = $templateId !== '' ? 20 : 10;
+    $tplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&order=created_at.desc&limit=' . $limit;
     $tplRes = supabase_request('GET', $tplUrl, [
         'apikey: ' . SUPABASE_KEY,
         'Authorization: Bearer ' . SUPABASE_KEY
@@ -106,7 +121,7 @@ if ($eventId !== '') {
     <!-- TOP NAV / HEADER (Soft Dark) -->
     <div class="h-14 bg-[#0a0a0c] border-b border-zinc-800 text-white flex items-center justify-between px-6 z-40 flex-shrink-0 relative">
         <div class="flex items-center gap-4">
-             <a href="<?= $eventId ? '/event_view.php?id='.htmlspecialchars($eventId) : '/manage_events.php' ?>" class="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors text-sm font-semibold group">
+             <a href="<?= $eventId ? '/event_view.php?id='.htmlspecialchars($eventId) : '/admin_certificates.php' ?>" class="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors text-sm font-semibold group">
                 <div class="w-7 h-7 rounded bg-zinc-800/80 group-hover:bg-orange-500/20 flex flex-col justify-center items-center transition-all border border-zinc-700">
                     <svg class="w-4 h-4 group-hover:text-orange-500 transition-colors" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
                 </div>
@@ -242,14 +257,20 @@ if ($eventId !== '') {
                 <div id="panel-templates" class="tab-panel flex flex-col gap-4">
                     
                     <?php if (count($customTemplates) > 0): ?>
-                    <div class="text-[11px] font-black text-orange-500 uppercase tracking-widest mb-1 flex items-center gap-1.5 border-b border-zinc-800 pb-2">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17.5 3h-11a2 2 0 00-2 2v14a2 2 0 002 2h11a2 2 0 002-2v-14a2 2 0 00-2-2z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6"/></svg>
-                        Workspace Saved
-                    </div>
-                    <?php foreach ($customTemplates as $ct): ?>
-                        <div class="custom-template-card border border-orange-500/20 bg-orange-500/5 hover:bg-orange-500/10 rounded-lg p-3 cursor-pointer transition-all flex flex-col gap-2 shadow-sm" data-json="<?= htmlspecialchars(json_encode($ct['canvas_state'])) ?>">
-                            <div class="text-[13px] font-bold text-orange-200"><?= htmlspecialchars((string)$ct['name']) ?></div>
-                            <div class="text-[10px] text-zinc-500 font-medium">Click to restore this canvas state</div>
+                    <h3 class="text-xs font-bold text-zinc-100 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+                        Saved Templates
+                    </h3>
+                    <?php foreach ($customTemplates as $tpl): ?>
+                        <div class="custom-template-card border border-zinc-700 bg-[#18181b] rounded-lg p-2 cursor-pointer transition-all flex flex-col gap-2 shadow-sm hover:border-orange-500" data-json="<?= htmlspecialchars(json_encode($tpl['canvas_state'])) ?>" data-id="<?= htmlspecialchars($tpl['id']) ?>">
+                            <div class="w-full h-32 bg-zinc-900 rounded border border-zinc-800 overflow-hidden relative pointer-events-none flex items-center justify-center">
+                                <?php if (!empty($tpl['thumbnail_url'])): ?>
+                                    <img src="<?= htmlspecialchars($tpl['thumbnail_url']) ?>" class="w-full h-full object-cover">
+                                <?php else: ?>
+                                    <div class="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">No Preview</div>
+                                <?php endif; ?>
+                            </div>
+                            <div class="text-xs font-semibold text-zinc-300 text-center truncate px-1"><?= htmlspecialchars((string)$tpl['title']) ?></div>
                         </div>
                     <?php endforeach; ?>
                     <div class="h-4"></div>
@@ -545,6 +566,7 @@ function syncToolbars() {
         document.getElementById('fontColor').value = obj.fill;
         document.getElementById('btnBold').classList.toggle('active', obj.fontWeight === 'bold');
         document.getElementById('btnItalic').classList.toggle('active', obj.fontStyle === 'italic');
+        document.getElementById('btnUnderline').classList.toggle('active', !!obj.underline);
     } else {
         textToolbar.classList.add('opacity-30', 'pointer-events-none');
     }
@@ -606,6 +628,7 @@ document.getElementById('fontColor').addEventListener('input', (e) => setStyle('
 document.getElementById('fontFamily').addEventListener('change', (e) => setStyle('fontFamily', e.target.value));
 document.getElementById('btnBold').addEventListener('click', (e) => executeActiveObj(o => { if(o.text) o.set('fontWeight', o.fontWeight === 'bold' ? 'normal' : 'bold'); }));
 document.getElementById('btnItalic').addEventListener('click', (e) => executeActiveObj(o => { if(o.text) o.set('fontStyle', o.fontStyle === 'italic' ? 'normal' : 'italic'); }));
+document.getElementById('btnUnderline').addEventListener('click', (e) => executeActiveObj(o => { if(o.text) o.set('underline', !o.underline); }));
 ['Left','Center','Right'].forEach(a => { document.getElementById('btnAlign'+a).addEventListener('click', () => setStyle('textAlign', a.toLowerCase())); });
 
 // --- GOOGLE FONTS MODAL LOGIC ---
@@ -654,6 +677,10 @@ document.getElementById('btnPreview').addEventListener('click', () => {
 
 document.getElementById('btnSaveTemplate').addEventListener('click', async () => {
     const jsonState = canvas.toJSON();
+    canvas.discardActiveObject(); canvas.renderAll();
+    // High quality thumbnail for sharp card preview
+    const thumb = canvas.toDataURL({ format: 'jpeg', quality: 0.8, multiplier: 0.4 });
+
     const name = prompt("Enter a name for this Certificate Template:", "Custom Draft 1");
     if (!name) return;
     
@@ -668,8 +695,9 @@ document.getElementById('btnSaveTemplate').addEventListener('click', async () =>
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                  event_id: '<?php echo htmlspecialchars($eventId); ?>',
-                 name: name,
+                 title: name,
                  canvas_state: jsonState,
+                 thumbnail_url: thumb,
                  csrf_token: <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>
             })
         });
@@ -720,61 +748,31 @@ function loadTemplatePreset(type) {
     // Default config restoration
     canvas.backgroundColor = '#ffffff';
 
-    if (type === 'classic-green') {
-        const title = new fabric.IText('CERTIFICATE OF PARTICIPATION', {
+    if (type === 'summit') {
+        const title = new fabric.IText('CCS SUMMIT 2026', {
             left: canvas.width / 2, top: 300,
-            fontFamily: 'Georgia', fontSize: 60, fontWeight: 'bold', fill: '#064e3b',
+            fontFamily: 'Inter', fontSize: 60, fontWeight: 'bold', fill: '#1e3a8a',
             originX: 'center', originY: 'center', textAlign: 'center'
         });
-        const sub1 = new fabric.IText('THIS CERTIFICATE IS PROUDLY PRESENTED TO', {
+        const sub1 = new fabric.IText('CERTIFICATE OF RECOGNITION', {
             left: canvas.width / 2, top: 380,
-            fontFamily: 'Inter', fontSize: 20, fontWeight: 'normal', fill: '#3f3f46',
+            fontFamily: 'Inter', fontSize: 20, fontWeight: 'bold', fill: '#3f3f46',
             originX: 'center', originY: 'center', textAlign: 'center'
         });
-        const name = new fabric.IText('{{participant_name}}', {
-            left: canvas.width / 2, top: 480,
-            fontFamily: 'Inter', fontSize: 75, fontWeight: 'bold', fill: '#f97316',
-            originX: 'center', originY: 'center', textAlign: 'center'
-        });
-        const sub2 = new fabric.IText('For outstanding participation and completion of the event program.', {
-            left: canvas.width / 2, top: 580,
-            fontFamily: 'Inter', fontSize: 18, fontWeight: 'normal', fill: '#71717a',
-            originX: 'center', originY: 'center', textAlign: 'center'
-        });
-        
-        // Add decorative bars
-        var rectTop = new fabric.Rect({
-            left: 0, top: 0, fill: '#064e3b', width: canvas.width, height: 40, selectable: false
-        });
-        var rectBot = new fabric.Rect({
-            left: 0, top: canvas.height - 40, fill: '#f97316', width: canvas.width, height: 40, selectable: false
-        });
+        canvas.add(title, sub1);
 
-        canvas.add(rectTop, rectBot, title, sub1, name, sub2);
-
-    } else if (type === 'nutrition-month') {
-        // Build a massive orange-red style template
-        const title = new fabric.IText('NUTRITION MONTH 2026', {
+    } else if (type === 'ga') {
+        const title = new fabric.IText('GENERAL ASSEMBLY 2026', {
             left: canvas.width / 2, top: 250,
-            fontFamily: 'Inter', fontSize: 50, fontWeight: 'bold', fill: '#c2410c',
+            fontFamily: 'Inter', fontSize: 55, fontWeight: 'bold', fill: '#c2410c',
             originX: 'center', originY: 'center', textAlign: 'center'
         });
-        const name = new fabric.IText('{{participant_name}}', {
-            left: canvas.width / 2, top: 380,
-            fontFamily: 'Georgia', fontSize: 80, fontWeight: 'bold', fill: '#000000',
-            originX: 'center', originY: 'center', textAlign: 'center', fontStyle: 'italic'
-        });
-        const reason = new fabric.IText('Awarded for joining the school\'s diet consciousness initiative.', {
-            left: canvas.width / 2, top: 480,
-            fontFamily: 'Inter', fontSize: 22, fontWeight: 'normal', fill: '#3f3f46',
+        const sub1 = new fabric.IText('Certificate of Attendance', {
+            left: canvas.width / 2, top: 320,
+            fontFamily: 'Inter', fontSize: 24, fontWeight: 'normal', fill: '#4b5563',
             originX: 'center', originY: 'center', textAlign: 'center'
         });
-        
-        var circle = new fabric.Circle({
-            radius: 150, fill: '#fb923c', left: -50, top: -50, opacity: 0.2, selectable: false
-        });
-
-        canvas.add(circle, title, name, reason);
+        canvas.add(title, sub1);
     }
     
     canvas.renderAll();
@@ -786,6 +784,28 @@ presetCards.forEach(card => {
         loadTemplatePreset(type);
     });
 });
+
+// Auto-load template if template_id is passed
+const loadTemplateId = "<?= htmlspecialchars($templateId ?? '', ENT_QUOTES, 'UTF-8') ?>";
+if (loadTemplateId !== '') {
+    setTimeout(() => {
+        const targetCard = document.querySelector(`.custom-template-card[data-id="${loadTemplateId}"]`);
+        if (targetCard) {
+            // Bypass confirm for the initial auto-load
+            const rawJson = targetCard.dataset.json;
+            if(rawJson) {
+                try {
+                    const parsed = JSON.parse(rawJson);
+                    canvas.clear();
+                    canvas.loadFromJSON(parsed, () => {
+                        canvas.renderAll();
+                        autoFitCanvas();
+                    });
+                } catch(e) {}
+            }
+        }
+    }, 200);
+}
 </script>
 </body>
 </html>
