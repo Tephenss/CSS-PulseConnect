@@ -18,3 +18,4 @@ desktop.ini
 # Secrets
 .env
 api/service-account.json
+includes/fcm-credentials.php
