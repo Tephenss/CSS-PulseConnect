@@ -231,7 +231,7 @@ render_header('Archived Events', $user);
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
                 <th class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
                 <th class="px-4 py-4 font-bold text-zinc-900">Section</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">ID Number</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Student Number</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 text-right">Actions</th>
             </tr>
         </thead>
@@ -241,7 +241,7 @@ render_header('Archived Events', $user);
                 <td class="px-6 py-4">N/A</td>
                 <td class="px-4 py-4 font-semibold text-zinc-800">1</td>
                 <td class="px-4 py-4 text-zinc-500">Einstein</td>
-                <td class="px-4 py-4 font-mono text-xs text-emerald-600">2018447</td>
+                <td class="px-4 py-4 font-mono text-xs text-emerald-600">231-1023</td>
                 <td class="px-6 py-4 text-right flex items-center justify-end">
                     <button class="mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" onclick="alert('MOCK: Restore Student Clicked')">Restore Student</button>
                     <button class="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" onclick="alert('MOCK: Permanent Delete Clicked')"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
@@ -252,7 +252,7 @@ render_header('Archived Events', $user);
                 <td class="px-6 py-4">N/A</td>
                 <td class="px-4 py-4 font-semibold text-zinc-800">1</td>
                 <td class="px-4 py-4 text-zinc-500">Euclid</td>
-                <td class="px-4 py-4 font-mono text-xs text-emerald-600">2020224</td>
+                <td class="px-4 py-4 font-mono text-xs text-emerald-600">222-4567</td>
                 <td class="px-6 py-4 text-right flex items-center justify-end">
                     <button class="mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" onclick="alert('MOCK: Restore Student Clicked')">Restore Student</button>
                     <button class="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" onclick="alert('MOCK: Permanent Delete Clicked')"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>

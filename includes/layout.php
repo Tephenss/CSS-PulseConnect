@@ -193,6 +193,144 @@ function render_header(string $title, ?array $user): void
     echo '  </div>';
     echo '</header>';
 
+    // ══════ NOTIFICATION SYSTEM (Admin Only) ══════
+    if ($role === 'admin') {
+        echo '
+        <div id="notif-system" class="fixed bottom-6 right-6 z-[999] flex flex-col items-end pointer-events-none">
+            
+            <!-- Notification Panel -->
+            <div id="notif-panel" class="pointer-events-auto w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-zinc-200 mb-4 transition-all duration-300 origin-bottom-right scale-95 opacity-0 invisible flex flex-col max-h-[80vh]">
+                <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+                    <h3 class="text-sm font-bold text-zinc-900">Notifications</h3>
+                    <button id="notif-mark-read" class="text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition">Mark all as read</button>
+                </div>
+                
+                <div id="notif-list" class="flex-1 overflow-y-auto min-h-[100px] bg-white">
+                    <div class="flex items-center justify-center h-full py-8 text-xs text-zinc-500">Loading...</div>
+                </div>
+                
+                <div class="px-5 py-3 border-t border-zinc-100 bg-zinc-50 rounded-b-2xl">
+                    <a href="/manage_events.php" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
+                </div>
+            </div>
+
+            <!-- Trigger Button -->
+            <button id="notif-trigger" class="pointer-events-auto relative w-14 h-14 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center transform hover:-translate-y-1 group border-4 border-white/50">
+                <svg class="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                </svg>
+                <!-- Badge -->
+                <div id="notif-badge" class="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center hidden shadow-sm">
+                    0
+                </div>
+            </button>
+        </div>
+
+        <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const trigger = document.getElementById("notif-trigger");
+            const panel = document.getElementById("notif-panel");
+            const list = document.getElementById("notif-list");
+            const badge = document.getElementById("notif-badge");
+            const markReadBtn = document.getElementById("notif-mark-read");
+            
+            if(!trigger || !panel) return;
+
+            let isPanelOpen = false;
+            let loadedNotifications = [];
+            let unreadCount = 0;
+            
+            function formatTimeAgo(isoString) {
+                const date = new Date(isoString);
+                const now = new Date();
+                const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+                const timeString = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+                return isToday ? `Today, ${timeString}` : `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${timeString}`;
+            }
+            
+            function renderNotifications(data) {
+                if (!data || data.length === 0) {
+                    list.innerHTML = `<div class="px-5 py-8 text-center"><div class="mx-auto w-10 h-10 bg-zinc-100 rounded-full flex items-center justify-center mb-3"><svg class="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg></div><p class="text-[13px] font-medium text-zinc-500">You\'re all caught up!</p></div>`;
+                    return;
+                }
+                
+                let html = "";
+                data.forEach(item => {
+                    html += `
+                    <a href="${item.link || \'/manage_events.php\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
+                        <div class="mt-1 w-9 h-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" /></svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <h4 class="text-[13px] font-bold text-zinc-900 truncate mb-0.5">${item.title}</h4>
+                            <p class="text-[12px] text-zinc-600 leading-snug line-clamp-2">${item.description}</p>
+                            <div class="text-[11px] text-zinc-400 mt-1.5 font-medium">${formatTimeAgo(item.created_at)}</div>
+                        </div>
+                    </a>`;
+                });
+                list.innerHTML = html;
+            }
+            
+            function updateBadge() {
+                const readIds = JSON.parse(localStorage.getItem("pulse_notifs_read") || "[]");
+                unreadCount = loadedNotifications.filter(n => !readIds.includes(n.id)).length;
+                
+                if (unreadCount > 0) {
+                    badge.classList.remove("hidden");
+                    badge.textContent = unreadCount > 9 ? "9+" : unreadCount;
+                } else {
+                    badge.classList.add("hidden");
+                }
+            }
+            
+            async function fetchNotifications() {
+                try {
+                    const res = await fetch("/api/get_notifications.php");
+                    const data = await res.json();
+                    if (data.ok) {
+                        loadedNotifications = data.notifications;
+                        renderNotifications(loadedNotifications);
+                        updateBadge();
+                    }
+                } catch (e) {
+                    console.error("Failed to load notifications", e);
+                }
+            }
+            
+            trigger.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isPanelOpen = !isPanelOpen;
+                if (isPanelOpen) {
+                    panel.classList.remove("scale-95", "opacity-0", "invisible");
+                    panel.classList.add("scale-100", "opacity-100", "visible");
+                } else {
+                    panel.classList.remove("scale-100", "opacity-100", "visible");
+                    panel.classList.add("scale-95", "opacity-0", "invisible");
+                }
+            });
+            
+            document.addEventListener("click", (e) => {
+                if (isPanelOpen && !panel.contains(e.target) && !trigger.contains(e.target)) {
+                    isPanelOpen = false;
+                    panel.classList.remove("scale-100", "opacity-100", "visible");
+                    panel.classList.add("scale-95", "opacity-0", "invisible");
+                }
+            });
+            
+            markReadBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const readIds = loadedNotifications.map(n => n.id);
+                localStorage.setItem("pulse_notifs_read", JSON.stringify(readIds));
+                updateBadge();
+            });
+            
+            fetchNotifications();
+            setInterval(fetchNotifications, 30000); // 30s polling
+        });
+        </script>';
+    }
+
     echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';</script>';
     echo '<main class="flex-1 p-5 lg:p-8 content-area">';
 }

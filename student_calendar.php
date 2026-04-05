@@ -119,10 +119,14 @@ render_header('Event Calendar', $user);
 <script>
   const eventsData = <?= json_encode($events) ?>;
   const tooltip = document.getElementById('eventTooltip');
+  const now = new Date();
   
-  function getStatusStyle(status) {
-    // Only published events are loaded for students, so everything is usually green
-    return 'bg-emerald-100 text-emerald-900 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50';
+  function getEventStyle(evt) {
+    const start = new Date(evt.start_at);
+    const end = evt.end_at ? new Date(evt.end_at) : null;
+    if (end && end < now) return 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50';
+    if (start <= now && (!end || end >= now)) return 'bg-emerald-100 text-emerald-900 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50';
+    return 'bg-orange-100 text-orange-900 border-orange-200 hover:border-orange-300 hover:bg-orange-50';
   }
 
   function formatDateRange(startISO, endISO) {
@@ -143,6 +147,7 @@ render_header('Event Calendar', $user);
   let currentDate = new Date();
   
   function renderCalendar() {
+    const now = new Date();
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     
@@ -190,7 +195,7 @@ render_header('Event Calendar', $user);
       
       dayEvents.forEach(evt => {
         const evEl = document.createElement('div');
-        evEl.className = `text-[10px] sm:text-xs font-semibold px-2 py-1.5 rounded-lg border flex items-center gap-1.5 cursor-pointer truncate transition-all duration-200 ${getStatusStyle(evt.status)}`;
+        evEl.className = `text-[10px] sm:text-xs font-semibold px-2 py-1.5 rounded-lg border flex items-center gap-1.5 cursor-pointer truncate transition-all duration-200 ${getEventStyle(evt)}`;
         evEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-current flex-shrink-0"></span> <span class="truncate">${evt.title}</span>`;
         
         // Tooltip logic
@@ -203,12 +208,20 @@ render_header('Event Calendar', $user);
            } else {
               document.getElementById('ttLocWrap').classList.add('hidden');
            }
-           const rect = evEl.getBoundingClientRect();
-           tooltip.style.left = Math.min(rect.left + window.scrollX, window.innerWidth - 300) + 'px';
-           tooltip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+           
+           // Show first to get dimensions
            tooltip.classList.remove('opacity-0');
+           tooltip.classList.add('opacity-100');
+           
+           const rect = evEl.getBoundingClientRect();
+           const ttHeight = tooltip.offsetHeight || 130;
+           tooltip.style.left = Math.min(rect.left, window.innerWidth - 300) + 'px';
+           tooltip.style.top = (rect.top - ttHeight - 12) + 'px';
         });
-        evEl.addEventListener('mouseleave', () => tooltip.classList.add('opacity-0'));
+        evEl.addEventListener('mouseleave', () => {
+           tooltip.classList.add('opacity-0');
+           tooltip.classList.remove('opacity-100');
+        });
         
         evEl.onclick = () => window.location.href = `/events.php`; // Students go to global events page
         eventContainer.appendChild(evEl);

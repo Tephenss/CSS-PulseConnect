@@ -10,7 +10,8 @@ require_once __DIR__ . '/includes/layout.php';
 
 $user = require_role(['admin']);
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=neq.archived&order=start_at.asc';
+// Only show published events (includes ongoing & past published)
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=eq.published&order=start_at.asc';
 
 $headers = [
     'Accept: application/json',
@@ -27,42 +28,49 @@ if ($res['ok']) {
 
 render_header('Event Calendar', $user);
 
-$published = 0; $pending = 0; $approved = 0;
+$now = new DateTime();
+$upcoming = 0; $ongoing = 0; $past = 0;
 foreach($events as $e) {
-  if(($e['status']??'')==='published') $published++;
-  if(($e['status']??'')==='pending') $pending++;
-  if(($e['status']??'')==='approved') $approved++;
+  $start = !empty($e['start_at']) ? new DateTime($e['start_at']) : null;
+  $end   = !empty($e['end_at'])   ? new DateTime($e['end_at'])   : null;
+  if ($start && $end) {
+    if ($start > $now) $upcoming++;
+    elseif ($end >= $now) $ongoing++;
+    else $past++;
+  } elseif ($start) {
+    if ($start > $now) $upcoming++; else $past++;
+  }
 }
 ?>
 
 <div class="mb-8 flex items-center justify-between">
   <div>
     <h2 class="text-xl font-bold text-zinc-900 mb-1">System Calendar</h2>
-    <p class="text-zinc-600 text-sm">Visual overview of all active events across the system.</p>
+    <p class="text-zinc-600 text-sm">Visual overview of all published events across the system.</p>
   </div>
 </div>
 
 <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+  <div class="rounded-2xl border border-zinc-200 bg-white p-5 border-b-[3px] border-b-orange-500 shadow-sm flex items-center gap-4 relative overflow-hidden group">
+     <div class="absolute -right-8 -top-8 w-24 h-24 bg-orange-400/15 blur-2xl rounded-full pointer-events-none"></div>
+     <div class="w-10 h-10 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center text-orange-700 z-10">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+     </div>
+     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $upcoming ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Upcoming</div></div>
+  </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-5 border-b-[3px] border-b-emerald-500 shadow-sm flex items-center gap-4 relative overflow-hidden group">
      <div class="absolute -right-8 -top-8 w-24 h-24 bg-emerald-400/15 blur-2xl rounded-full pointer-events-none"></div>
      <div class="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 z-10">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
      </div>
-     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $published ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Published</div></div>
+     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $ongoing ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Ongoing</div></div>
   </div>
-  <div class="rounded-2xl border border-zinc-200 bg-white p-5 border-b-[3px] border-b-amber-500 shadow-sm flex items-center gap-4 relative overflow-hidden group">
-     <div class="absolute -right-8 -top-8 w-24 h-24 bg-amber-400/15 blur-2xl rounded-full pointer-events-none"></div>
-     <div class="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-800 z-10">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2.25m0 0v2.25m0-2.25h2.25m-2.25 0H9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <div class="rounded-2xl border border-zinc-200 bg-white p-5 border-b-[3px] border-b-zinc-400 shadow-sm flex items-center gap-4 relative overflow-hidden group">
+     <div class="absolute -right-8 -top-8 w-24 h-24 bg-zinc-400/15 blur-2xl rounded-full pointer-events-none"></div>
+     <div class="w-10 h-10 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center justify-center text-zinc-600 z-10">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
      </div>
-     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $pending ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Pending</div></div>
-  </div>
-  <div class="rounded-2xl border border-zinc-200 bg-white p-5 border-b-[3px] border-b-sky-500 shadow-sm flex items-center gap-4 relative overflow-hidden group">
-     <div class="absolute -right-8 -top-8 w-24 h-24 bg-sky-400/15 blur-2xl rounded-full pointer-events-none"></div>
-     <div class="w-10 h-10 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center text-sky-700 z-10">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-     </div>
-     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $approved ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Approved</div></div>
+     <div class="z-10"><div class="text-2xl font-bold text-zinc-900"><?= $past ?></div><div class="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">Past Events</div></div>
   </div>
 </div>
 
@@ -111,14 +119,14 @@ foreach($events as $e) {
 <script>
   const eventsData = <?= json_encode($events) ?>;
   const tooltip = document.getElementById('eventTooltip');
+  const now = new Date();
   
-  function getStatusStyle(status) {
-    switch(status) {
-      case 'published': return 'bg-emerald-100 text-emerald-900 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50';
-      case 'pending': return 'bg-amber-100 text-amber-900 border-amber-200 hover:border-amber-300 hover:bg-amber-50';
-      case 'approved': return 'bg-sky-100 text-sky-900 border-sky-200 hover:border-sky-300 hover:bg-sky-50';
-      default: return 'bg-zinc-100 text-zinc-800 border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50';
-    }
+  function getEventStyle(evt) {
+    const start = new Date(evt.start_at);
+    const end = evt.end_at ? new Date(evt.end_at) : null;
+    if (end && end < now) return 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50'; // past
+    if (start <= now && (!end || end >= now)) return 'bg-emerald-100 text-emerald-900 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50'; // ongoing
+    return 'bg-orange-100 text-orange-900 border-orange-200 hover:border-orange-300 hover:bg-orange-50'; // upcoming
   }
 
   function formatDateRange(startISO, endISO) {
@@ -139,6 +147,7 @@ foreach($events as $e) {
   let currentDate = new Date();
   
   function renderCalendar() {
+    const now = new Date();
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     
@@ -188,9 +197,11 @@ foreach($events as $e) {
         const evEl = document.createElement('div');
         
         let dotColor = 'bg-zinc-400';
-        if(evt.status === 'published') dotColor = 'bg-emerald-500';
-        else if(evt.status === 'pending') dotColor = 'bg-amber-500';
-        else if(evt.status === 'approved') dotColor = 'bg-sky-500';
+        const evtStart = new Date(evt.start_at);
+        const evtEnd = evt.end_at ? new Date(evt.end_at) : null;
+        if (evtEnd && evtEnd < now) dotColor = 'bg-zinc-400';           // past
+        else if (evtStart <= now && (!evtEnd || evtEnd >= now)) dotColor = 'bg-emerald-500'; // ongoing
+        else dotColor = 'bg-orange-500';                                 // upcoming
 
         evEl.className = `w-2 h-2 rounded-full ${dotColor} shadow-[0_2px_4px_-1px_rgba(0,0,0,0.1)] cursor-pointer transition-transform hover:scale-150`;
         
@@ -204,11 +215,15 @@ foreach($events as $e) {
            } else {
               document.getElementById('ttLocWrap').classList.add('hidden');
            }
-           const rect = evEl.getBoundingClientRect();
-           tooltip.style.left = Math.min(rect.left + window.scrollX - 100, window.innerWidth - 300) + 'px';
-           tooltip.style.top = (rect.top + window.scrollY - tooltip.offsetHeight - 10) + 'px';
+           
+           // Show first to get dimensions
            tooltip.classList.remove('opacity-0');
            tooltip.classList.add('opacity-100');
+           
+           const rect = evEl.getBoundingClientRect();
+           const ttHeight = tooltip.offsetHeight || 100;
+           tooltip.style.left = Math.min(rect.left - 120, window.innerWidth - 300) + 'px';
+           tooltip.style.top = (rect.top - ttHeight - 12) + 'px';
         });
         evEl.addEventListener('mouseleave', () => {
            tooltip.classList.add('opacity-0');

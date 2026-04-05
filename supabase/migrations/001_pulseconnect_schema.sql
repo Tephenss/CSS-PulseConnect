@@ -200,3 +200,7 @@ grant all privileges on table public.sections to anon, authenticated, service_ro
 -- Alter users table to include section_id
 alter table public.users
 add column if not exists section_id uuid references public.sections(id) on delete set null;
+
+-- Add contact number to users
+alter table public.users
+add column if not exists contact_number text;

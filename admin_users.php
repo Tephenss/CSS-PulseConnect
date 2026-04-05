@@ -17,7 +17,7 @@ $headers = [
 ];
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-    . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,created_at'
+    . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,contact_number,created_at,student_id'
     . '&order=created_at.desc'
     . '&limit=500';
 
@@ -134,14 +134,19 @@ render_header('Users & Roles', $user);
 <!-- Top Nav Tabs (Pages 37 & 38) -->
 <div class="flex border-b border-zinc-200 mb-6 gap-6 mt-2 relative z-10 w-full overflow-x-auto">
     <button id="tabTeachers" class="pb-3 border-b-2 border-orange-500 font-bold text-orange-600 text-sm transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
         All Teachers
         <span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-orange-200 group-hover:bg-orange-200 transition-colors"><?= $teacherCount ?></span>
     </button>
     <button id="tabStudents" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-sm transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
         All Students
         <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= $studentCount ?></span>
+    </button>
+    <button id="tabAdmins" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-sm transition-colors whitespace-nowrap px-1 group flex items-center gap-2 text-zinc-500 hover:text-zinc-800">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+        All Admins
+        <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= $adminCount ?></span>
     </button>
 </div>
 
@@ -177,7 +182,7 @@ render_header('Users & Roles', $user);
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-200">
-          <?php foreach ($users as $u): if (($u['role'] ?? '') === 'student') continue; ?>
+          <?php foreach ($users as $u): if (($u['role'] ?? '') !== 'teacher') continue; ?>
             <?php
               $nameParts = [];
               foreach (['first_name','middle_name','last_name'] as $k) {
@@ -213,7 +218,7 @@ render_header('Users & Roles', $user);
                   <div class="truncate max-w-[200px]" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></div>
               </td>
               <td class="px-6 py-4 font-medium text-zinc-500">
-                  N/A
+                  <?= htmlspecialchars((string)($u['contact_number'] ?? 'N/A')) ?>
               </td>
               <td class="px-6 py-4 font-bold text-zinc-800"><?= htmlspecialchars($gradeLvl) ?></td>
               <td class="px-6 py-4 font-bold text-zinc-800"><?= htmlspecialchars($parsedSec) ?></td>
@@ -248,7 +253,7 @@ render_header('Users & Roles', $user);
             <th scope="col" class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
             <th scope="col" class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
             <th scope="col" class="px-4 py-4 font-bold text-zinc-900">Section</th>
-            <th scope="col" class="px-4 py-4 font-bold text-zinc-900 text-center">ID Number</th>
+            <th scope="col" class="px-4 py-4 font-bold text-zinc-900 text-center">Student Number</th>
             <th scope="col" class="px-6 py-4 font-bold text-zinc-900 text-right">Action</th>
           </tr>
         </thead>
@@ -264,12 +269,8 @@ render_header('Users & Roles', $user);
               $suffix = trim((string) ($u['suffix'] ?? ''));
               if ($suffix !== '') $name .= ', ' . $suffix;
               
-              // ID Number from UUID snippet
-              $uid = (string) ($u['id'] ?? '');
-              $idNumber = "N/A";
-              if (strlen($uid) > 8) {
-                  $idNumber = "2026-" . strtoupper(substr($uid, 0, 4));
-              }
+              // Student Number from database
+              $studentNumber = htmlspecialchars((string) ($u['student_id'] ?? 'N/A'));
               
               $secId = (string)($u['section_id'] ?? ''); 
               $secNameRaw = $sectionMap[$secId] ?? 'No Section';
@@ -296,7 +297,7 @@ render_header('Users & Roles', $user);
               </td>
               <td class="px-4 py-4 font-bold text-zinc-800"><?= htmlspecialchars($gradeLvl) ?></td>
               <td class="px-4 py-4 font-bold text-zinc-800"><?= htmlspecialchars($parsedSec) ?></td>
-              <td class="px-4 py-4 font-bold text-emerald-600 text-center tracking-wider font-mono text-xs"><?= htmlspecialchars($idNumber) ?></td>
+              <td class="px-4 py-4 font-bold text-emerald-600 text-center tracking-wider font-mono text-xs"><?= htmlspecialchars($studentNumber) ?></td>
               <td class="px-6 py-4 text-right">
                 <div class="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button class="p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit Student">
@@ -312,6 +313,54 @@ render_header('Users & Roles', $user);
           <?php if ($studentCount === 0 || count($users) === 0): ?>
             <tr><td colspan="6" class="px-6 py-16 text-center text-zinc-500">No students found.</td></tr>
           <?php endif; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Admins Table Layout -->
+  <div id="tableAdmins" class="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden min-h-[400px] hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm text-zinc-600">
+        <thead class="bg-zinc-50 border-b border-zinc-200">
+          <tr>
+            <th scope="col" class="px-6 py-4 font-bold text-zinc-900">Name</th>
+            <th scope="col" class="px-6 py-4 font-bold text-zinc-900">Email</th>
+            <th scope="col" class="px-6 py-4 font-bold text-zinc-900 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200">
+          <?php foreach ($users as $u): if (($u['role'] ?? '') !== 'admin') continue; ?>
+            <?php
+              $nameParts = [];
+              foreach (['first_name','middle_name','last_name'] as $k) {
+                $v = trim((string) ($u[$k] ?? ''));
+                if ($v !== '') $nameParts[] = $v;
+              }
+              $name = implode(' ', $nameParts);
+              $suffix = trim((string) ($u['suffix'] ?? ''));
+              if ($suffix !== '') $name .= ', ' . $suffix;
+            ?>
+            <tr class="hover:bg-zinc-50/80 transition-colors group user-row">
+              <td class="px-6 py-4">
+                  <div class="font-bold text-zinc-900 truncate max-w-[200px]" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name) ?></div>
+              </td>
+              <td class="px-6 py-4 font-medium text-zinc-500">
+                  <div class="truncate max-w-[200px]" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></div>
+              </td>
+              <td class="px-6 py-4 text-right">
+                <div class="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button class="p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit Admin">
+                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
+                    </button>
+                    <!-- Visual mock for archive -->
+                    <button class="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-transparent hover:border-red-200" title="Archive User">
+                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/></svg>
+                    </button>
+                </div>
+              </td>
+            </tr>
+          <?php endforeach; ?>
         </tbody>
       </table>
     </div>
@@ -348,9 +397,15 @@ render_header('Users & Roles', $user);
           <input id="rt_suffix" name="suffix" type="text" autocomplete="honorific-suffix" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" placeholder="Jr., III" />
         </div>
       </div>
-      <div>
-        <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_email">Email</label>
-        <input id="rt_email" name="email" type="email" required autocomplete="email" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_email">Email</label>
+          <input id="rt_email" name="email" type="email" required autocomplete="email" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_contact">Contact Number</label>
+          <input id="rt_contact" name="contact_number" type="text" placeholder="09123456789" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
       </div>
       <div>
         <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_password">Password</label>
@@ -437,6 +492,7 @@ render_header('Users & Roles', $user);
           middle_name: fd.get('middle_name'),
           last_name: fd.get('last_name'),
           suffix: fd.get('suffix'),
+          contact_number: fd.get('contact_number'),
           email: fd.get('email'),
           password: pw,
         }),
@@ -457,49 +513,69 @@ render_header('Users & Roles', $user);
   // --- Tabs Navigation JS (Pages 37 & 38) ---
   const tabTeachers = document.getElementById('tabTeachers');
   const tabStudents = document.getElementById('tabStudents');
+  const tabAdmins = document.getElementById('tabAdmins');
+  
   const actionTeacher = document.getElementById('actionTeacher');
   const actionStudent = document.getElementById('actionStudent');
+  
   const tableTeachers = document.getElementById('tableTeachers');
   const tableStudents = document.getElementById('tableStudents');
+  const tableAdmins = document.getElementById('tableAdmins');
+  
   const panelTitle = document.getElementById('panelTitle');
   const tbBadgeT = tabTeachers.querySelector('span');
   const tbBadgeS = tabStudents.querySelector('span');
+  const tbBadgeA = tabAdmins.querySelector('span');
 
-  if (tabTeachers && tabStudents) {
+  function resetTabs() {
+      [tabTeachers, tabStudents, tabAdmins].forEach(t => {
+          t.classList.replace('border-orange-500','border-transparent');
+          t.classList.replace('text-orange-600','text-zinc-500');
+          const b = t.querySelector('span');
+          if (b) {
+              b.classList.replace('bg-orange-100','bg-zinc-100');
+              b.classList.replace('text-orange-700','text-zinc-600');
+          }
+      });
+      [tableTeachers, tableStudents, tableAdmins].forEach(tbl => tbl.classList.add('hidden'));
+      actionTeacher.classList.add('hidden');
+      actionStudent.classList.add('hidden');
+  }
+
+  if (tabTeachers && tabStudents && tabAdmins) {
       tabTeachers.addEventListener('click', () => {
+          resetTabs();
           tabTeachers.classList.replace('border-transparent','border-orange-500');
           tabTeachers.classList.replace('text-zinc-500','text-orange-600');
           tbBadgeT.classList.replace('bg-zinc-100','bg-orange-100');
           tbBadgeT.classList.replace('text-zinc-600','text-orange-700');
           
-          tabStudents.classList.replace('border-orange-500','border-transparent');
-          tabStudents.classList.replace('text-orange-600','text-zinc-500');
-          tbBadgeS.classList.replace('bg-orange-100','bg-zinc-100');
-          tbBadgeS.classList.replace('text-orange-700','text-zinc-600');
-          
           actionTeacher.classList.remove('hidden');
-          actionStudent.classList.add('hidden');
           tableTeachers.classList.remove('hidden');
-          tableStudents.classList.add('hidden');
-          panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center"><svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg></div> Teacher Management`;
+          panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center"><svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg></div> Teacher Management`;
       });
       
       tabStudents.addEventListener('click', () => {
+          resetTabs();
           tabStudents.classList.replace('border-transparent','border-orange-500');
           tabStudents.classList.replace('text-zinc-500','text-orange-600');
           tbBadgeS.classList.replace('bg-zinc-100','bg-orange-100');
           tbBadgeS.classList.replace('text-zinc-600','text-orange-700');
           
-          tabTeachers.classList.replace('border-orange-500','border-transparent');
-          tabTeachers.classList.replace('text-orange-600','text-zinc-500');
-          tbBadgeT.classList.replace('bg-orange-100','bg-zinc-100');
-          tbBadgeT.classList.replace('text-orange-700','text-zinc-600');
-          
           actionStudent.classList.remove('hidden');
-          actionTeacher.classList.add('hidden');
           tableStudents.classList.remove('hidden');
-          tableTeachers.classList.add('hidden');
           panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center"><svg class="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg></div> Student Management`;
+      });
+
+      tabAdmins.addEventListener('click', () => {
+          resetTabs();
+          tabAdmins.classList.replace('border-transparent','border-orange-500');
+          tabAdmins.classList.replace('text-zinc-500','text-orange-600');
+          tbBadgeA.classList.replace('bg-zinc-100','bg-orange-100');
+          tbBadgeA.classList.replace('text-zinc-600','text-orange-700');
+          
+          tableAdmins.classList.remove('hidden');
+          panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center"><svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg></div> System Administrators`;
       });
       // trigger init
       tabTeachers.click();

@@ -18,6 +18,7 @@ $firstName = isset($data['first_name']) ? clean_string((string) $data['first_nam
 $middleName = isset($data['middle_name']) ? clean_string((string) $data['middle_name']) : '';
 $lastName = isset($data['last_name']) ? clean_string((string) $data['last_name']) : '';
 $suffix = isset($data['suffix']) ? clean_string((string) $data['suffix']) : '';
+$contactNumber = isset($data['contact_number']) ? clean_string((string) $data['contact_number']) : '';
 $email = isset($data['email']) ? strtolower(clean_string((string) $data['email'])) : '';
 $password = isset($data['password']) ? (string) $data['password'] : '';
 
@@ -33,6 +34,9 @@ if ($middleName !== '' && mb_strlen($middleName) > 60) {
 if ($suffix !== '' && mb_strlen($suffix) > 30) {
     json_response(['ok' => false, 'error' => 'Suffix is too long.'], 400);
 }
+if ($contactNumber !== '' && mb_strlen($contactNumber) > 30) {
+    json_response(['ok' => false, 'error' => 'Contact number is too long.'], 400);
+}
 if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
 }
@@ -47,6 +51,7 @@ $payload = [
     'middle_name' => $middleName !== '' ? $middleName : null,
     'last_name' => $lastName,
     'suffix' => $suffix !== '' ? $suffix : null,
+    'contact_number' => $contactNumber !== '' ? $contactNumber : null,
     'email' => $email,
     'password' => $passwordHash,
     'role' => 'teacher',

@@ -63,7 +63,7 @@ if ($start && $end) {
 
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-    . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email),'
+    . '?select=id,registered_at,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
     . 'tickets(token,attendance(check_in_at,check_out_at,status))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
@@ -105,12 +105,160 @@ foreach ($participants as $r) {
     }
 }
 
+// Excel export
+if (isset($_GET['export']) && $_GET['export'] === 'excel') {
+    header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+    header('Content-Disposition: attachment; filename="Event_Participants_' . preg_replace('/[^A-Za-z0-9_\-]/', '_', (string)($event['title'] ?? '')) . '.xls"');
+    
+    // Group participants by Section
+    $sectionsMap = [];
+    foreach ($participants as $r) {
+        $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+        $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Section';
+        
+        $yearLvl = 'N/A';
+        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
+            $yearLvl = $m[1];
+        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
+            $yearLvl = $m[1];
+        }
+
+        if(!isset($sectionsMap[$secName])) {
+            $sectionsMap[$secName] = ['year' => $yearLvl, 'participants' => []];
+        }
+        $sectionsMap[$secName]['participants'][] = $r;
+    }
+    ksort($sectionsMap);
+
+    header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+    header('Content-Disposition: attachment; filename="Event_Participants_' . preg_replace('/[^A-Za-z0-9_\-]/', '_', (string)($event['title'] ?? '')) . '.xls"');
+    
+    // Group participants by Section
+    $sectionsMap = [];
+    foreach ($participants as $r) {
+        $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+        $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Section';
+        
+        $yearLvl = 'N/A';
+        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
+            $yearLvl = $m[1];
+        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
+            $yearLvl = $m[1];
+        }
+
+        if(!isset($sectionsMap[$secName])) {
+            $sectionsMap[$secName] = ['year' => $yearLvl, 'participants' => []];
+        }
+        $sectionsMap[$secName]['participants'][] = $r;
+    }
+    ksort($sectionsMap);
+
+    $eventTitle = strtoupper(htmlspecialchars((string)($event['title'] ?? 'UNKNOWN EVENT')));
+    $eventDate = ($start ? $start->format('M d, Y') : '') . ($multiDay && $end ? ' - ' . $end->format('M d, Y') : '');
+
+    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+    echo '<head><meta charset="utf-8"> <style>';
+    echo '  .hdr-main { font-family: "Segoe UI", Arial, sans-serif; font-size: 18pt; font-weight: bold; color: #1e293b; text-align: center; }';
+    echo '  .hdr-sub  { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; color: #64748b; font-weight: normal; text-align: center; }';
+    echo '  .gen-on   { font-family: "Segoe UI", Arial, sans-serif; font-size: 9pt; color: #94a3b8; text-align: center; }';
+    echo '  .logo-badge { background-color: #ea580c; color: #ffffff; font-family: "Impact", Arial, sans-serif; font-size: 24pt; font-weight: bold; text-align: center; vertical-align: middle; border: 2pt solid #c2410c; }';
+    echo '  .event-hdr { background-color: #ea580c; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 14pt; font-weight: bold; padding: 15px; text-align: center; height: 35px; border: 1pt solid #c2410c; }';
+    echo '  .event-date { background-color: #fef2f2; color: #991b1b; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; text-align: center; height: 25px; border-bottom: 2pt solid #ea580c; }';
+    echo '  .sec-hdr { background-color: #1e293b; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; padding: 10px; height: 25px; }';
+    echo '  .col-hdr { background-color: #f8fafc; border: 1pt solid #cbd5e1; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; height: 30px; }';
+    echo '  .data-cell { border: 0.2pt solid #e2e8f0; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; height: 25px; vertical-align: middle; }';
+    echo '  .compl { color: #059669; font-weight: bold; text-align: center; background-color: #f0fdf4; }';
+    echo '  .pend  { color: #d97706; font-weight: bold; text-align: center; background-color: #fffbeb; }';
+    echo ' </style></head>';
+    echo '<body>';
+    echo '<table border="0" style="border-collapse:collapse;">';
+    
+    // Top Logo & Header (Merged perfectly)
+    echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+    echo '<tr>';
+    echo '  <td colspan="1" rowspan="3" class="logo-badge">CCS</td>'; // Styled badge logo
+    echo '  <td colspan="5" class="hdr-main">COLLEGE OF COMPUTER STUDIES</td>';
+    echo '</tr>';
+    echo '<tr><td colspan="5" class="hdr-sub">PulseConnect Participant Registry Report</td></tr>';
+    echo '<tr><td colspan="5" class="gen-on">Generated on ' . date('F j, Y, g:i A') . '</td></tr>';
+    
+    echo '<tr><td colspan="6" style="height: 15px;"></td></tr>';
+    
+    // Event Center Banner
+    echo '<tr><td colspan="6" class="event-hdr">' . htmlspecialchars($eventTitle) . '</td></tr>';
+    echo '<tr><td colspan="6" class="event-date">' . htmlspecialchars($eventDate) . '</td></tr>';
+    echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+
+    foreach($sectionsMap as $secName => $secData) {
+        $secText = 'SECTION: ' . strtoupper(htmlspecialchars($secName)) . '   |   YEAR LEVEL: ' . htmlspecialchars($secData['year']);
+        echo '<tr><td colspan="6" class="sec-hdr">' . $secText . '</td></tr>';
+        
+        echo '<tr>';
+        echo ' <th class="col-hdr" style="width:300px;">STUDENT NAME</th>';
+        echo ' <th class="col-hdr" style="width:130px;">STUDENT NUMBER</th>';
+        echo ' <th class="col-hdr" style="width:80px;">YEAR</th>';
+        echo ' <th class="col-hdr" style="width:150px;">SECTION</th>';
+        echo ' <th class="col-hdr" style="width:180px;">CHECK IN</th>';
+        echo ' <th class="col-hdr" style="width:180px;">CHECK OUT</th>';
+        echo ' <th class="col-hdr" style="width:120px;">STATUS</th>';
+        echo '</tr>';
+        
+        foreach($secData['participants'] as $r) {
+            $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+            $nameParts = [];
+            foreach (['first_name','middle_name','last_name'] as $k) {
+                $v = trim((string) ($u[$k] ?? ''));
+                if ($v !== '') $nameParts[] = $v;
+            }
+            $name = implode(' ', $nameParts);
+            $suffix = trim((string) ($u['suffix'] ?? ''));
+            if ($suffix !== '') $name .= ', ' . $suffix;
+            
+            $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
+            $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+            $attendance = null;
+            if (isset($ticket['attendance'])) {
+                $atts = $ticket['attendance'];
+                if (is_array($atts)) {
+                    $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : (isset($atts) && is_array($atts) ? $atts : null);
+                }
+            }
+            $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
+            $checkOut = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
+            $attStatus = is_array($attendance) ? ($attendance['status'] ?? 'pending') : 'pending';
+            
+            if($checkIn) $checkIn = (new DateTimeImmutable($checkIn))->format('m/d/Y h:i A');
+            if($checkOut) $checkOut = (new DateTimeImmutable($checkOut))->format('m/d/Y h:i A');
+            
+            $isComp = (strtolower($attStatus) === 'completed');
+            $statusStr = $isComp ? 'COMPLETED' : 'PENDING';
+            $statusCls = $isComp ? 'compl' : 'pend';
+            
+            echo '<tr>';
+            echo ' <td class="data-cell" style="padding-left: 5px;">' . htmlspecialchars($name) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center; font-family: monospace;">' . htmlspecialchars((string)($u['student_id'] ?? 'N/A')) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secData['year']) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secName) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . ($checkIn ? htmlspecialchars($checkIn) : '-') . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . ($checkOut ? htmlspecialchars($checkOut) : '-') . '</td>';
+            echo ' <td class="data-cell ' . $statusCls . '">' . $statusStr . '</td>';
+            echo '</tr>';
+        }
+        echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+    }
+    
+    echo '</table></body></html>';
+    exit;
+}
+
 // CSV export
 if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="participants.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Name', 'Email', 'RegisteredAt', 'Token', 'CheckIn', 'CheckOut', 'AttendanceStatus']);
+    fputcsv($out, ['Name', 'StudentNumber', 'Email', 'RegisteredAt', 'Token', 'CheckIn', 'CheckOut', 'AttendanceStatus']);
     foreach ($participants as $r) {
         $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
         $nameParts = [];
@@ -139,6 +287,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
         fputcsv($out, [
             $name,
+            (string) ($u['student_id'] ?? 'N/A'),
             (string) ($u['email'] ?? ''),
             (string) ($r['registered_at'] ?? ''),
             $token,
@@ -164,9 +313,9 @@ render_header('Participants', $user);
     <p class="text-zinc-600 text-sm">Participant directory and real-time attendance tracking.</p>
   </div>
   <div class="flex flex-wrap items-center gap-2.5">
-    <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=csv" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
+    <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=excel" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
       <svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
-      Export CSV
+      Export Excel
     </a>
     <a href="/manage_events.php" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-800 hover:bg-zinc-50 transition font-medium flex items-center gap-1.5 shadow-sm">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
@@ -285,7 +434,8 @@ render_header('Participants', $user);
           </div>
           <div class="min-w-0 flex-1">
             <h4 class="text-base font-bold text-zinc-900 tracking-wide truncate pr-2" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name) ?></h4>
-            <p class="text-[11px] font-medium text-zinc-600 truncate mt-0.5 mb-2.5" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></p>
+            <p class="text-[11px] font-medium text-zinc-600 truncate mt-0.5 mb-1" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></p>
+            <p class="text-[10px] font-mono font-bold text-orange-600 mb-2 truncate bg-orange-50 w-fit px-1.5 rounded-md border border-orange-100">#<?= htmlspecialchars((string)($u['student_id'] ?? 'N/A')) ?></p>
             
             <?php if ((string)$attStatus !== ''): ?>
               <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border <?= $attStatusColor ?>">

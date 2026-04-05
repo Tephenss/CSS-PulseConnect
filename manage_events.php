@@ -1034,6 +1034,11 @@ render_header('Manage Events', $user);
                   </span>
                   <?php endif; ?>
                 </div>
+                <?php if (!empty($e['created_at'])): ?>
+                  <p class="text-[11px] text-zinc-400 mt-2 font-medium">
+                    Submitted: <?= (new DateTimeImmutable((string)$e['created_at']))->format('F d, Y') ?>
+                  </p>
+                <?php endif; ?>
               </div>
             </div>
           </div>

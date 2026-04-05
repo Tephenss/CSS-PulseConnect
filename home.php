@@ -530,100 +530,233 @@ render_header('Dashboard', $user);
   </div>
 </div>
 
-<!-- Events Header -->
-<div class="mb-5 flex items-center justify-between gap-3">
-  <div class="flex items-center gap-2">
-    <div class="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 flex items-center justify-center">
-      <svg class="w-4 h-4 text-zinc-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
-    </div>
-    <h3 class="text-base font-semibold text-zinc-900">
-      <?php if ($role === 'student'): ?>Available Events<?php else: ?>All Events Board<?php endif; ?>
-    </h3>
-  </div>
-  <a href="/events.php" class="group flex items-center gap-1.5 text-sm font-medium text-orange-700 hover:text-orange-900 transition-colors">
-    View all
-    <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>
-  </a>
-</div>
 
-<!-- Events Grid -->
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-  <?php if (count($events) === 0): ?>
-    <div class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-12 text-center">
-      <div class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
-        <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm3.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75z"/></svg>
+<?php
+  // Build upcoming events list (future, published, max 3)
+  $upcomingList = [];
+  foreach ($events as $e) {
+    $s = (string)($e['status'] ?? '');
+    $sa = !empty($e['start_at']) ? new DateTime($e['start_at']) : null;
+    if ($s === 'published' && $sa && $sa > $now) {
+      $upcomingList[] = $e;
+    }
+    if (count($upcomingList) >= 3) break;
+  }
+
+  // Build calendar event map keyed by "Y-m-d"
+  $calEventMap = [];
+  foreach ($events as $e) {
+    if (!empty($e['start_at']) && ($e['status'] ?? '') === 'published') {
+      try {
+        $d = new DateTimeImmutable($e['start_at']);
+        $eEnd = !empty($e['end_at']) ? new DateTimeImmutable($e['end_at']) : null;
+        $key = $d->format('Y-m-d');
+        if (!isset($calEventMap[$key])) $calEventMap[$key] = [];
+        
+        // Determine time-based status for the dot color
+        $dotClass = 'bg-orange-500'; // upcoming
+        if ($eEnd && $eEnd < $now) {
+            $dotClass = 'bg-zinc-400'; // past
+        } elseif ($d <= $now && (!$eEnd || $eEnd >= $now)) {
+            $dotClass = 'bg-emerald-500'; // ongoing
+        }
+
+        $calEventMap[$key][] = [
+          'title' => (string)($e['title'] ?? 'Event'),
+          'type'  => (string)($e['event_type'] ?? 'Event'),
+          'status'=> (string)($e['status'] ?? ''),
+          'dot'   => $dotClass
+        ];
+      } catch(Throwable $ex) {}
+    }
+  }
+
+  $eventTypeIcons = [
+    'seminar'     => 'M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z',
+    'festival'    => 'M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z',
+    'default'     => 'M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5',
+  ];
+?>
+
+<!-- ═══ BOTTOM SECTION: Two Column Layout ═══ -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+  <!-- LEFT: Upcoming Events List -->
+  <div class="lg:col-span-2 space-y-4">
+    <div class="flex items-center justify-between mb-1">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-orange-100 border border-orange-200 flex items-center justify-center">
+          <svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+        </div>
+        <h3 class="text-base font-semibold text-zinc-900">Upcoming Events</h3>
       </div>
-      <h3 class="text-lg font-medium text-zinc-800 mb-1">No events found</h3>
-      <p class="text-sm text-zinc-600 max-w-md mx-auto">There are currently no active events in the system. Check back later or create a new event to get started.</p>
+      <a href="/events.php" class="group flex items-center gap-1.5 text-sm font-medium text-orange-700 hover:text-orange-900 transition-colors">
+        View all
+        <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>
+      </a>
     </div>
-  <?php endif; ?>
 
-  <?php 
-    $displayCount = 0;
-    foreach ($events as $e): 
-      $status = (string)($e['status'] ?? '');
-      $endAt = !empty($e['end_at']) ? new DateTime($e['end_at']) : null;
-      $isPast = $endAt && $endAt < $now;
+    <?php if (count($upcomingList) === 0): ?>
+      <div class="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-10 text-center">
+        <div class="w-14 h-14 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-3 shadow-sm">
+          <svg class="w-7 h-7 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+        </div>
+        <h3 class="text-base font-medium text-zinc-800 mb-1">No Upcoming Events</h3>
+        <p class="text-sm text-zinc-500">No published events scheduled in the future.</p>
+      </div>
+    <?php endif; ?>
 
-      // Only show published (active) events that are not yet past (ongoing/upcoming)
-      if ($status !== 'published' || $isPast) continue;
-      if ($displayCount >= 6) break; 
-      $displayCount++;
-
-      $statusConfig = match($status) {
-          'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-b-emerald-500'],
-          'pending' => ['bg' => 'bg-amber-100', 'text' => 'text-amber-900', 'border' => 'border-amber-200', 'accent' => 'border-b-amber-500'],
-          'approved' => ['bg' => 'bg-sky-100', 'text' => 'text-sky-900', 'border' => 'border-sky-200', 'accent' => 'border-b-sky-500'],
-          default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-b-zinc-400'],
+    <?php foreach ($upcomingList as $e):
+      $eType = strtolower((string)($e['event_type'] ?? 'default'));
+      $iconPath = $eventTypeIcons[$eType] ?? $eventTypeIcons['default'];
+      $iconBg = match($eType) {
+        'seminar' => ['bg' => 'bg-sky-100', 'border' => 'border-sky-200', 'icon' => 'text-sky-700'],
+        'festival'=> ['bg' => 'bg-purple-100', 'border' => 'border-purple-200', 'icon' => 'text-purple-700'],
+        default   => ['bg' => 'bg-orange-100', 'border' => 'border-orange-200', 'icon' => 'text-orange-700'],
       };
-
-      // Format Date properly
-      $rawDate = (string) ($e['start_at'] ?? '');
-      $formattedDate = $rawDate ? (new DateTimeImmutable($rawDate))->format('M d, Y · g:i A') : 'TBA';
+      $eStart = !empty($e['start_at']) ? new DateTimeImmutable($e['start_at']) : null;
+      $dayName = $eStart ? $eStart->format('D') : '';
+      $dateFull = $eStart ? $eStart->format('D, M d, Y') . ' at ' . $eStart->format('g:i A') : 'TBA';
+      $postedAt = !empty($e['created_at']) ? (new DateTimeImmutable($e['created_at']))->format('F d, Y') : '';
+      $eTypePill = ucfirst($eType);
+      $pillColor = match($eType) {
+        'seminar'  => 'bg-sky-100 text-sky-800 border-sky-200',
+        'festival' => 'bg-purple-100 text-purple-800 border-purple-200',
+        default    => 'bg-orange-100 text-orange-800 border-orange-200',
+      };
     ?>
-    <a href="/event_view.php?id=<?= htmlspecialchars((string) ($e['id'] ?? '')) ?>"
-       class="group relative block rounded-2xl border border-zinc-200 bg-white p-6 border-b-[3px] shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 <?= $statusConfig['accent'] ?>">
-
-      <div class="relative z-10">
-        <div class="flex items-start justify-between gap-4 mb-4">
-          <h4 class="text-sm font-bold tracking-tight text-zinc-900 group-hover:text-orange-900 transition-colors line-clamp-2"><?= htmlspecialchars((string) ($e['title'] ?? 'Event')) ?></h4>
-          <span class="text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 flex-shrink-0 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
-            <?= htmlspecialchars($status) ?>
-          </span>
+      <a href="/event_view.php?id=<?= htmlspecialchars((string)($e['id'] ?? '')) ?>"
+         class="group flex items-center gap-4 bg-white rounded-2xl border border-zinc-200 hover:border-orange-300 p-4 shadow-sm hover:shadow-md transition-all duration-200">
+        <!-- Icon -->
+        <div class="w-12 h-12 rounded-xl <?= $iconBg['bg'] ?> border <?= $iconBg['border'] ?> flex items-center justify-center flex-shrink-0">
+          <svg class="w-6 h-6 <?= $iconBg['icon'] ?>" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="<?= $iconPath ?>"/>
+          </svg>
         </div>
-
-        <p class="text-xs text-zinc-600 line-clamp-2 mb-5 min-h-[32px] leading-relaxed">
-          <?= htmlspecialchars((string) ($e['description'] ?? 'No description provided for this event.')) ?>
-        </p>
-
-        <div class="space-y-2.5">
-          <div class="flex items-center gap-2.5 text-xs font-medium text-zinc-800">
-            <div class="w-7 h-7 rounded-full bg-orange-50 flex items-center justify-center flex-shrink-0 border border-orange-100">
-              <svg class="w-3.5 h-3.5 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            </div>
-            <?= htmlspecialchars($formattedDate) ?>
+        <!-- Content -->
+        <div class="flex-1 min-w-0">
+          <div class="flex items-start justify-between gap-2 mb-0.5">
+            <h4 class="text-sm font-bold text-zinc-900 group-hover:text-orange-800 transition-colors truncate"><?= htmlspecialchars((string)($e['title'] ?? 'Event')) ?></h4>
+            <span class="text-[10px] font-bold uppercase tracking-wider rounded-full border px-2 py-0.5 flex-shrink-0 <?= $pillColor ?>"><?= htmlspecialchars($eTypePill) ?></span>
           </div>
-          <div class="flex items-center gap-2.5 text-xs text-zinc-600">
-            <div class="w-7 h-7 rounded-full bg-emerald-50 flex items-center justify-center flex-shrink-0 border border-emerald-100">
-              <svg class="w-3.5 h-3.5 text-emerald-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/></svg>
-            </div>
-            <span class="truncate"><?= htmlspecialchars((string) ($e['location'] ?? 'Location TBA')) ?></span>
+          <p class="text-xs text-zinc-500 mb-1">
+            <?php if (!empty($e['target_audience'])): ?><span class="font-medium text-zinc-600">For: <?= htmlspecialchars((string)$e['target_audience']) ?></span> · <?php endif; ?>
+            <?= htmlspecialchars($dateFull) ?>
+          </p>
+          <?php if ($postedAt): ?>
+            <p class="text-[11px] text-zinc-400">Posted: <?= htmlspecialchars($postedAt) ?></p>
+          <?php endif; ?>
+        </div>
+        <svg class="w-4 h-4 text-zinc-400 group-hover:text-orange-500 group-hover:translate-x-0.5 transition-all flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+      </a>
+    <?php endforeach; ?>
+  </div>
+
+  <!-- RIGHT: Mini Calendar -->
+  <div class="lg:col-span-1">
+    <?php
+      $calNow  = new DateTime();
+      $calYear  = (int)$calNow->format('Y');
+      $calMonth = (int)$calNow->format('n');
+      $calToday = (int)$calNow->format('j');
+      $firstDay = (int)(new DateTime("$calYear-$calMonth-01"))->format('w'); // 0=Sun
+      $daysInMonth = (int)(new DateTime("$calYear-$calMonth-01"))->format('t');
+      $monthName = $calNow->format('F');
+    ?>
+    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 sticky top-6">
+      <!-- Calendar Header -->
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-bold text-zinc-900"><?= $monthName ?></h3>
+        <span class="text-xs font-bold text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-md"><?= $calYear ?></span>
+      </div>
+      <!-- Day Labels -->
+      <div class="grid grid-cols-7 mb-2">
+        <?php foreach(['Su','Mo','Tu','We','Th','Fr','Sa'] as $d): ?>
+          <div class="text-center text-[10px] font-bold text-zinc-400 uppercase"><?= $d ?></div>
+        <?php endforeach; ?>
+      </div>
+      <!-- Calendar Days -->
+      <div class="grid grid-cols-7 gap-y-1 relative" id="calGrid">
+        <!-- Empty cells for offset -->
+        <?php for($i = 0; $i < $firstDay; $i++): ?>
+          <div></div>
+        <?php endfor; ?>
+
+        <?php for($day = 1; $day <= $daysInMonth; $day++):
+          $dateKey = sprintf('%04d-%02d-%02d', $calYear, $calMonth, $day);
+          $hasEvent = isset($calEventMap[$dateKey]);
+          $isToday  = ($day === $calToday);
+          $dayEvents = $hasEvent ? $calEventMap[$dateKey] : [];
+          $tooltipId = 'cal-tip-' . $day;
+        ?>
+          <div class="relative flex flex-col items-center group/day">
+            <button
+              class="w-7 h-7 rounded-full text-xs font-semibold flex items-center justify-center transition-all
+                <?= $isToday ? 'bg-orange-600 text-white shadow-md shadow-orange-200 font-bold' : 'hover:bg-zinc-100 text-zinc-700' ?>
+                <?= $hasEvent && !$isToday ? 'font-bold text-orange-700' : '' ?>"
+              type="button"
+              <?= $hasEvent ? 'data-has-event="1"' : '' ?>
+            >
+              <?= $day ?>
+            </button>
+            <!-- Event Dot -->
+            <?php if ($hasEvent): 
+                  // If multiple events, prioritize dot color (ongoing > upcoming > past)
+                  $finalDot = 'bg-orange-500';
+                  $dots = array_column($dayEvents, 'dot');
+                  if (in_array('bg-emerald-500', $dots)) $finalDot = 'bg-emerald-500';
+                  elseif (in_array('bg-orange-500', $dots)) $finalDot = 'bg-orange-500';
+                  else $finalDot = 'bg-zinc-400';
+            ?>
+              <div class="w-1.5 h-1.5 rounded-full <?= $isToday ? 'bg-white/70' : $finalDot ?> mt-0.5"></div>
+            <?php else: ?>
+              <div class="w-1.5 h-1.5"></div>
+            <?php endif; ?>
+
+            <!-- Hover Tooltip -->
+            <?php if ($hasEvent): ?>
+              <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 hidden group-hover/day:block pointer-events-none" style="min-width:160px; max-width:220px;">
+                <div class="bg-zinc-900 text-white rounded-xl shadow-xl p-3 text-left">
+                  <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5"><?= date('M d', mktime(0,0,0,$calMonth,$day,$calYear)) ?></p>
+                  <?php foreach($dayEvents as $ev): ?>
+                    <div class="flex items-start gap-1.5 mb-1 last:mb-0">
+                      <div class="w-1.5 h-1.5 rounded-full <?= $ev['dot'] ?> mt-1 flex-shrink-0"></div>
+                      <div>
+                        <p class="text-xs font-semibold text-white leading-tight"><?= htmlspecialchars($ev['title']) ?></p>
+                        <?php if ($ev['type']): ?>
+                          <p class="text-[10px] text-zinc-400"><?= htmlspecialchars(ucfirst($ev['type'])) ?></p>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                  <?php endforeach; ?>
+                </div>
+                <div class="w-2.5 h-2.5 bg-zinc-900 rotate-45 mx-auto -mt-1.5 rounded-sm"></div>
+              </div>
+            <?php endif; ?>
           </div>
+        <?php endfor; ?>
+      </div>
+
+      <!-- Legend -->
+      <div class="mt-4 pt-4 border-t border-zinc-100 flex items-center gap-x-4 gap-y-2 flex-wrap">
+        <div class="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-zinc-500">
+          <div class="w-3 h-3 rounded-full bg-orange-600"></div>Today
+        </div>
+        <div class="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-zinc-500">
+          <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>Ongoing
+        </div>
+        <div class="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-zinc-500">
+          <div class="w-1.5 h-1.5 rounded-full bg-orange-500"></div>Upcoming
+        </div>
+        <div class="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-zinc-500">
+          <div class="w-1.5 h-1.5 rounded-full bg-zinc-400"></div>Past
         </div>
       </div>
-    </a>
-  <?php endforeach; ?>
-  
-  <?php if ($displayCount === 0 && count($events) > 0): ?>
-    <div class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-12 text-center">
-      <div class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
-        <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm3.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75z"/></svg>
-      </div>
-      <h3 class="text-lg font-medium text-zinc-800 mb-1">No active events</h3>
-      <p class="text-sm text-zinc-600 max-w-md mx-auto">There are currently no ongoing or upcoming published events. Past and archived events can be viewed in the <a href="/events.php" class="text-orange-600 font-bold hover:underline">Events Board</a>.</p>
     </div>
-  <?php endif; ?>
+  </div>
+
 </div>
 
 <?php
 render_footer();
+

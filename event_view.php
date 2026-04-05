@@ -110,23 +110,32 @@ render_header('Event Details', $user);
         
         <?php if ($role === 'admin' || $role === 'teacher'): ?>
         <div class="flex items-center gap-2">
-            <button id="btnSendCert" class="rounded-xl border border-emerald-500 bg-emerald-50 text-emerald-700 font-bold px-4 py-2 text-[13px] hover:bg-emerald-100 transition shadow-sm relative overflow-hidden">
-                <span class="relative z-10">Send Certificate</span>
-            </button>
-            <a href="/certificate_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white text-zinc-700 font-bold px-4 py-2 text-[13px] hover:bg-zinc-50 transition shadow-sm">
-                Create Certificate
-            </a>
-            <button id="btnEditEventTop" class="flex items-center gap-1.5 rounded-xl bg-orange-600 text-white font-bold px-4 py-2 text-[13px] hover:bg-orange-700 transition shadow-sm"
-                    data-id="<?= htmlspecialchars((string) ($event['id'] ?? '')) ?>"
-                    data-title="<?= htmlspecialchars((string) ($event['title'] ?? '')) ?>"
-                    data-location="<?= htmlspecialchars((string) ($event['location'] ?? '')) ?>"
-                    data-description="<?= htmlspecialchars((string) ($event['description'] ?? '')) ?>"
-                    data-start_at="<?= htmlspecialchars((string) ($event['start_at'] ?? '')) ?>"
-                    data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
-            >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
-                Edit Event
-            </button>
+            <?php if ($role === 'admin' && $event['status'] === 'pending'): ?>
+                <button id="btnRejectProposal" class="rounded-xl border border-red-200 bg-red-50 text-red-700 font-bold px-4 py-2 text-[13px] hover:bg-red-100 transition shadow-sm">
+                    Reject Proposal
+                </button>
+                <button id="btnApproveProposal" data-id="<?= htmlspecialchars($id) ?>" class="rounded-xl border border-emerald-600 bg-emerald-600 text-white font-bold px-4 py-2 text-[13px] hover:bg-emerald-700 transition shadow-sm relative overflow-hidden">
+                    <span class="relative z-10">Approve Proposal</span>
+                </button>
+            <?php else: ?>
+                <button id="btnSendCert" class="rounded-xl border border-emerald-500 bg-emerald-50 text-emerald-700 font-bold px-4 py-2 text-[13px] hover:bg-emerald-100 transition shadow-sm relative overflow-hidden">
+                    <span class="relative z-10">Send Certificate</span>
+                </button>
+                <a href="/certificate_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white text-zinc-700 font-bold px-4 py-2 text-[13px] hover:bg-zinc-50 transition shadow-sm">
+                    Create Certificate
+                </a>
+                <button id="btnEditEventTop" class="flex items-center gap-1.5 rounded-xl bg-orange-600 text-white font-bold px-4 py-2 text-[13px] hover:bg-orange-700 transition shadow-sm"
+                        data-id="<?= htmlspecialchars((string) ($event['id'] ?? '')) ?>"
+                        data-title="<?= htmlspecialchars((string) ($event['title'] ?? '')) ?>"
+                        data-location="<?= htmlspecialchars((string) ($event['location'] ?? '')) ?>"
+                        data-description="<?= htmlspecialchars((string) ($event['description'] ?? '')) ?>"
+                        data-start_at="<?= htmlspecialchars((string) ($event['start_at'] ?? '')) ?>"
+                        data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
+                    Edit Event
+                </button>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
     </div>
@@ -186,6 +195,25 @@ render_header('Event Details', $user);
                         </div>
                     </div>
                  </div>
+
+                 <?php if ($role === 'admin' && $event['status'] === 'pending'): ?>
+                 <h3 class="text-sm font-black text-zinc-400 uppercase tracking-widest mt-8 mb-4">Attached Proposal Document</h3>
+                 <div class="rounded-xl bg-blue-50/50 border border-blue-200 p-4 max-w-3xl flex items-center justify-between group hover:border-blue-300 transition-colors">
+                     <div class="flex items-center gap-4">
+                         <div class="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0 text-red-600">
+                             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                         </div>
+                         <div>
+                             <div class="text-[14px] font-bold text-zinc-900 group-hover:text-blue-700 transition-colors">LU-Letter-Request-<?= htmlspecialchars(date('Y', strtotime($event['start_at'] ?? 'now'))) ?>.pdf</div>
+                             <div class="text-xs text-zinc-500 font-medium">Uploaded by Event Coordinator • 2.4 MB</div>
+                         </div>
+                     </div>
+                     <button class="px-4 py-2 rounded-lg bg-white border border-zinc-200 text-sm font-bold text-zinc-700 hover:bg-zinc-50 shadow-sm flex items-center gap-2 transition-all">
+                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                         View PDF
+                     </button>
+                 </div>
+                 <?php endif; ?>
 
                  <!-- Student Area -->
                  <?php if ($role === 'student'): ?>
@@ -451,6 +479,36 @@ render_header('Event Details', $user);
 </div>
 <?php endif; ?>
 
+<!-- ═══════════  REJECT PROPOSAL MODAL (Matches Page 34) ═══════════ -->
+<div id="rejectModal" class="fixed inset-0 z-[60] flex items-end justify-center sm:items-center bg-zinc-900/60 backdrop-blur-sm opacity-0 hidden transition-opacity duration-300">
+  <div class="relative w-full max-w-sm mx-4 bg-white border border-zinc-200 rounded-3xl shadow-xl overflow-hidden scale-95 transition-transform duration-300" id="rejectPanel" style="transform: translateY(100%);">
+    <div class="p-6">
+      <div class="flex items-center gap-4 mb-4">
+         <div class="w-12 h-12 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0 text-red-600">
+           <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+         </div>
+         <div>
+             <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none">Reject Proposal?</h3>
+             <p class="text-sm text-zinc-500 mt-1 font-medium">This action cannot be undone.</p>
+         </div>
+      </div>
+      
+      <p class="text-[13px] text-zinc-600 mb-3 px-1 leading-relaxed">Are you sure you want to reject the proposal for <span class="font-bold text-zinc-900"><?= htmlspecialchars($event['title'] ?? 'this event') ?></span>? Please provide a reason to notify the event coordinator.</p>
+      
+      <div class="mt-2">
+         <label class="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-1.5 px-1">Reason for refusing</label>
+         <textarea id="rejectReason" rows="3" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 resize-none transition" placeholder="e.g. Conflicts with midterm examination week..."></textarea>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex border-t border-zinc-200 bg-zinc-50">
+       <button id="btnCancelReject" class="flex-1 py-3.5 text-[13px] font-bold text-zinc-600 hover:bg-zinc-100 transition border-r border-zinc-200">Cancel</button>
+       <button id="btnConfirmReject" class="flex-1 py-3.5 text-[13px] font-bold text-white bg-red-600 hover:bg-red-700 transition shadow-sm" data-id="<?= htmlspecialchars($id) ?>">Reject Proposal</button>
+    </div>
+  </div>
+</div>
+
 <script>
 <?php if ($role === 'admin' || $role === 'teacher'): ?>
 // ------------------------------------------------------------------
@@ -587,21 +645,31 @@ const certContent = document.getElementById('successCertContent');
 const btnCloseCertModal = document.getElementById('btnCloseCertModal');
 
 if (btnSendCert) {
-    btnSendCert.addEventListener('click', () => {
+    btnSendCert.addEventListener('click', async () => {
         const completeds = <?= $completedCount ?>;
         if (completeds === 0) {
             alert("No completed participants to send certificates to!");
             return;
         }
 
-        // Loading simulation
         const originalText = btnSendCert.innerHTML;
         btnSendCert.innerHTML = '<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 text-emerald-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...</span>';
         btnSendCert.disabled = true;
 
-        setTimeout(() => {
+        try {
+            const res = await fetch('/api/certificates_generate.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event_id: '<?= htmlspecialchars($id) ?>', csrf_token: window.CSRF_TOKEN })
+            });
+            const data = await res.json();
+            
+            if (!data.ok) throw new Error(data.error || 'Failed to generate certificates');
+            
             btnSendCert.innerHTML = originalText;
             btnSendCert.disabled = false;
+            
+            document.querySelector('#successCertContent p.text-zinc-600').textContent = `Successfully generated and sent ${data.count} certificates to eligible participants via email!`;
             
             certModal.classList.remove('hidden');
             certModal.classList.add('flex');
@@ -610,7 +678,12 @@ if (btnSendCert) {
                 certContent.classList.remove('scale-95');
                 certContent.classList.add('scale-100');
             }, 10);
-        }, 1200);
+            
+        } catch (err) {
+            alert('Error generating certificates: ' + err.message);
+            btnSendCert.innerHTML = originalText;
+            btnSendCert.disabled = false;
+        }
     });
 
     const closeCertModal = () => {
@@ -624,6 +697,87 @@ if (btnSendCert) {
     };
 
     btnCloseCertModal.addEventListener('click', closeCertModal);
+}
+
+// ------------------------------------------------------------------
+// BATCH 6: EVENT APPROVAL LOGIC
+// ------------------------------------------------------------------
+const btnApproveProposal = document.getElementById('btnApproveProposal');
+const btnRejectProposal = document.getElementById('btnRejectProposal');
+const rejectModal = document.getElementById('rejectModal');
+const rejectPanel = document.getElementById('rejectPanel');
+const btnCancelReject = document.getElementById('btnCancelReject');
+const btnConfirmReject = document.getElementById('btnConfirmReject');
+
+if (btnApproveProposal) {
+    btnApproveProposal.addEventListener('click', async () => {
+        const event_id = btnApproveProposal.dataset.id;
+        const status = 'approved';
+        btnApproveProposal.disabled = true;
+        btnApproveProposal.innerHTML = '<span class="relative z-10 flex items-center justify-center gap-1.5"><svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span class="relative z-10">Approving...</span></span>';
+        try {
+            const res = await fetch('/api/events_approve.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event_id, status, csrf_token: window.CSRF_TOKEN })
+            });
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error || 'Failed to approve');
+            window.location.reload();
+        } catch (e) {
+            alert(e.message || 'Approval Failed');
+            btnApproveProposal.disabled = false;
+            btnApproveProposal.innerHTML = '<span class="relative z-10">Approve Proposal</span>';
+        }
+    });
+}
+
+if (btnRejectProposal && rejectModal) {
+    btnRejectProposal.addEventListener('click', () => {
+        rejectModal.classList.remove('hidden');
+        rejectModal.classList.add('flex');
+        // A little delay for transition
+        setTimeout(() => {
+            rejectModal.classList.remove('opacity-0');
+            rejectPanel.style.transform = 'translateY(0)';
+        }, 10);
+    });
+
+    const closeReject = () => {
+        rejectModal.classList.add('opacity-0');
+        rejectPanel.style.transform = 'translateY(100%)';
+        setTimeout(() => {
+            rejectModal.classList.add('hidden');
+            rejectModal.classList.remove('flex');
+            document.getElementById('rejectReason').value = '';
+        }, 300);
+    };
+
+    btnCancelReject.addEventListener('click', closeReject);
+    rejectModal.addEventListener('click', (e) => { if (e.target === rejectModal) closeReject(); });
+
+    btnConfirmReject.addEventListener('click', async () => {
+        const event_id = btnConfirmReject.dataset.id;
+        const reason = document.getElementById('rejectReason').value.trim();
+        if (!reason) { alert("Please provide a reason to notify the event coordinator."); return; }
+
+        btnConfirmReject.disabled = true;
+        btnConfirmReject.textContent = 'Sending...';
+        try {
+            const res = await fetch('/api/events_approve.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
+            });
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error || 'Failed to reject');
+            window.location.reload();
+        } catch (e) {
+            alert(e.message || 'Failed to reject');
+            btnConfirmReject.disabled = false;
+            btnConfirmReject.textContent = 'Reject Proposal';
+        }
+    });
 }
 
 // ------------------------------------------------------------------

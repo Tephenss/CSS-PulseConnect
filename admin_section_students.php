@@ -60,7 +60,7 @@ render_header('Section: ' . htmlspecialchars($sectionName), $user);
       <table class="w-full text-left text-sm text-zinc-600 whitespace-nowrap">
         <thead class="bg-[#FAFAFA] text-zinc-800 font-semibold border-b border-zinc-200">
           <tr>
-            <th class="px-6 py-4 rounded-tl-xl">Student ID</th>
+            <th class="px-6 py-4 rounded-tl-xl">Student Number</th>
             <th class="px-6 py-4">Name</th>
             <th class="px-6 py-4">Email</th>
           </tr>

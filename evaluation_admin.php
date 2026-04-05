@@ -55,8 +55,15 @@ if(!is_array($questions)) $questions = [];
 // Prepare Analytics Data (Only used if tab is feedback)
 $analytics = [];
 $totalResponses = 0;
+$totalParticipants = 0;
 
 if ($tab === 'feedback') {
+    // 0. Get total participants for this event (for response rate denominator)
+    $partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/participants?select=id&event_id=eq.' . rawurlencode($eventId);
+    $partRes = supabase_request('GET', $partUrl, $headers);
+    $partRows = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : [];
+    $totalParticipants = is_array($partRows) ? count($partRows) : 0;
+
     // 1. Get all evaluations for this event
     $evalUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluations?select=id&event_id=eq.' . rawurlencode($eventId);
     $evalRes = supabase_request('GET', $evalUrl, $headers);
@@ -104,6 +111,9 @@ if ($tab === 'feedback') {
         }
     }
 }
+
+// Compute response rate
+$responseRate = ($totalParticipants > 0) ? round(($totalResponses / $totalParticipants) * 100, 1) : 0;
 
 render_header('Evaluation Management', $user);
 ?>
@@ -270,17 +280,37 @@ render_header('Evaluation Management', $user);
                        </div>
                        Feedback Analytics
                     </h3>
-                    <p class="text-emerald-700 font-bold text-sm mt-1 bg-emerald-50 px-3 py-1 rounded-lg inline-block"><?= $totalResponses ?> Total Response<?= $totalResponses!==1 ? 's':'' ?></p>
+                    <p class="text-sm mt-2 text-zinc-600 font-medium">
+                        <span class="font-bold text-zinc-900"><?= $totalResponses ?></span>
+                        <?php if ($totalParticipants > 0): ?>
+                            out of <span class="font-bold text-zinc-900"><?= $totalParticipants ?></span> Responses
+                            <span class="ml-2 px-2.5 py-0.5 rounded-full text-xs font-bold <?= $responseRate >= 70 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200' ?>">
+                                <?= $responseRate ?>%
+                            </span>
+                        <?php else: ?>
+                            Total Response<?= $totalResponses!==1 ? 's':'' ?>
+                        <?php endif; ?>
+                    </p>
                 </div>
             </div>
 
             <div class="space-y-6">
                  <?php foreach ($analytics as $qid => $data): ?>
                      <div class="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 shadow-sm">
-                         <h4 class="text-[15px] font-bold text-zinc-900 mb-6 flex gap-3">
-                             <div class="w-1.5 rounded-full bg-emerald-500 shrink-0"></div>
-                             <?= htmlspecialchars($data['question_text']) ?>
-                         </h4>
+                         <!-- Card Header: Question + Response Count -->
+                         <div class="flex items-start justify-between gap-4 mb-6">
+                             <h4 class="text-[15px] font-bold text-zinc-900 flex gap-3">
+                                 <div class="w-1.5 rounded-full bg-emerald-500 shrink-0 mt-1"></div>
+                                 <?= htmlspecialchars($data['question_text']) ?>
+                             </h4>
+                             <div class="shrink-0 text-right">
+                                 <div class="text-xs font-bold text-zinc-500"><?= $data['count'] ?> <?php if ($totalParticipants > 0): ?>out of <?= $totalParticipants ?><?php endif; ?> Responses</div>
+                                 <?php if ($totalParticipants > 0): ?>
+                                     <?php $cardRate = round(($data['count'] / $totalParticipants) * 100, 1); ?>
+                                     <div class="text-xs font-bold <?= $cardRate >= 70 ? 'text-emerald-600' : 'text-amber-600' ?>"><?= $cardRate ?>% Response Rate</div>
+                                 <?php endif; ?>
+                             </div>
+                         </div>
                          
                          <div class="flex flex-col md:flex-row gap-8 items-center">
                              <!-- Average Score Circle -->
