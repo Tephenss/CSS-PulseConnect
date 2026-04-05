@@ -19,3 +19,4 @@ desktop.ini
 .env
 api/service-account.json
 includes/fcm-credentials.php
+includes/service-account.json

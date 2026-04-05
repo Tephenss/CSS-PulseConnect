@@ -1,0 +1,4 @@
+# Completely secure this configuration folder from external access
+<FilesMatch "\.(json|php|txt|log|env)$">
+    Require all denied
+</FilesMatch>

@@ -8,13 +8,19 @@ declare(strict_types=1);
 function send_fcm_notification(array $tokens, string $title, string $body, array $data = []) {
     if (empty($tokens)) return false;
 
-    $keyFilePath = __DIR__ . '/fcm-credentials.php';
+    $keyFilePath = __DIR__ . '/service-account.json';
+    
+    // Fallback securely to the PHP wrapper if it exists instead
     if (!file_exists($keyFilePath)) {
-        error_log('FCM Key file missing: ' . $keyFilePath);
-        return false;
+        $keyFilePath = __DIR__ . '/fcm-credentials.php';
+        if (!file_exists($keyFilePath)) {
+            error_log('FCM Key configuration missing in includes/');
+            return false;
+        }
+        $keyData = require $keyFilePath;
+    } else {
+        $keyData = json_decode(file_get_contents($keyFilePath), true);
     }
-
-    $keyData = require $keyFilePath;
     
     if (!is_array($keyData) || !isset($keyData['client_email']) || !isset($keyData['private_key']) || !isset($keyData['project_id'])) {
         error_log('Invalid FCM Key file structure.');
