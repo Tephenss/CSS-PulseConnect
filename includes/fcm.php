@@ -1,6 +1,20 @@
 <?php
 declare(strict_types=1);
 
+if (!defined('SUPABASE_DEV_SKIP_SSL_VERIFY')) {
+    $configPath = dirname(__DIR__) . '/config.php';
+    if (is_file($configPath)) {
+        require_once $configPath;
+    }
+}
+
+function apply_curl_ssl_policy($ch): void
+{
+    $skipSslVerify = defined('SUPABASE_DEV_SKIP_SSL_VERIFY') && SUPABASE_DEV_SKIP_SSL_VERIFY;
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, $skipSslVerify ? false : true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $skipSslVerify ? 0 : 2);
+}
+
 /**
  * Helper to send FCM notifications using Firebase HTTP v1 API.
  * Requires the service-account.json to be placed in the api/ directory.
@@ -70,7 +84,9 @@ function send_fcm_notification(array $tokens, string $title, string $body, array
             'Content-Type: application/json'
         ]);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        apply_curl_ssl_policy($ch);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
         
         $result = curl_exec($ch);
@@ -117,7 +133,9 @@ function get_fcm_access_token($clientEmail, $privateKey) {
     curl_setopt($ch, CURLOPT_URL, 'https://oauth2.googleapis.com/token');
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    apply_curl_ssl_policy($ch);
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
         'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
         'assertion' => $jwt

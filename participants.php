@@ -333,10 +333,10 @@ render_header('Participants', $user);
         <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-orange-500 text-orange-600 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-bold">
             Event Participants
         </a>
-        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
             Event Feedback
         </a>
-        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
             Evaluation Questions
         </a>
     </nav>
@@ -353,16 +353,26 @@ render_header('Participants', $user);
   </div>
 <?php endif; ?>
 
-<div class="flex items-center justify-between gap-4 mb-5">
-  <h3 class="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">
-     <div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center">
-       <svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
-     </div>
-     Registered Attendees
-  </h3>
-  <div class="px-3.5 py-1.5 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center gap-2">
-     <span class="text-[11px] font-bold text-zinc-600 uppercase tracking-wider">Total</span>
-     <span class="text-base font-bold text-zinc-900 leading-none"><?= count($rows) ?></span>
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+  <div class="flex items-center gap-4">
+    <h3 class="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">
+       <div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center">
+         <svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+       </div>
+       Registered Attendees
+    </h3>
+    <div class="px-3.5 py-1.5 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center gap-2">
+       <span class="text-[11px] font-bold text-zinc-600 uppercase tracking-wider">Total</span>
+       <span id="totalCount" class="text-base font-bold text-zinc-900 leading-none"><?= count($rows) ?></span>
+    </div>
+  </div>
+
+  <div class="relative w-full sm:w-80 group">
+    <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-orange-500 transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+    </div>
+    <input type="text" id="participantSearch" placeholder="Search name, email, or section..." 
+      class="block w-full pl-10 pr-4 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition shadow-sm">
   </div>
 </div>
 
@@ -419,6 +429,15 @@ render_header('Participants', $user);
            try { $checkOutFormat = (new DateTimeImmutable($checkOutRaw))->format('M d, g:i A'); } catch (Throwable $e) {}
         }
 
+        $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
+        $yearLvl = 'N/A';
+        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
+            $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
+        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
+            $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
+        }
+
         $attStatusColor = match((string)$attStatus) {
             'present' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
             'late' => 'bg-amber-100 text-amber-900 border-amber-200',
@@ -426,7 +445,8 @@ render_header('Participants', $user);
             default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
         };
       ?>
-      <div class="group relative rounded-2xl bg-white border border-zinc-200 p-5 shadow-sm hover:border-orange-200 hover:shadow-md transition-all flex flex-col justify-between">
+      <div class="participant-card group relative rounded-2xl bg-white border border-zinc-200 p-5 shadow-sm hover:border-orange-200 hover:shadow-md transition-all flex flex-col justify-between"
+           data-search="<?= htmlspecialchars(strtolower($name . ' ' . (string)($u['email'] ?? '') . ' ' . (string)($u['student_id'] ?? '') . ' ' . $secName)) ?>">
         
         <div class="flex items-start gap-4 mb-5 relative z-10 w-full overflow-hidden">
           <div class="w-12 h-12 rounded-2xl bg-orange-100 border border-orange-200 flex items-center justify-center text-orange-800 text-base font-bold flex-shrink-0">
@@ -435,7 +455,18 @@ render_header('Participants', $user);
           <div class="min-w-0 flex-1">
             <h4 class="text-base font-bold text-zinc-900 tracking-wide truncate pr-2" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name) ?></h4>
             <p class="text-[11px] font-medium text-zinc-600 truncate mt-0.5 mb-1" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></p>
-            <p class="text-[10px] font-mono font-bold text-orange-600 mb-2 truncate bg-orange-50 w-fit px-1.5 rounded-md border border-orange-100">#<?= htmlspecialchars((string)($u['student_id'] ?? 'N/A')) ?></p>
+            
+            <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
+                <p class="text-[10px] font-mono font-bold text-orange-600 truncate bg-orange-50 w-fit px-1.5 py-0.5 rounded-md border border-orange-100">#<?= htmlspecialchars((string)($u['student_id'] ?? 'N/A')) ?></p>
+                <div class="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-zinc-50 border border-zinc-100 text-[10px] font-bold text-zinc-600">
+                    <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+                    <?= htmlspecialchars($secName) ?>
+                </div>
+                <div class="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 border border-blue-100 text-[10px] font-bold text-blue-600">
+                    <svg class="w-3 h-3 text-blue-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/></svg>
+                    <?= htmlspecialchars($yearLvl) ?>
+                </div>
+            </div>
             
             <?php if ((string)$attStatus !== ''): ?>
               <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border <?= $attStatusColor ?>">
@@ -504,6 +535,43 @@ render_header('Participants', $user);
       }
     });
   });
+
+  // Client-side live search
+  const searchInput = document.getElementById('participantSearch');
+  const totalCountEl = document.getElementById('totalCount');
+  const cards = document.querySelectorAll('.participant-card');
+  const emptyState = document.querySelector('.pointer-events-none');
+
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const term = e.target.value.toLowerCase().trim();
+      let visibleCount = 0;
+
+      cards.forEach(card => {
+        const searchable = card.dataset.search;
+        if (searchable.includes(term)) {
+          card.classList.remove('hidden');
+          visibleCount++;
+        } else {
+          card.classList.add('hidden');
+        }
+      });
+
+      if (totalCountEl) totalCountEl.textContent = visibleCount;
+      
+      if (emptyState) {
+        if (visibleCount === 0 && cards.length > 0) {
+          emptyState.classList.remove('hidden');
+          emptyState.querySelector('p').textContent = 'No results match your search';
+        } else if (cards.length === 0) {
+          emptyState.classList.remove('hidden');
+          emptyState.querySelector('p').textContent = 'No participants found';
+        } else {
+          emptyState.classList.add('hidden');
+        }
+      }
+    });
+  }
 </script>
 <?php endif; ?>
 

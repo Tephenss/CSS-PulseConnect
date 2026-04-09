@@ -14,7 +14,7 @@ $role = (string) ($user['role'] ?? 'admin');
 // Load events to show on homepage (students see published only).
 $select = 'select=id,title,description,location,start_at,end_at,status';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
-$url = $role === 'student' ? $base . '&status=eq.published' : $base;
+$url = $role === 'student' ? $base . '&status=eq.published' : $base . '&status=neq.archived';
 
 $headers = [
     'Accept: application/json',
@@ -446,10 +446,12 @@ render_header('Dashboard', $user);
   $now = new DateTime();
 
   foreach ($events as $e) {
-      if (!empty($e['start_at'])) {
+      $s = (string)($e['status'] ?? '');
+      
+      if (!empty($e['start_at']) && $s === 'published') {
           try { if (new DateTime($e['start_at']) > $now) $upcoming++; } catch (Throwable $ex) {}
       }
-      $s = (string)($e['status'] ?? '');
+      
       if ($s === 'published') $published++;
       if ($s === 'pending') $pending++;
   }

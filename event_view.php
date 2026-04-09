@@ -79,6 +79,7 @@ if (is_array($participants)) {
 // If published = ON, if pending/draft/archived = OFF.
 $status = (string)($event['status'] ?? '');
 $isRegistrationAllowed = ($status === 'published');
+$canToggleRegistration = in_array($status, ['draft', 'published'], true);
 
 $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
@@ -131,6 +132,7 @@ render_header('Event Details', $user);
                         data-description="<?= htmlspecialchars((string) ($event['description'] ?? '')) ?>"
                         data-start_at="<?= htmlspecialchars((string) ($event['start_at'] ?? '')) ?>"
                         data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
+
                 >
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
                     Edit Event
@@ -164,10 +166,13 @@ render_header('Event Details', $user);
             </div>
 
             <!-- Tab Content: Details -->
-            <div class="rounded-2xl border border-zinc-200 bg-white p-6 md:p-8 shadow-sm relative overflow-hidden">
-                <div class="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl rounded-tl-full pointer-events-none"></div>
-                
-                <h3 class="text-sm font-black text-zinc-400 uppercase tracking-widest mb-4">Event Description</h3>
+            <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm relative overflow-hidden mb-6">
+
+
+                <div class="p-6 md:p-8">
+                    <div class="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl rounded-tl-full pointer-events-none"></div>
+                    
+                    <h3 class="text-sm font-black text-zinc-400 uppercase tracking-widest mb-4">Event Description</h3>
                 
                 <?php if (!empty($event['description'])): ?>
                     <div class="text-[15px] text-zinc-700 leading-relaxed max-w-4xl font-medium">
@@ -233,6 +238,7 @@ render_header('Event Details', $user);
                     </div>
                     <div id="msgStudent" class="mt-4 text-sm font-bold text-emerald-600"></div>
                  <?php endif; ?>
+                </div>
             </div>
         </div>
 
@@ -277,7 +283,13 @@ render_header('Event Details', $user);
                     <div class="text-[13px] font-black text-zinc-800 uppercase tracking-wide">Allow Registration</div>
                     
                     <!-- Tailwind Toggle Switch -->
-                    <button type="button" id="btnToggleReg" class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none <?= $isRegistrationAllowed ? 'bg-emerald-500' : 'bg-zinc-300' ?>" role="switch" aria-checked="<?= $isRegistrationAllowed ? 'true' : 'false' ?>">
+                    <button type="button"
+                            id="btnToggleReg"
+                            data-can-toggle="<?= $canToggleRegistration ? '1' : '0' ?>"
+                            class="relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none <?= $isRegistrationAllowed ? 'bg-emerald-500' : 'bg-zinc-300' ?> <?= $canToggleRegistration ? 'cursor-pointer' : 'cursor-not-allowed opacity-50' ?>"
+                            role="switch"
+                            aria-checked="<?= $isRegistrationAllowed ? 'true' : 'false' ?>"
+                            aria-disabled="<?= $canToggleRegistration ? 'false' : 'true' ?>">
                         <span aria-hidden="true" class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out <?= $isRegistrationAllowed ? 'translate-x-5' : 'translate-x-0' ?>"></span>
                     </button>
                 </div>
@@ -301,7 +313,7 @@ render_header('Event Details', $user);
         <div class="w-10 h-10 rounded-full bg-orange-100 border border-orange-200 flex items-center justify-center flex-shrink-0 text-orange-600">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
         </div>
-        <div>
+      <div>
           <h3 id="modalTitle" class="text-xl font-bold text-zinc-900 tracking-tight leading-none">Edit Event Details</h3>
           <p id="modalSubtitle" class="text-[13px] font-medium text-zinc-500 mt-1">Make changes below</p>
         </div>
@@ -374,12 +386,23 @@ render_header('Event Details', $user);
             <div class="flex items-center justify-between mt-1.5 px-1">
               <span id="mainAiStatus" class="hidden text-[11px] text-orange-600 font-medium whitespace-nowrap"></span>
               <div class="flex items-center justify-end gap-3 ml-auto">
+                <button type="button" id="mainUndoBtn" class="hidden text-[11px] text-zinc-500 hover:text-zinc-800 font-semibold transition-colors outline-none flex items-center gap-1">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9m0 0l5-5M4 9h9a7 7 0 110 14h-1"/></svg>
+                  Undo
+                </button>
+                <button type="button" id="mainExpandBtn" class="text-[11px] text-zinc-500 hover:text-zinc-800 font-semibold transition-colors outline-none flex items-center gap-1">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 3H3v5m0-5l6 6M16 21h5v-5m0 5l-6-6"/></svg>
+                  Expand
+                </button>
                 <button type="button" id="mainAiImproveBtn" class="text-[11px] text-orange-600 hover:text-orange-700 font-bold transition-all outline-none flex items-center gap-1.5 bg-gradient-to-r from-orange-50 to-red-50 hover:from-orange-100 hover:to-red-100 px-3 py-1.5 rounded-lg border border-orange-200/60 shadow-sm">
-                  ✨ AI Improve
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3l1.8 3.9L18 8.7l-3.2 2.8.9 4.2-3.7-2.1-3.7 2.1.9-4.2L6 8.7l4.2-1.8L12 3z"/></svg>
+                  AI Improve
                 </button>
               </div>
             </div>
           </div>
+
+
         </div>
 
         <div id="formMsg" class="text-sm font-bold text-emerald-600 mt-2 min-h-0"></div>
@@ -396,18 +419,18 @@ render_header('Event Details', $user);
   </div>
 </div>
 
-<!-- ═══════════  STT PREVIEW MODAL (Imported logic) ═══════════ -->
+<!-- ═══════════  STT PREVIEW MODAL (Aligned with Create Event) ═══════════ -->
 <div id="sttPreviewModal" class="fixed inset-0 z-[110] flex items-center justify-center pointer-events-none opacity-0 transition-opacity duration-300">
   <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" id="sttBackdrop"></div>
-  <div class="relative w-full max-w-xl mx-4 bg-white border border-zinc-200 rounded-3xl shadow-2xl scale-95 transition-transform duration-300" id="sttModalContent">
+  <div class="relative w-full max-w-xl mx-4 bg-white border border-zinc-200 rounded-3xl shadow-2xl scale-95 transition-transform duration-300 max-h-[85vh] overflow-hidden flex flex-col" id="sttModalContent">
     <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-zinc-200">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-100 to-red-100 border border-orange-200 flex items-center justify-center">
           <svg class="w-4 h-4 text-orange-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
         </div>
         <div>
-          <div class="text-sm font-semibold text-zinc-900">Voice Summary</div>
-          <div class="text-[10px] text-zinc-500">Edit before saving</div>
+          <div class="text-sm font-semibold text-zinc-900">Voice Transcript Preview</div>
+          <div class="text-[10px] text-zinc-500">Review and edit before inserting</div>
         </div>
       </div>
       <button id="sttPreviewClose" class="p-2 rounded-xl text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition">
@@ -416,32 +439,44 @@ render_header('Event Details', $user);
     </div>
     
     <div class="px-5 pt-4 pb-2 flex items-center gap-2">
-      <button type="button" class="w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800" id="sttTabRaw">📝 Raw Text</button>
-      <button type="button" class="w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50" id="sttTabImproved">✨ AI Improved</button>
+      <button type="button" class="w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800 border border-zinc-200" id="sttTabRaw">📝 Raw Text</button>
+      <button type="button" class="w-1/2 py-2 rounded-lg font-bold text-xs text-orange-700 bg-orange-50 border border-orange-200" id="sttTabImproved">AI Improved</button>
     </div>
 
     <div class="px-5 py-3">
-      <div id="sttModalStatus" class="text-xs font-semibold text-red-600 mb-2 hidden items-center flex-col justify-center gap-2"></div>
-      
-      <div class="relative">
-        <textarea id="sttPreviewText" rows="6" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 p-3 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 resize-none font-medium leading-relaxed"></textarea>
+      <div id="sttModalStatus" class="text-xs font-semibold text-red-600 mb-2 hidden items-center gap-1.5"></div>
+
+      <div id="sttSpectrumEffect" class="hidden w-full h-[150px] bg-zinc-900 rounded-xl items-center justify-center gap-2 border border-zinc-800 relative overflow-hidden transition-all duration-300">
+        <div class="absolute inset-0 bg-red-500/10 blur-2xl rounded-full scale-[1.5] animate-pulse"></div>
+        <div class="w-2 rounded-full bg-gradient-to-t from-red-500 to-red-400 animate-pulse" style="height: 16px; animation-delay: 0.1s;"></div>
+        <div class="w-2 rounded-full bg-gradient-to-t from-red-500 to-red-400 animate-pulse" style="height: 32px; animation-delay: 0.3s;"></div>
+        <div class="w-2 rounded-full bg-gradient-to-t from-red-500 to-red-400 animate-pulse" style="height: 64px; animation-delay: 0.5s;"></div>
+        <div class="w-2 rounded-full bg-gradient-to-t from-red-500 to-red-400 animate-pulse" style="height: 48px; animation-delay: 0.2s;"></div>
+        <div class="w-2 rounded-full bg-gradient-to-t from-red-500 to-red-400 animate-pulse" style="height: 24px; animation-delay: 0.4s;"></div>
       </div>
 
-      <div class="flex items-center justify-between mt-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest px-1">
-         <span id="sttCharCount">0 chars</span>
-         <span id="sttWordCount">0 words</span>
+      <textarea id="sttPreviewText" rows="6" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 p-3 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 resize-none font-medium leading-relaxed"></textarea>
+
+      <div class="text-[11px] text-zinc-400 mt-2 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span id="sttCharCount">0 chars</span>
+          <span>•</span>
+          <span id="sttWordCount">0 words</span>
+        </div>
+        <button type="button" id="sttMicToggle" class="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-600 px-3 py-1.5 font-medium border border-red-200 hover:bg-red-100 transition">
+          Stop Recording ⏹
+        </button>
       </div>
     </div>
 
     <!-- Actions -->
-    <div class="px-5 py-4 border-t border-zinc-200 bg-zinc-50 flex items-center justify-between rounded-b-3xl gap-2">
-       <button id="sttMicToggle" class="flex-shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-1.5 font-bold text-xs border border-emerald-200 shadow-sm hover:bg-emerald-100 transition">
-         Stop Recording ⏹
+    <div class="px-5 py-4 border-t border-zinc-200 flex items-center justify-between gap-3 rounded-b-3xl">
+       <button id="sttPreviewDiscard" class="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-sm text-zinc-700 hover:bg-zinc-100 transition font-medium">
+         Discard
        </button>
-       <div class="flex items-center gap-2 ml-auto">
-         <button id="sttPreviewDiscard" class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 focus:outline-none font-bold">Discard</button>
-         <button id="sttPreviewAppend" class="rounded-lg border border-orange-200 bg-orange-50 text-orange-700 px-3 py-1.5 text-xs hover:bg-orange-100 focus:outline-none font-bold">Append</button>
-         <button id="sttPreviewReplace" class="rounded-lg bg-orange-600 text-white px-4 py-1.5 text-xs hover:bg-orange-700 border border-orange-600 shadow-sm focus:outline-none font-bold">Replace Text</button>
+       <div class="flex items-center gap-2">
+         <button id="sttPreviewAppend" class="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm text-orange-800 hover:bg-orange-100 transition font-semibold">Append ↩</button>
+         <button id="sttPreviewReplace" class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white px-5 py-2.5 text-sm font-semibold hover:from-orange-500 hover:to-red-500 shadow-lg shadow-orange-600/25 transition-all">Insert ✓</button>
        </div>
     </div>
   </div>
@@ -522,6 +557,42 @@ const backdrop = document.getElementById('modalBackdrop');
 
 const sttModal = document.getElementById('sttPreviewModal');
 const sttContent = document.getElementById('sttModalContent');
+const mainDesc = document.getElementById('description');
+const mainExpandBtn = document.getElementById('mainExpandBtn');
+const mainAiBtn = document.getElementById('mainAiImproveBtn');
+const mainUndoBtn = document.getElementById('mainUndoBtn');
+const mainAiStatus = document.getElementById('mainAiStatus');
+const mainModalPanel = document.getElementById('modalContent');
+
+let mainIsExpanded = false;
+let originalMainDesc = '';
+
+function resetMainEditorTools() {
+    mainIsExpanded = false;
+    originalMainDesc = '';
+
+    if (mainDesc) {
+        mainDesc.style.height = '';
+    }
+    if (mainModalPanel) {
+        mainModalPanel.style.width = '';
+        mainModalPanel.style.maxWidth = '';
+    }
+    if (mainExpandBtn) {
+        mainExpandBtn.textContent = 'Expand';
+    }
+    if (mainUndoBtn) {
+        mainUndoBtn.classList.add('hidden');
+    }
+    if (mainAiStatus) {
+        mainAiStatus.classList.add('hidden');
+        mainAiStatus.textContent = '';
+    }
+    if (mainAiBtn) {
+        mainAiBtn.disabled = false;
+        mainAiBtn.style.opacity = '1';
+    }
+}
 
 function toLocalInput(iso) {
     if (!iso) return '';
@@ -532,6 +603,7 @@ function toLocalInput(iso) {
 
 if (btnEdit) {
   btnEdit.addEventListener('click', () => {
+    resetMainEditorTools();
     document.getElementById('event_id').value = btnEdit.dataset.id;
     document.getElementById('title').value = btnEdit.dataset.title;
     document.getElementById('location').value = btnEdit.dataset.location;
@@ -540,6 +612,7 @@ if (btnEdit) {
     document.getElementById('start_at_local').value = toLocalInput(btnEdit.dataset.start_at);
     document.getElementById('end_at_local').value = toLocalInput(btnEdit.dataset.end_at);
 
+
     eventModal.classList.remove('opacity-0', 'pointer-events-none');
     modalContent.classList.remove('scale-95');
     modalContent.classList.add('scale-100');
@@ -547,8 +620,9 @@ if (btnEdit) {
   });
 
   const closeIt = () => {
+    resetMainEditorTools();
     eventModal.classList.add('opacity-0', 'pointer-events-none');
-    modalContent.classList.remote('scale-100');
+    modalContent.classList.remove('scale-100');
     modalContent.classList.add('scale-95');
     document.body.style.overflow = '';
   };
@@ -575,6 +649,7 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       description: document.getElementById('description').value.trim(),
       start_at: sd.toISOString(),
       end_at: ed.toISOString(),
+
       csrf_token: window.CSRF_TOKEN
     };
     
@@ -602,6 +677,10 @@ const btnCancelReg = document.getElementById('btnCancelReg');
 
 if (btnToggleReg && publishModal) {
     btnToggleReg.addEventListener('click', () => {
+        if (btnToggleReg.dataset.canToggle !== '1') {
+            alert('Publish the event first before enabling registration.');
+            return;
+        }
         // Only show modal if turning ON
         if (btnToggleReg.getAttribute('aria-checked') === 'false') {
             publishModal.classList.remove('hidden');
@@ -783,150 +862,345 @@ if (btnRejectProposal && rejectModal) {
 // ------------------------------------------------------------------
 // AI IMPROVE AND STT LOGIC (Copied from manage_events.php)
 // ------------------------------------------------------------------
-const aiBtn = document.getElementById('mainAiImproveBtn');
-if (aiBtn) {
-  aiBtn.addEventListener('click', async () => {
-    const ta = document.getElementById('description');
-    const raw = ta.value.trim();
-    if(!raw) return;
-    
-    aiBtn.innerHTML = '⏳ Loading...';
-    aiBtn.disabled = true;
-    try {
-      const resp = await fetch('/api/ai_improve.php', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ raw_text: raw })
-      });
-      const d = await resp.json();
-      if(d.ok) ta.value = d.improved_text;
-      else alert('AI Error: ' + d.error);
-    } catch(e) { alert('Network Error'); }
-    aiBtn.innerHTML = '✨ AI Improve';
-    aiBtn.disabled = false;
-  });
-}
-
-// Media Recorder Injection
-(function(){
-    var sttBtn = document.getElementById('sttBtn');
-    if (!sttBtn) return;
-    
-    var mediaRecorder = null;
-    var audioChunks = [];
-    var recTimer = null;
-    var seconds = 0;
-    var rawText = '';
-    
-    const openSttModal = () => {
-       sttModal.classList.remove('opacity-0', 'pointer-events-none');
-       sttContent.classList.remove('scale-95');
-       sttContent.classList.add('scale-100');
-       document.getElementById('sttTabRaw').className = "w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800";
-       document.getElementById('sttTabImproved').className = "w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50";
-    };
-
-    const closeSttModal = () => {
-       sttModal.classList.add('opacity-0', 'pointer-events-none');
-       sttContent.classList.remove('scale-100');
-       sttContent.classList.add('scale-95');
-    };
-
-    document.getElementById('sttPreviewClose').addEventListener('click', closeSttModal);
-    document.getElementById('sttPreviewDiscard').addEventListener('click', closeSttModal);
-
-    const ptext = document.getElementById('sttPreviewText');
-    const updateC = () => {
-        document.getElementById('sttCharCount').textContent = ptext.value.length + " chars";
-        document.getElementById('sttWordCount').textContent = ptext.value.trim().split(/\s+/).filter(x=>x.length>0).length + " words";
-    };
-
-    sttBtn.addEventListener('click', async () => {
-       openSttModal();
-       ptext.value = ''; rawText = ''; seconds = 0;
-       updateC();
-       
-       const st = document.getElementById('sttModalStatus');
-       st.classList.remove('hidden'); st.classList.add('flex');
-       st.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span> <span id="sttTimerCount">🎙️ Recording... 00:00</span>';
-       
-       document.getElementById('sttMicToggle').innerHTML = 'Stop Recording ⏹';
-       document.getElementById('sttMicToggle').className = 'flex-shrink-0 flex items-center gap-1.5 rounded-lg bg-red-50 text-red-600 px-3 py-1.5 font-bold text-xs border border-red-200 hover:bg-red-100 transition';
-       
-       recTimer = setInterval(()=>{
-           seconds++;
-           let m = Math.floor(seconds/60).toString().padStart(2,'0');
-           let s = (seconds%60).toString().padStart(2,'0');
-           document.getElementById('sttTimerCount').textContent = `🎙️ Recording... ${m}:${s}`;
-       }, 1000);
-
-       try {
-           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-           mediaRecorder = new MediaRecorder(stream);
-           audioChunks = [];
-           mediaRecorder.ondataavailable = (e) => { if(e.data.size>0) audioChunks.push(e.data); };
-           mediaRecorder.onstop = async () => {
-               clearInterval(recTimer);
-               st.innerHTML = '⏳ Uploading audio to Groq API...';
-               const blob = new Blob(audioChunks, {type:'audio/webm'});
-               const fd = new FormData(); fd.append('audio', blob, 'x.webm');
-               try {
-                   const r = await fetch('api/speech_to_text.php', {method:'POST', body:fd});
-                   const d = await r.json();
-                   if(d.ok) { rawText += (rawText?' ':'') + d.text; ptext.value = rawText; updateC(); st.classList.add('hidden'); }
-                   else st.innerHTML = '⚠️ STT Error: ' + d.error;
-               } catch(e) { st.innerHTML = 'Network Error reaching Speech API'; }
-               document.getElementById('sttMicToggle').innerHTML = 'Start Recording ▶️';
-               document.getElementById('sttMicToggle').className = 'flex-shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-1.5 font-bold text-xs border border-emerald-200 shadow-sm hover:bg-emerald-100 transition';
-           };
-           mediaRecorder.start();
-       } catch(e) {
-           clearInterval(recTimer);
-           st.innerHTML = '🚫 Mic blocked by browser';
-       }
-    });
-
-    document.getElementById('sttMicToggle').addEventListener('click', () => {
-        if(mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-            mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+if (mainUndoBtn && mainDesc) {
+    mainUndoBtn.addEventListener('click', () => {
+        if (originalMainDesc !== '') {
+            mainDesc.value = originalMainDesc;
+            if (mainAiStatus) {
+                mainAiStatus.textContent = 'Reverted to original text.';
+                mainAiStatus.classList.remove('hidden');
+                setTimeout(() => mainAiStatus.classList.add('hidden'), 3500);
+            }
+            mainUndoBtn.classList.add('hidden');
         }
     });
+}
 
-    document.getElementById('sttTabImproved').addEventListener('click', async () => {
-       if(!ptext.value.trim()) return;
-       document.getElementById('sttTabImproved').className = "w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800";
-       document.getElementById('sttTabRaw').className = "w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50";
-       const rt = ptext.value; ptext.value = '⏳ AI is processing text...';
-       try {
-           const r = await fetch('/api/ai_improve.php', { method:'POST', body:JSON.stringify({raw_text:rt})});
-           const d = await r.json();
-           if(d.ok) { ptext.value = d.improved_text; updateC(); }
-           else ptext.value = "Error: " + d.error;
-       } catch(e) { ptext.value = "Network Error loading AI."; }
+if (mainExpandBtn && mainDesc) {
+    mainExpandBtn.addEventListener('click', () => {
+        mainIsExpanded = !mainIsExpanded;
+        if (mainIsExpanded) {
+            if (mainModalPanel) {
+                mainModalPanel.style.width = '800px';
+                mainModalPanel.style.maxWidth = '95vw';
+            }
+            mainDesc.style.height = 'calc(65vh - 180px)';
+            mainExpandBtn.textContent = 'Collapse';
+        } else {
+            if (mainModalPanel) {
+                mainModalPanel.style.width = '';
+                mainModalPanel.style.maxWidth = '';
+            }
+            mainDesc.style.height = '';
+            mainExpandBtn.textContent = 'Expand';
+        }
+    });
+}
+
+if (mainAiBtn && mainDesc && mainAiStatus) {
+    mainAiBtn.addEventListener('click', async () => {
+        const raw = mainDesc.value.trim();
+        if (!raw) {
+            alert('Please type a description first before AI can improve it.');
+            return;
+        }
+
+        originalMainDesc = raw;
+        mainAiBtn.disabled = true;
+        mainAiBtn.style.opacity = '0.5';
+        mainAiStatus.classList.remove('hidden');
+        mainAiStatus.textContent = 'AI is rewriting your text...';
+
+        try {
+            const resp = await fetch('/api/ai_improve.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ raw_text: raw, csrf_token: window.CSRF_TOKEN || '' })
+            });
+            const data = await resp.json();
+            if (data.ok) {
+                mainDesc.value = data.improved_text;
+                mainAiStatus.textContent = 'Professionally improved.';
+                setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
+                if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
+            } else {
+                mainAiStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
+            }
+        } catch (e) {
+            mainAiStatus.textContent = 'Network error.';
+        }
+
+        mainAiBtn.disabled = false;
+        mainAiBtn.style.opacity = '1';
+    });
+}
+
+// Speech-to-Text: Reused Create Event flow
+(function () {
+    var sttBtn = document.getElementById('sttBtn');
+    var textarea = document.getElementById('description');
+    var previewModal = document.getElementById('sttPreviewModal');
+    var previewText = document.getElementById('sttPreviewText');
+    var tabRaw = document.getElementById('sttTabRaw');
+    var tabImproved = document.getElementById('sttTabImproved');
+    var charCount = document.getElementById('sttCharCount');
+    var wordCount = document.getElementById('sttWordCount');
+    var modalStatus = document.getElementById('sttModalStatus');
+    var micToggleBtn = document.getElementById('sttMicToggle');
+    var btnAppend = document.getElementById('sttPreviewAppend');
+    var btnReplace = document.getElementById('sttPreviewReplace');
+    var spectrum = document.getElementById('sttSpectrumEffect');
+
+    if (!sttBtn || !textarea || !previewModal) return;
+
+    function openModal(el) {
+      el.classList.remove('opacity-0', 'pointer-events-none');
+      sttContent.classList.remove('scale-95');
+      sttContent.classList.add('scale-100');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeModal(el) {
+      el.classList.add('opacity-0', 'pointer-events-none');
+      sttContent.classList.remove('scale-100');
+      sttContent.classList.add('scale-95');
+      document.body.style.overflow = '';
+    }
+    function setRawTab() {
+      tabRaw.className = "w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800 border border-zinc-200";
+      tabImproved.className = "w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50 border border-transparent";
+    }
+    function setImprovedTab() {
+      tabImproved.className = "w-1/2 py-2 rounded-lg font-bold text-xs text-orange-700 bg-orange-50 border border-orange-200";
+      tabRaw.className = "w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50 border border-transparent";
+    }
+    function updateCounts() {
+      var v = previewText.value;
+      charCount.textContent = v.length + ' chars';
+      var w = v.trim().split(/\s+/).filter(function(x){ return x.length > 0; });
+      wordCount.textContent = w.length + ' word' + (w.length !== 1 ? 's' : '');
+    }
+    function formatTime(sec) {
+      var m = Math.floor(sec / 60).toString().padStart(2, '0');
+      var s = (sec % 60).toString().padStart(2, '0');
+      return m + ':' + s;
+    }
+
+    var isRecording = false;
+    var rawTranscript = '';
+    var improvedTranscript = '';
+    var activeTab = 'raw';
+    var mediaRecorder = null;
+    var audioChunks = [];
+    var recordingTimer = null;
+    var recordingSeconds = 0;
+
+    previewText.addEventListener('input', function() {
+      if (activeTab === 'raw') {
+        rawTranscript = previewText.value;
+        improvedTranscript = '';
+      } else {
+        improvedTranscript = previewText.value;
+      }
+      updateCounts();
     });
 
-    document.getElementById('sttTabRaw').addEventListener('click', () => {
-       document.getElementById('sttTabRaw').className = "w-1/2 py-2 rounded-lg font-bold text-xs bg-zinc-100 text-zinc-800";
-       document.getElementById('sttTabImproved').className = "w-1/2 py-2 rounded-lg font-bold text-xs text-zinc-500 hover:bg-zinc-50";
-       ptext.value = rawText; updateC();
+    tabRaw.addEventListener('click', function() {
+      if (isRecording) return;
+      activeTab = 'raw';
+      setRawTab();
+      previewText.value = rawTranscript;
+      updateCounts();
     });
 
-    document.getElementById('sttPreviewReplace').addEventListener('click', () => {
-        document.getElementById('description').value = ptext.value;
-        closeSttModal();
-    });
-    document.getElementById('sttPreviewAppend').addEventListener('click', () => {
-        document.getElementById('description').value += " " + ptext.value;
-        closeSttModal();
+    tabImproved.addEventListener('click', async function() {
+      if (isRecording) return;
+      setImprovedTab();
+      if (activeTab === 'improved') return;
+      activeTab = 'improved';
+
+      if (improvedTranscript) {
+        previewText.value = improvedTranscript;
+        updateCounts();
+        return;
+      }
+
+      var currentRaw = rawTranscript.trim();
+      if (!currentRaw) {
+        previewText.value = '';
+        updateCounts();
+        return;
+      }
+
+      previewText.value = '⏳ AI is processing and formatting your text... Please wait.';
+      previewText.readOnly = true;
+      btnAppend.disabled = true; btnAppend.style.opacity = '0.5';
+      btnReplace.disabled = true; btnReplace.style.opacity = '0.5';
+
+      try {
+        var res = await fetch('api/ai_improve.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw_text: currentRaw, csrf_token: window.CSRF_TOKEN || "" })
+        });
+        var data = await res.json();
+        if (data.ok) {
+          improvedTranscript = data.improved_text;
+          if (activeTab === 'improved') previewText.value = improvedTranscript;
+        } else {
+          improvedTranscript = '';
+          if (activeTab === 'improved') previewText.value = '⚠️ Error formatting text:\n' + data.error;
+        }
+      } catch (err) {
+        improvedTranscript = '';
+        if (activeTab === 'improved') previewText.value = '⚠️ Network error trying to connect to the backend API.';
+      }
+
+      previewText.readOnly = false;
+      btnAppend.disabled = false; btnAppend.style.opacity = '1';
+      btnReplace.disabled = false; btnReplace.style.opacity = '1';
+      updateCounts();
     });
 
+    function finalizeStop() {
+      isRecording = false;
+      if (recordingTimer) clearInterval(recordingTimer);
+
+      micToggleBtn.innerHTML = '▶ Resume Recording';
+      micToggleBtn.className = 'flex items-center gap-1.5 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-1.5 font-medium border border-emerald-200 hover:bg-emerald-100 transition';
+
+      previewText.readOnly = false;
+      previewText.classList.remove('hidden');
+      if (spectrum) {
+        spectrum.classList.add('hidden');
+        spectrum.classList.remove('flex');
+      }
+
+      modalStatus.classList.add('hidden');
+      modalStatus.classList.remove('flex');
+      tabImproved.style.opacity = '1';
+      tabImproved.style.pointerEvents = 'auto';
+      btnAppend.disabled = false; btnAppend.style.opacity = '1';
+      btnReplace.disabled = false; btnReplace.style.opacity = '1';
+      improvedTranscript = '';
+      updateCounts();
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(function(t){ t.stop(); });
+      } else {
+        finalizeStop();
+      }
+    }
+
+    async function startRecording(resume) {
+      if (!resume) {
+        rawTranscript = '';
+      }
+      activeTab = 'raw';
+      setRawTab();
+      isRecording = true;
+
+      micToggleBtn.innerHTML = 'Stop Recording ⏹';
+      micToggleBtn.className = 'flex items-center gap-1.5 rounded-lg bg-red-50 text-red-600 px-3 py-1.5 font-medium border border-red-200 hover:bg-red-100 transition';
+
+      tabImproved.style.opacity = '0.5';
+      tabImproved.style.pointerEvents = 'none';
+      previewText.readOnly = true;
+      if (!resume) previewText.value = '';
+      previewText.classList.add('hidden');
+      if (spectrum) {
+        spectrum.classList.remove('hidden');
+        spectrum.classList.add('flex');
+      }
+
+      recordingSeconds = 0;
+      modalStatus.classList.remove('hidden');
+      modalStatus.classList.add('flex');
+      modalStatus.innerHTML = '<span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span></span> <span id="sttTimer">🎙️ Recording... 00:00</span>';
+      recordingTimer = setInterval(function() {
+        recordingSeconds++;
+        var st = document.getElementById('sttTimer');
+        if (st) st.textContent = '🎙️ Recording... ' + formatTime(recordingSeconds);
+      }, 1000);
+
+      btnAppend.disabled = true; btnAppend.style.opacity = '0.5';
+      btnReplace.disabled = true; btnReplace.style.opacity = '0.5';
+      openModal(previewModal);
+      updateCounts();
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = function(e) {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+        mediaRecorder.onstop = async function() {
+          clearInterval(recordingTimer);
+          modalStatus.innerHTML = '⏳ Uploading and processing audio... Please wait';
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'audio.webm');
+          formData.append('csrf_token', window.CSRF_TOKEN || '');
+          try {
+            const res = await fetch('api/speech_to_text.php', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.ok) {
+              rawTranscript += (rawTranscript ? ' ' : '') + data.text;
+              previewText.value = rawTranscript;
+            } else {
+              previewText.value = rawTranscript + '\n\n⚠️ STT Error:\n' + data.error;
+            }
+          } catch (err) {
+            previewText.value = rawTranscript + '\n\n⚠️ Network Error trying to reach the Speech API server.';
+          }
+          finalizeStop();
+        };
+        mediaRecorder.start();
+      } catch (err) {
+        clearInterval(recordingTimer);
+        modalStatus.textContent = '🚫 Mic blocked or none found — allow access in browser';
+        finalizeStop();
+      }
+    }
+
+    function hideModal() {
+      if (isRecording) stopRecording();
+      closeModal(previewModal);
+    }
+
+    document.getElementById('sttPreviewClose').addEventListener('click', hideModal);
+    document.getElementById('sttPreviewDiscard').addEventListener('click', hideModal);
+    document.getElementById('sttBackdrop').addEventListener('click', hideModal);
+
+    btnReplace.addEventListener('click', function() {
+      textarea.value = previewText.value;
+      hideModal();
+    });
+    btnAppend.addEventListener('click', function() {
+      var cur = textarea.value;
+      if (cur && !cur.endsWith(' ') && !cur.endsWith('\n')) cur += ' ';
+      textarea.value = cur + previewText.value;
+      hideModal();
+    });
+    micToggleBtn.addEventListener('click', function() {
+      if (isRecording) stopRecording();
+      else startRecording(true);
+    });
+    sttBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      if (isRecording) stopRecording();
+      else startRecording(false);
+    });
 })();
 
 <?php endif; ?>
 
 <?php if ($role === 'student'): ?>
 document.getElementById('btnRegister')?.addEventListener('click', async () => {
-    const btn = document.getElementById('btnRegister');
+  const btn = document.getElementById('btnRegister');
     const msg = document.getElementById('msgStudent');
     btn.disabled = true; msg.textContent = 'Registering...';
     try {
@@ -946,3 +1220,5 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
 </script>
 
 <?php render_footer(); ?>
+
+

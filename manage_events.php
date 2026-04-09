@@ -28,6 +28,27 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
+// Auto-archive events that have already ended.
+try {
+    $nowUtc = gmdate('c');
+    $archiveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?status=eq.published'
+        . '&end_at=lt.' . rawurlencode($nowUtc);
+    $archiveHeaders = [
+        'Accept: application/json',
+        'Content-Type: application/json',
+        'Prefer: return=minimal',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $archivePayload = json_encode(['status' => 'archived'], JSON_UNESCAPED_SLASHES);
+    if (is_string($archivePayload)) {
+        supabase_request('PATCH', $archiveUrl, $archiveHeaders, $archivePayload);
+    }
+} catch (Throwable $e) {
+    // Best-effort only; keep page rendering even if auto-archive fails.
+}
+
 $events = [];
 $res = supabase_request('GET', $url, $headers);
 if ($res['ok']) {
@@ -389,6 +410,8 @@ render_header('Manage Events', $user);
               </div>
             </div>
           </div>
+
+
         </div>
 
 <!-- ── Flatpickr (Premium Picker) ── -->
@@ -940,18 +963,6 @@ render_header('Manage Events', $user);
         $eid = (string) ($e['id'] ?? '');
         $createdBy = (string) ($e['created_by'] ?? '');
         $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && ($status === 'pending' || ($status === 'archived' && $isRejected)));
-        $endAt = (string)($e['end_at'] ?? '');
-        $startAtStr = (string)($e['start_at'] ?? '');
-        
-        // Auto-expire events if their START DATE has already passed
-        // This ensures events are marked as expired once they begin, preventing late RSVPs.
-        if ($status !== 'archived' && $startAtStr !== '') {
-            try {
-                if (new DateTimeImmutable($startAtStr) < new DateTimeImmutable()) {
-                    $status = 'expired';
-                }
-            } catch (Throwable $ex) {}
-        }
 
         $statusConfig = match($status) {
             'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-l-emerald-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
@@ -1055,7 +1066,7 @@ render_header('Manage Events', $user);
               
               <?php if ($status === 'approved'): ?>
                 <button class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
-                        data-id="<?= htmlspecialchars($eid) ?>" data-status="draft">Publish</button>
+                        data-id="<?= htmlspecialchars($eid) ?>" data-status="published">Publish</button>
               <?php endif; ?>
 
               <?php if ($status !== 'pending'): ?>
@@ -1074,6 +1085,7 @@ render_header('Manage Events', $user);
                       data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                       data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
                       data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+                      data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
               >View/Edit</button>
             <?php endif; ?>
 
@@ -1227,6 +1239,7 @@ render_header('Manage Events', $user);
     document.getElementById('end_at_local').value = '';
     document.getElementById('start_at_batch2').value = '';
     document.getElementById('end_at_batch2').value = '';
+
     document.getElementById('formMsg').textContent = '';
     document.getElementById('modalTitle').textContent = 'Create Event';
     document.getElementById('modalSubtitle').textContent = 'Fill in the details below';
@@ -1321,6 +1334,7 @@ render_header('Manage Events', $user);
       if (document.getElementById('event_type')) document.getElementById('event_type').value = btn.dataset.event_type || 'Event';
       if (document.getElementById('event_for')) document.getElementById('event_for').value = btn.dataset.event_for || 'All';
       if (document.getElementById('grace_time')) document.getElementById('grace_time').value = btn.dataset.grace_time || '15';
+
       // Load dates into Flatpickr
       startFp.setDate(btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : null);
       endFp.setDate(btn.dataset.end_at ? toLocalInput(btn.dataset.end_at) : null);
@@ -1550,6 +1564,7 @@ render_header('Manage Events', $user);
     const event_for = document.getElementById('event_for') ? document.getElementById('event_for').value : 'All';
     const grace_time = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
 
+
     // Check batches
     const isDoubleBatch = (mode === 'create' && document.getElementById('chkBatch2')?.checked);
 
@@ -1747,7 +1762,7 @@ render_header('Manage Events', $user);
         var res = await fetch('api/ai_improve.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ raw_text: currentRaw })
+          body: JSON.stringify({ raw_text: currentRaw, csrf_token: window.CSRF_TOKEN || "" })
         });
         
         var data = await res.json();
@@ -1760,7 +1775,7 @@ render_header('Manage Events', $user);
           logDebug("Gemini API Error: " + data.error);
           improvedTranscript = ''; // Don't cache error
           if (activeTab === 'improved') {
-            previewText.value = "⚠️ Error formatting text:\n" + data.error + "\n\n(Did you forget to put your API Key in config.php?)";
+            previewText.value = "⚠️ Error formatting text:\n" + data.error;
           }
         }
       } catch (err) {
@@ -1873,6 +1888,7 @@ render_header('Manage Events', $user);
               const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
               const formData = new FormData();
               formData.append('audio', audioBlob, 'audio.webm');
+              formData.append('csrf_token', window.CSRF_TOKEN || '');
               
               try {
                   const res = await fetch('api/speech_to_text.php', { method: 'POST', body: formData });
@@ -2052,7 +2068,7 @@ render_header('Manage Events', $user);
                 const res = await fetch('api/ai_improve.php', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_text: raw }) 
+                    body: JSON.stringify({ raw_text: raw, csrf_token: window.CSRF_TOKEN || "" }) 
                 });
                 const json = await res.json();
                 if (json.ok) {

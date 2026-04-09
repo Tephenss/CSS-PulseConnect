@@ -24,6 +24,7 @@ $eventFor = isset($data['event_for']) ? clean_string((string) $data['event_for']
 $graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_time']) : '15';
 $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 
+
 if ($title === '' || mb_strlen($title) > 150) {
     json_response(['ok' => false, 'error' => 'Invalid title'], 400);
 }
@@ -56,6 +57,7 @@ $payload = [
     'event_for' => $eventFor,
     'grace_time' => $graceTime,
     'event_span' => $eventSpan,
+
 ];
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at';

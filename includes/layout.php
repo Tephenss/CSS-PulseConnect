@@ -341,7 +341,7 @@ function render_footer(): void
 
     // Footer
     echo '<footer class="border-t border-zinc-200 px-5 lg:px-8 py-4">';
-    echo '  <div class="flex items-center justify-between text-xs text-zinc-500">';
+    echo '  <div class="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-zinc-500 pr-16 sm:pr-24">';
     echo '    <span>© ' . date('Y') . ' PulseCONNECT</span>';
     echo '    <span>Event Management System</span>';
     echo '  </div>';

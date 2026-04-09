@@ -1,79 +1,71 @@
 <?php
-require_once '../includes/supabase.php';
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+declare(strict_types=1);
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
+session_start();
+
+require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../includes/supabase.php';
+require_once __DIR__ . '/../includes/json.php';
+require_once __DIR__ . '/../includes/csrf.php';
+
+$data = require_post_json();
+require_csrf_from_json($data);
+
+$userId = isset($_SESSION['user']['id']) ? (string) $_SESSION['user']['id'] : '';
+if ($userId === '') {
+    json_response(['ok' => false, 'error' => 'Unauthorized. Please login.'], 401);
 }
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    echo json_encode(['ok' => false, 'error' => 'Method not allowed.']);
-    exit;
+$oldPassword = isset($data['current_password']) ? (string) $data['current_password'] : '';
+$newPassword = isset($data['new_password']) ? (string) $data['new_password'] : '';
+if ($oldPassword === '' || $newPassword === '') {
+    json_response(['ok' => false, 'error' => 'Missing required password fields.'], 400);
 }
 
-$data = json_decode(file_get_contents('php://input'), true);
-$userId = $data['user_id'] ?? null;
-$oldPassword = $data['old_password'] ?? '';
-$newPassword = $data['new_password'] ?? '';
-
-if (!$userId || !$oldPassword || !$newPassword) {
-    echo json_encode(['ok' => false, 'error' => 'Missing required fields.']);
-    exit;
-}
-
-// 1. Fetch user to verify old password
-require_once '../config.php';
-$url = SUPABASE_URL . '/rest/v1/users?id=eq.' . urlencode($userId);
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?id=eq.' . rawurlencode($userId) . '&select=id,password';
 $headers = [
+    'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
 $userQuery = supabase_request('GET', $url, $headers);
 if (!$userQuery['ok']) {
-    echo json_encode(['ok' => false, 'error' => 'User not found.']);
-    exit;
-}
-$usersData = json_decode($userQuery['body'], true);
-if (empty($usersData)) {
-    echo json_encode(['ok' => false, 'error' => 'User not found.']);
-    exit;
+    json_response([
+        'ok' => false,
+        'error' => build_error($userQuery['body'] ?? null, (int) ($userQuery['status'] ?? 0), $userQuery['error'] ?? null, 'User lookup failed'),
+    ], 500);
 }
 
-$user = $usersData[0];
-$storedHash = $user['password'] ?? '';
-
-// 2. Verify old password
-if (!password_verify($oldPassword, $storedHash)) {
-    echo json_encode(['ok' => false, 'error' => 'Incorrect old password.']);
-    exit;
+$usersData = json_decode((string) $userQuery['body'], true);
+$user = (is_array($usersData) && isset($usersData[0]) && is_array($usersData[0])) ? $usersData[0] : null;
+if (!is_array($user)) {
+    json_response(['ok' => false, 'error' => 'User not found.'], 404);
 }
 
-// 3. Hash new password
+$storedHash = isset($user['password']) ? (string) $user['password'] : '';
+if ($storedHash === '' || !password_verify($oldPassword, $storedHash)) {
+    json_response(['ok' => false, 'error' => 'Incorrect current password.'], 400);
+}
+
 $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
-
-// 4. Update the password
-$updateUrl = SUPABASE_URL . '/rest/v1/users?id=eq.' . urlencode($userId);
+$updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?id=eq.' . rawurlencode($userId);
 $updateHeaders = [
+    'Content-Type: application/json',
+    'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
-    'Content-Type: application/json',
-    'Prefer: return=minimal'
+    'Prefer: return=minimal',
 ];
-$updatePayload = [
-    'password' => $newHash
-];
+$updatePayload = ['password' => $newHash];
 
-$updateResult = supabase_request('PATCH', $updateUrl, $updateHeaders, json_encode($updatePayload));
-
+$updateResult = supabase_request('PATCH', $updateUrl, $updateHeaders, json_encode($updatePayload, JSON_UNESCAPED_SLASHES));
 if (!$updateResult['ok']) {
-    echo json_encode(['ok' => false, 'error' => 'Failed to update database.']);
-    exit;
+    json_response([
+        'ok' => false,
+        'error' => build_error($updateResult['body'] ?? null, (int) ($updateResult['status'] ?? 0), $updateResult['error'] ?? null, 'Failed to update database.'),
+    ], 500);
 }
 
-// 5. Success
-echo json_encode(['ok' => true]);
+// Keep legacy `success` field for existing frontend checks while standardizing on `ok`.
+json_response(['ok' => true, 'success' => true], 200);

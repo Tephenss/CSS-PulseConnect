@@ -46,6 +46,7 @@ if ($fetchRes['ok']) {
     $rows = json_decode((string)$fetchRes['body'], true);
     $existingEvent = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
 }
+$previousStatus = is_array($existingEvent) ? (string) ($existingEvent['status'] ?? '') : '';
 
 if (in_array($status, ['draft', 'archived'], true) && !empty($rejectionReason) && $existingEvent) {
     // Prepend the reason to description for persistence
@@ -64,10 +65,17 @@ if (!$res['ok']) {
 $rows = json_decode((string) $res['body'], true);
 $event = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
 
-// --- TEACHER NOTIFICATION (Approval or Rejection) ---
-if ($event && in_array($status, ['approved', 'draft', 'archived'], true)) {
+// --- TEACHER NOTIFICATION (Approval or explicit rejection only) ---
+$notifyTeacher = false;
+if ($status === 'approved') {
+    $notifyTeacher = true;
+} elseif (in_array($status, ['draft', 'archived'], true) && trim($rejectionReason) !== '') {
+    $notifyTeacher = true;
+}
+
+if ($event && $notifyTeacher) {
     require_once __DIR__ . '/../includes/fcm.php';
-    
+
     $teacherId = $event['created_by'] ?? null;
     if ($teacherId) {
         // Fetch teacher's FCM tokens
@@ -75,39 +83,34 @@ if ($event && in_array($status, ['approved', 'draft', 'archived'], true)) {
             rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=eq.' . rawurlencode((string)$teacherId),
             ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
         );
-        
+
         if ($tokensRes['ok']) {
             $tokenRows = json_decode((string)$tokensRes['body'], true);
             $teacherTokens = array_column(is_array($tokenRows) ? $tokenRows : [], 'token');
-            
+
             if (!empty($teacherTokens)) {
-                $eventTitle = $event['title'] ?? 'your event proposal';
+                $eventTitle = (string) ($event['title'] ?? 'your event proposal');
                 if ($status === 'approved') {
-                    $notifTitle = 'Proposal Approved! 🎉';
+                    $notifTitle = 'Proposal Approved';
                     $notifBody = "Great news! Your event \"$eventTitle\" has been approved by the admin.";
                 } else {
-                    // status is 'draft' or 'archived' (Rejection)
                     $notifTitle = 'Proposal Review Required';
                     $notifBody = "The admin has requested changes for \"$eventTitle\".";
                     if (!empty($rejectionReason)) {
                         $notifBody .= " Reason: $rejectionReason";
                     }
                 }
-                // Send push notification
                 send_fcm_notification($teacherTokens, $notifTitle, $notifBody, ['event_id' => $eventId, 'type' => 'proposal_update']);
             }
         }
     }
 }
 
-
-// --- STUDENT NOTIFICATION (Existing logic for 'published') ---
-if ($event && $status === 'published') {
+// --- STUDENT NOTIFICATIONS ---
+if ($event && in_array($status, ['published', 'draft'], true)) {
     require_once __DIR__ . '/../includes/fcm.php';
-    // ... existing student notification code ...
 
-
-    // Fetch the full event details to know the target audience
+    // Fetch event details to determine target audience
     $eventDetailsRes = supabase_request('GET',
         rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,title,event_for',
         ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
@@ -118,14 +121,12 @@ if ($event && $status === 'published') {
         $eventDetails = is_array($evRows) && isset($evRows[0]) ? $evRows[0] : null;
     }
 
-    $eventFor = $eventDetails['event_for'] ?? 'All'; // e.g. "All", or a section_id UUID
+    $eventFor = $eventDetails['event_for'] ?? 'All';
 
     // Build user filter based on event_for
-    // First, get the matching user IDs then fetch their tokens
     $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id&role=eq.student';
     if ($eventFor !== 'All' && $eventFor !== '' && $eventFor !== 'all') {
-        // It's a section_id — only notify students in that section
-        $usersUrl .= '&section_id=eq.' . rawurlencode($eventFor);
+        $usersUrl .= '&section_id=eq.' . rawurlencode((string) $eventFor);
     }
 
     $usersRes = supabase_request('GET', $usersUrl, [
@@ -139,10 +140,8 @@ if ($event && $status === 'published') {
         $targetUserIds = array_column(is_array($userRows) ? $userRows : [], 'id');
     }
 
-    // Now fetch FCM tokens only for those users
     $deviceTokens = [];
     if (!empty($targetUserIds)) {
-        // Supabase IN filter: user_id=in.(id1,id2,...)
         $inList = '(' . implode(',', array_map('rawurlencode', $targetUserIds)) . ')';
         $tokensRes = supabase_request('GET',
             rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
@@ -155,11 +154,44 @@ if ($event && $status === 'published') {
     }
 
     if (!empty($deviceTokens)) {
-        $notifTitle = 'PulseCONNECT: Registration Open!';
-        $notifBody = ($event['title'] ?? 'Event') . ' is now open for registration.';
-        send_fcm_notification($deviceTokens, $notifTitle, $notifBody, ['event_id' => $eventId]);
+        $eventTitle = (string) ($event['title'] ?? 'Event');
+        $notifTitle = '';
+        $notifBody = '';
+        $notifType = '';
+
+        if ($status === 'published') {
+            if ($previousStatus === 'draft') {
+                // Draft -> Published = admin explicitly opened registration.
+                $notifTitle = 'Registration Open!';
+                $notifBody = "Registration for \"$eventTitle\" is now open.";
+                $notifType = 'reg_open';
+            } elseif (in_array($previousStatus, ['approved', 'pending'], true)) {
+                // Backward-compatible path if older clients still publish directly.
+                $notifTitle = 'New Event Published';
+                $notifBody = "\"$eventTitle\" has been published.";
+                $notifType = 'event_published';
+            }
+        } elseif ($status === 'draft') {
+            if (in_array($previousStatus, ['approved', 'pending'], true)) {
+                // First publish flow: published announcement, registration remains off.
+                $notifTitle = 'New Event Published';
+                $notifBody = "\"$eventTitle\" has been published. Registration opens soon.";
+                $notifType = 'event_published';
+            } elseif ($previousStatus === 'published') {
+                // Published -> Draft = admin closed registration.
+                $notifTitle = 'Registration Closed';
+                $notifBody = "Registration for \"$eventTitle\" is now closed.";
+                $notifType = 'reg_closed';
+            }
+        }
+
+        if ($notifTitle !== '' && $notifType !== '') {
+            send_fcm_notification($deviceTokens, $notifTitle, $notifBody, ['event_id' => $eventId, 'type' => $notifType]);
+        }
     }
 }
 
 json_response(['ok' => true, 'event' => $event], 200);
+
+
 

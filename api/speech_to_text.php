@@ -3,27 +3,29 @@ declare(strict_types=1);
 
 session_start();
 require_once __DIR__ . '/../config.php';
-require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/json.php';
+require_once __DIR__ . '/../includes/csrf.php';
 
-// Ensure user is logged in
-$user = require_login();
-
-header('Content-Type: application/json');
+// Ensure user is logged in (JSON API contract; avoid HTML redirects).
+$user = (isset($_SESSION['user']) && is_array($_SESSION['user'])) ? $_SESSION['user'] : null;
+if (!is_array($user)) {
+    json_response(['ok' => false, 'error' => 'Unauthorized. Please login.'], 401);
+}
 
 // Only allow POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    echo json_encode(['ok' => false, 'error' => 'Method not allowed']);
-    exit;
+    json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
 }
 
+$csrfToken = isset($_POST['csrf_token']) ? (string) $_POST['csrf_token'] : null;
+csrf_validate($csrfToken);
+
 if (!isset($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
-    echo json_encode(['ok' => false, 'error' => 'Audio file missing or upload error.']);
-    exit;
+    json_response(['ok' => false, 'error' => 'Audio file missing or upload error.'], 400);
 }
 
 if (!defined('GROQ_API_KEY') || GROQ_API_KEY === 'YOUR_GROQ_API_KEY_HERE') {
-    echo json_encode(['ok' => false, 'error' => 'GROQ_API_KEY is missing or just a placeholder in config.php. Please add your real key.']);
-    exit;
+    json_response(['ok' => false, 'error' => 'GROQ_API_KEY is missing or just a placeholder in config.php. Please add your real key.'], 500);
 }
 
 // Prepare CURLFile to send audio Blob directly to Groq Whisper
@@ -37,6 +39,9 @@ $postData = [
 ];
 
 $ch = curl_init('https://api.groq.com/openai/v1/audio/transcriptions');
+if ($ch === false) {
+    json_response(['ok' => false, 'error' => 'Failed to initialize Speech API request.'], 500);
+}
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
@@ -55,21 +60,19 @@ $curlError = curl_error($ch);
 curl_close($ch);
 
 if ($curlError) {
-    echo json_encode(['ok' => false, 'error' => 'cURL Error connecting to Groq: ' . $curlError]);
-    exit;
+    json_response(['ok' => false, 'error' => 'cURL Error connecting to Groq: ' . $curlError], 502);
 }
 
 if ($httpCode !== 200) {
     $errObj = json_decode((string)$response, true);
     $msg = $errObj['error']['message'] ?? $response;
-    echo json_encode(['ok' => false, 'error' => 'Groq Server API Error (' . $httpCode . '): ' . $msg]);
-    exit;
+    json_response(['ok' => false, 'error' => 'Groq Server API Error (' . $httpCode . '): ' . $msg], 502);
 }
 
 $jsonRes = json_decode((string)$response, true);
 $transcription = $jsonRes['text'] ?? '';
 
-echo json_encode([
+json_response([
     'ok' => true,
     'text' => trim($transcription)
-]);
+], 200);

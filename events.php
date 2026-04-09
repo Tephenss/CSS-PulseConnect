@@ -7,6 +7,7 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/helpers.php';
 
 $user = require_role(['admin']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -20,6 +21,27 @@ $headers = [
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
+
+// Auto-archive events that have already ended.
+try {
+    $nowUtc = gmdate('c');
+    $archiveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?status=eq.published'
+        . '&end_at=lt.' . rawurlencode($nowUtc);
+    $archiveHeaders = [
+        'Accept: application/json',
+        'Content-Type: application/json',
+        'Prefer: return=minimal',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $archivePayload = json_encode(['status' => 'archived'], JSON_UNESCAPED_SLASHES);
+    if (is_string($archivePayload)) {
+        supabase_request('PATCH', $archiveUrl, $archiveHeaders, $archivePayload);
+    }
+} catch (Throwable $e) {
+    // Best-effort only; keep page rendering even if auto-archive fails.
+}
 
 $events = [];
 $res = supabase_request('GET', $url, $headers);
@@ -52,15 +74,6 @@ render_header('Events', $user);
   <?php foreach ($events as $e): ?>
     <?php
       $status = (string)($e['status'] ?? '');
-      $startAtStr = (string)($e['start_at'] ?? '');
-      
-      if ($status !== 'archived' && $startAtStr !== '') {
-          try {
-              if (new DateTimeImmutable($startAtStr) < new DateTimeImmutable()) {
-                  $status = 'expired';
-              }
-          } catch (Throwable $ex) {}
-      }
 
       $statusConfig = match($status) {
           'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-b-emerald-500'],
@@ -70,9 +83,9 @@ render_header('Events', $user);
           default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-b-zinc-400'],
       };
 
-      // Format Date properly
+      // Format date in local timezone for consistency with event details.
       $rawDate = (string) ($e['start_at'] ?? '');
-      $formattedDate = $rawDate ? (new DateTimeImmutable($rawDate))->format('M d, Y · g:i A') : 'TBA';
+      $formattedDate = $rawDate !== '' ? format_date_local($rawDate, 'M d, Y - g:i A') : 'TBA';
     ?>
     <a href="/event_view.php?id=<?= htmlspecialchars((string) ($e['id'] ?? '')) ?>"
        class="group relative block rounded-2xl border border-zinc-200 bg-white p-6 border-b-[3px] shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 <?= $statusConfig['accent'] ?>">

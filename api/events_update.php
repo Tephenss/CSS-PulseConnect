@@ -50,6 +50,7 @@ if (isset($data['grace_time'])) {
     if ($gt !== '') $fields['grace_time'] = $gt;
 }
 
+
 if (count($fields) === 0) {
     json_response(['ok' => false, 'error' => 'No fields to update'], 400);
 }

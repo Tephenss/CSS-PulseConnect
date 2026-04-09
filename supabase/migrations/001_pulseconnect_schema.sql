@@ -204,3 +204,22 @@ add column if not exists section_id uuid references public.sections(id) on delet
 -- Add contact number to users
 alter table public.users
 add column if not exists contact_number text;
+
+-- NOTIFICATION SYNC TRACKING
+-- Tracks individual notifications clicked by the user
+create table if not exists public.user_notification_reads (
+    user_id uuid not null references public.users(id) on delete cascade,
+    notification_id text not null,
+    read_at timestamptz not null default now(),
+    primary key (user_id, notification_id)
+);
+
+-- Tracks the "Mark All As Read" horizon timestamp
+create table if not exists public.user_notification_watermarks (
+    user_id uuid primary key references public.users(id) on delete cascade,
+    last_read_at timestamptz not null default now()
+);
+
+-- Ensure anon access (since app uses broad grants temporarily)
+grant all privileges on table public.user_notification_reads to anon, authenticated;
+grant all privileges on table public.user_notification_watermarks to anon, authenticated;

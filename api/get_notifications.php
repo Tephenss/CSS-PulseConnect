@@ -8,6 +8,10 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
+}
+
 // Only admins can view the proposal notifications for now.
 $user = require_role(['admin']);
 

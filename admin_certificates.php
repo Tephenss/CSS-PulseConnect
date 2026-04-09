@@ -52,60 +52,6 @@ render_header('Certificates Library', $user);
 </div>
 
 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 pb-12">
-    <!-- Built-in System Templates (Presets map to manual Page 40) -->
-    <div class="group relative bg-white rounded-2xl border border-zinc-200 overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-1 transition-all cursor-pointer" onclick="window.location.href='/certificate_admin.php?preset=summit'">
-        <div class="aspect-[4/3] bg-zinc-100 p-4 flex items-center justify-center relative border-b border-zinc-200">
-             <div class="absolute inset-0 bg-gradient-to-br from-indigo-600 to-blue-900 opacity-[0.85]"></div>
-             <div class="relative z-10 w-full h-full border border-white/20 p-2 flex flex-col items-center justify-center text-center">
-                 <h4 class="font-serif text-white font-bold text-sm tracking-wide mb-2 opacity-90">CERTIFICATE</h4>
-                 <div class="w-16 h-px bg-white/40 mb-2"></div>
-                 <p class="text-[8px] uppercase tracking-widest text-indigo-100 line-clamp-2">CCS Summit 2026 Preset</p>
-             </div>
-        </div>
-        <div class="p-4 bg-white relative">
-             <span class="inline-flex py-0.5 px-2 rounded-full bg-orange-100 text-[10px] font-bold text-orange-700 uppercase tracking-widest leading-none mb-2 border border-orange-200">Preset</span>
-             <h3 class="font-bold text-zinc-900 text-[15px] tracking-tight truncate leading-tight mb-1">CCS Summit 2026</h3>
-             <p class="text-xs text-zinc-500 font-medium">Professional Blueprint</p>
-             
-             <!-- 3-Dot for Presets (Just for UI consistency) -->
-             <div class="absolute bottom-4 right-3 group/menu">
-                <button class="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors" onclick="event.stopPropagation()">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg>
-                </button>
-                <div class="absolute right-0 bottom-full mb-1 w-32 bg-white rounded-xl shadow-[0_4px_20px_-4px_rgba(0,0,0,0.15)] border border-zinc-200 opacity-0 invisible group-hover/menu:opacity-100 group-hover/menu:visible transition-all z-20 py-1">
-                    <button onclick="window.location.href='/certificate_admin.php?preset=summit'" class="w-full text-left px-4 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50 hover:text-orange-600">Open Preset</button>
-                    <button onclick="confirm('Preset hidden from view.') && this.closest('.group').remove()" class="w-full text-left px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50">Hide</button>
-                </div>
-             </div>
-        </div>
-    </div>
-
-    <div class="group relative bg-white rounded-2xl border border-zinc-200 overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-1 transition-all cursor-pointer" onclick="window.location.href='/certificate_admin.php?preset=ga'">
-        <div class="aspect-[4/3] bg-zinc-100 p-4 flex items-center justify-center relative border-b border-zinc-200">
-             <div class="absolute inset-0 bg-gradient-to-br from-orange-400 to-red-600 opacity-90"></div>
-             <div class="relative z-10 w-full h-full border border-white/20 p-2 flex flex-col items-center justify-center text-center">
-                 <h4 class="font-sans text-white font-black text-lg italic tracking-tight mb-2 opacity-95">GA 2026</h4>
-                 <p class="text-[8px] uppercase tracking-widest text-orange-100">General Assembly</p>
-             </div>
-        </div>
-        <div class="p-4 bg-white relative">
-             <span class="inline-flex py-0.5 px-2 rounded-full bg-orange-100 text-[10px] font-bold text-orange-700 uppercase tracking-widest leading-none mb-2 border border-orange-200">Preset</span>
-             <h3 class="font-bold text-zinc-900 text-[15px] tracking-tight truncate leading-tight mb-1">General Assembly</h3>
-             <p class="text-xs text-zinc-500 font-medium">Standard Meeting Format</p>
-             
-             <!-- 3-Dot for Presets -->
-             <div class="absolute bottom-4 right-3 group/menu">
-                <button class="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors" onclick="event.stopPropagation()">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg>
-                </button>
-                <div class="absolute right-0 bottom-full mb-1 w-32 bg-white rounded-xl shadow-[0_4px_20px_-4px_rgba(0,0,0,0.15)] border border-zinc-200 opacity-0 invisible group-hover/menu:opacity-100 group-hover/menu:visible transition-all z-20 py-1">
-                    <button onclick="window.location.href='/certificate_admin.php?preset=ga'" class="w-full text-left px-4 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50 hover:text-orange-600">Open Preset</button>
-                    <button onclick="confirm('Preset hidden from view.') && this.closest('.group').remove()" class="w-full text-left px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50">Hide</button>
-                </div>
-             </div>
-        </div>
-    </div>
-
     <!-- Dynamo Saved Custom Templates from DB -->
     <?php foreach ($templates as $t): ?>
         <?php 
