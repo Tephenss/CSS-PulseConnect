@@ -12,7 +12,7 @@ require_once __DIR__ . '/includes/helpers.php';
 $user = require_role(['admin']);
 $role = (string) ($user['role'] ?? 'admin');
 
-$select = 'select=id,title,description,location,start_at,end_at,status';
+$select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
 $url = $base . '&status=eq.published';
 
@@ -116,6 +116,28 @@ render_header('Events', $user);
               <svg class="w-3.5 h-3.5 text-emerald-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/></svg>
             </div>
             <span class="truncate"><?= htmlspecialchars((string) ($e['location'] ?? 'Location TBA')) ?></span>
+          </div>
+
+          <div class="flex items-center gap-2 pt-3 border-t border-zinc-100 mt-1">
+             <?php
+                 $for = $e['event_for'] ?? 'all';
+                 $targetLabel = 'All Year Levels';
+                 if (strtolower($for) === 'none') $targetLabel = 'No Target';
+                 elseif ((string)$for === '1') $targetLabel = '1st Year';
+                 elseif ((string)$for === '2') $targetLabel = '2nd Year';
+                 elseif ((string)$for === '3') $targetLabel = '3rd Year';
+                 elseif ((string)$for === '4') $targetLabel = '4th Year';
+             ?>
+             <span class="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-1 rounded-md">
+                <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg> 
+                <?= htmlspecialchars($targetLabel) ?>
+             </span>
+             <?php if (!empty($e['event_type'])): ?>
+             <span class="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-1 rounded-md">
+                <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"/><path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z"/></svg>
+                <?= htmlspecialchars($e['event_type']) ?>
+             </span>
+             <?php endif; ?>
           </div>
         </div>
       </div>

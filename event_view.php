@@ -20,7 +20,7 @@ if ($id === '') {
 }
 
 // 1. Fetch Event Document
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,description,location,start_at,end_at,status&'
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,description,location,start_at,end_at,status,event_for,event_type&'
     . 'id=eq.' . rawurlencode($id) . '&limit=1';
 $headers = [
     'Accept: application/json',
@@ -162,6 +162,11 @@ render_header('Event Details', $user);
                     <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
                         Evaluation Questions
                     </a>
+                    <?php if ($role === 'admin'): ?>
+                    <a href="/event_teachers.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                        QR Scanner Access
+                    </a>
+                    <?php endif; ?>
                 </nav>
             </div>
 
@@ -192,11 +197,34 @@ render_header('Event Details', $user);
                         <div class="text-xs text-zinc-500 font-bold mb-1">End Date & Time</div>
                         <div class="text-[15px] font-bold text-zinc-900"><?= htmlspecialchars(format_date_local((string)($event['end_at'] ?? ''), 'F j, Y, g:i A')) ?></div>
                     </div>
-                    <div class="col-span-1 md:col-span-2 rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
+                    <div class="rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
                         <div class="text-xs text-zinc-500 font-bold mb-1">Location / Venue</div>
                         <div class="text-[15px] font-bold text-zinc-900 flex items-center gap-2">
                            <svg class="w-4 h-4 text-orange-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z"/></svg> 
                            <?= htmlspecialchars((string) ($event['location'] ?? 'TBA')) ?>
+                        </div>
+                    </div>
+                    <div class="rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
+                        <div class="text-xs text-zinc-500 font-bold mb-1">Event Type</div>
+                        <div class="text-[15px] font-bold text-zinc-900 flex items-center gap-2">
+                           <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"/><path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z"/></svg>
+                           <?= htmlspecialchars(!empty($event['event_type']) ? $event['event_type'] : 'General Event') ?>
+                        </div>
+                    </div>
+                    <div class="col-span-1 md:col-span-2 rounded-xl bg-zinc-50/50 border border-zinc-200 p-4">
+                        <div class="text-xs text-zinc-500 font-bold mb-1">Target Participants</div>
+                        <div class="text-[15px] font-bold text-zinc-900 flex items-center gap-2">
+                           <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+                           <?php
+                               $for = $event['event_for'] ?? 'all';
+                               $targetLabel = 'All Year Levels';
+                               if (strtolower($for) === 'none') $targetLabel = 'No Target';
+                               elseif ((string)$for === '1') $targetLabel = '1st Year Students';
+                               elseif ((string)$for === '2') $targetLabel = '2nd Year Students';
+                               elseif ((string)$for === '3') $targetLabel = '3rd Year Students';
+                               elseif ((string)$for === '4') $targetLabel = '4th Year Students';
+                               echo htmlspecialchars($targetLabel);
+                           ?>
                         </div>
                     </div>
                  </div>
@@ -1220,5 +1248,3 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
 </script>
 
 <?php render_footer(); ?>
-
-

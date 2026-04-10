@@ -56,59 +56,70 @@ if(!is_array($questions)) $questions = [];
 $analytics = [];
 $totalResponses = 0;
 $totalParticipants = 0;
+$pendingParticipants = 0;
 
 if ($tab === 'feedback') {
-    // 0. Get total participants for this event (for response rate denominator)
-    $partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/participants?select=id&event_id=eq.' . rawurlencode($eventId);
+    // 0. Get participants for this event.
+    $partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?select=student_id&event_id=eq.' . rawurlencode($eventId);
     $partRes = supabase_request('GET', $partUrl, $headers);
     $partRows = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : [];
-    $totalParticipants = is_array($partRows) ? count($partRows) : 0;
+    if (!is_array($partRows)) $partRows = [];
 
-    // 1. Get all evaluations for this event
-    $evalUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluations?select=id&event_id=eq.' . rawurlencode($eventId);
-    $evalRes = supabase_request('GET', $evalUrl, $headers);
-    $evals = $evalRes['ok'] ? json_decode((string) $evalRes['body'], true) : [];
-    if (!is_array($evals)) $evals = [];
-    $totalResponses = count($evals);
-    
-    if ($totalResponses > 0) {
-        $evalIds = array_column($evals, 'id');
-        $idList = implode(',', array_map(function($id) { return '"' . $id . '"'; }, $evalIds));
-        
-        // 2. Fetch all answers for these evaluations
-        $ansUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers?select=question_id,answer_text&evaluation_id=in.(' . urlencode($idList) . ')';
-        $ansRes = supabase_request('GET', $ansUrl, $headers);
-        $answers = $ansRes['ok'] ? json_decode((string) $ansRes['body'], true) : [];
-        if (!is_array($answers)) $answers = [];
-        
-        // 3. Aggregate answers per question
-        foreach ($questions as $q) {
-            $qid = $q['id'];
-            if ($q['field_type'] !== 'rating') continue; // We only graph ratings
-            
-            $dist = ['5' => 0, '4' => 0, '3' => 0, '2' => 0, '1' => 0];
-            $sum = 0;
-            $count = 0;
-            
-            foreach ($answers as $a) {
-                if ($a['question_id'] === $qid) {
-                    $val = intval($a['answer_text']);
-                    if ($val >= 1 && $val <= 5) {
-                        $dist[(string)$val]++;
-                        $sum += $val;
-                        $count++;
-                    }
-                }
-            }
-            
-            $avg = $count > 0 ? round($sum / $count, 1) : 0;
-            $analytics[$qid] = [
-                 'question_text' => $q['question_text'],
-                 'avg' => $avg,
-                 'count' => $count,
-                 'dist' => $dist
-            ];
+    $participantMap = [];
+    foreach ($partRows as $pr) {
+        $sid = (string) ($pr['student_id'] ?? '');
+        if ($sid !== '') {
+            $participantMap[$sid] = true;
         }
+    }
+    $totalParticipants = count($participantMap);
+
+    // 1. Get all submitted answers for this event.
+    $ansUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers?select=student_id,question_id,answer_text&event_id=eq.' . rawurlencode($eventId);
+    $ansRes = supabase_request('GET', $ansUrl, $headers);
+    $answers = $ansRes['ok'] ? json_decode((string) $ansRes['body'], true) : [];
+    if (!is_array($answers)) $answers = [];
+
+    // 2. Compute unique respondents (participants only).
+    $respondentMap = [];
+    foreach ($answers as $a) {
+        $sid = (string) ($a['student_id'] ?? '');
+        if ($sid !== '' && isset($participantMap[$sid])) {
+            $respondentMap[$sid] = true;
+        }
+    }
+    $totalResponses = count($respondentMap);
+    $pendingParticipants = max(0, $totalParticipants - $totalResponses);
+
+    // 3. Aggregate rating answers per question.
+    foreach ($questions as $q) {
+        $qid = (string) ($q['id'] ?? '');
+        if ($qid === '' || (string) ($q['field_type'] ?? '') !== 'rating') continue;
+
+        $dist = ['5' => 0, '4' => 0, '3' => 0, '2' => 0, '1' => 0];
+        $sum = 0;
+        $count = 0;
+
+        foreach ($answers as $a) {
+            $sid = (string) ($a['student_id'] ?? '');
+            if ($sid === '' || !isset($participantMap[$sid])) continue;
+            if ((string) ($a['question_id'] ?? '') !== $qid) continue;
+
+            $val = intval((string) ($a['answer_text'] ?? ''));
+            if ($val >= 1 && $val <= 5) {
+                $dist[(string)$val]++;
+                $sum += $val;
+                $count++;
+            }
+        }
+
+        $avg = $count > 0 ? round($sum / $count, 1) : 0;
+        $analytics[$qid] = [
+             'question_text' => $q['question_text'],
+             'avg' => $avg,
+             'count' => $count,
+             'dist' => $dist
+        ];
     }
 }
 
@@ -145,6 +156,11 @@ render_header('Evaluation Management', $user);
             <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="<?= $tab==='questions' ? 'border-orange-500 text-orange-600 font-bold' : 'border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 font-semibold' ?> whitespace-nowrap border-b-2 py-3 px-1 text-sm transition">
                 Evaluation Questions
             </a>
+            <?php if ($role === 'admin'): ?>
+            <a href="/event_teachers.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                QR Scanner Access
+            </a>
+            <?php endif; ?>
         </nav>
     </div>
 
@@ -262,6 +278,20 @@ render_header('Evaluation Management', $user);
 
     <!-- ═══════════  TAB 2: EVENT FEEDBACK ANALYTICS  ═══════════ -->
     <div class="max-w-4xl mx-auto">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+            <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+                <p class="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Participants</p>
+                <p class="text-2xl font-black text-zinc-900 leading-tight mt-1"><?= $totalParticipants ?></p>
+            </div>
+            <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                <p class="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Answered</p>
+                <p class="text-2xl font-black text-emerald-900 leading-tight mt-1"><?= $totalResponses ?></p>
+            </div>
+            <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                <p class="text-[11px] font-bold uppercase tracking-wider text-amber-700">Pending</p>
+                <p class="text-2xl font-black text-amber-900 leading-tight mt-1"><?= $pendingParticipants ?></p>
+            </div>
+        </div>
         
         <?php if ($totalResponses === 0): ?>
             <div class="rounded-3xl bg-white border border-zinc-200 p-12 text-center shadow-sm">
@@ -269,7 +299,7 @@ render_header('Evaluation Management', $user);
                      <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
                  </div>
                  <h3 class="text-xl font-bold text-zinc-900 mb-1">No Feedback Yet</h3>
-                 <p class="text-sm text-zinc-500">Wait for participants to complete the event and submit their evaluations.</p>
+                 <p class="text-sm text-zinc-500">No student has submitted feedback yet. Use the Answered/Pending indicators above for quick status.</p>
             </div>
         <?php else: ?>
             <div class="flex items-center justify-between mb-8">

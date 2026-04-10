@@ -7,10 +7,20 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/helpers.php';
 
 $user = require_role(['admin']);
 $role = (string) ($user['role'] ?? 'admin');
 $userId = (string) ($user['id'] ?? '');
+$appTz = new DateTimeZone('Asia/Manila');
+$toLocalDt = static function (?string $raw) use ($appTz): ?DateTimeImmutable {
+    if (!$raw) return null;
+    try {
+        return (new DateTimeImmutable($raw))->setTimezone($appTz);
+    } catch (Throwable $e) {
+        return null;
+    }
+};
 
 $eventId = isset($_GET['event_id']) ? (string) $_GET['event_id'] : '';
 if ($eventId === '') {
@@ -46,8 +56,8 @@ if ($role === 'teacher') {
     }
 }
 
-$start = isset($event['start_at']) ? new DateTimeImmutable((string) $event['start_at']) : null;
-$end = isset($event['end_at']) ? new DateTimeImmutable((string) $event['end_at']) : null;
+$start = isset($event['start_at']) ? $toLocalDt((string) $event['start_at']) : null;
+$end = isset($event['end_at']) ? $toLocalDt((string) $event['end_at']) : null;
 
 $days = [];
 $multiDay = false;
@@ -63,7 +73,7 @@ if ($start && $end) {
 
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-    . '?select=id,registered_at,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
+    . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
     . 'tickets(token,attendance(check_in_at,check_out_at,status))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
@@ -97,7 +107,9 @@ foreach ($participants as $r) {
     $checkInAt = $attendance['check_in_at'] ?? null;
     if (!$checkInAt) continue;
     try {
-        $checkDate = (new DateTimeImmutable((string) $checkInAt))->format('Y-m-d');
+        $checkLocal = $toLocalDt((string) $checkInAt);
+        if (!$checkLocal) continue;
+        $checkDate = $checkLocal->format('Y-m-d');
         if (!isset($buckets[$checkDate])) $buckets[$checkDate] = [];
         $buckets[$checkDate][] = $r;
     } catch (Throwable $e) {
@@ -229,8 +241,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             $checkOut = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
             $attStatus = is_array($attendance) ? ($attendance['status'] ?? 'pending') : 'pending';
             
-            if($checkIn) $checkIn = (new DateTimeImmutable($checkIn))->format('m/d/Y h:i A');
-            if($checkOut) $checkOut = (new DateTimeImmutable($checkOut))->format('m/d/Y h:i A');
+            if ($checkIn) {
+                $checkInLocal = $toLocalDt((string) $checkIn);
+                if ($checkInLocal) $checkIn = $checkInLocal->format('m/d/Y h:i A');
+            }
+            if ($checkOut) {
+                $checkOutLocal = $toLocalDt((string) $checkOut);
+                if ($checkOutLocal) $checkOut = $checkOutLocal->format('m/d/Y h:i A');
+            }
             
             $isComp = (strtolower($attStatus) === 'completed');
             $statusStr = $isComp ? 'COMPLETED' : 'PENDING';
@@ -333,14 +351,17 @@ render_header('Participants', $user);
         <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-orange-500 text-orange-600 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-bold">
             Event Participants
         </a>
-        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-            Event Feedback
-        </a>
-        <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-            Evaluation Questions
-        </a>
-    </nav>
-</div>
+            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                Event Feedback
+            </a>
+            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                Evaluation Questions
+            </a>
+            <a href="/event_teachers.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
+                QR Scanner Access
+            </a>
+        </nav>
+    </div>
 
 <?php if ($multiDay): ?>
   <div class="mb-6 flex gap-2 flex-wrap bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200 w-full sm:w-fit">
@@ -354,7 +375,7 @@ render_header('Participants', $user);
 <?php endif; ?>
 
 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
-  <div class="flex items-center gap-4">
+  <div class="flex flex-wrap items-center gap-3">
     <h3 class="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">
        <div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center">
          <svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
@@ -422,11 +443,17 @@ render_header('Participants', $user);
         // Format times
         $checkInFormat = '—';
         if ($checkInRaw) {
-           try { $checkInFormat = (new DateTimeImmutable($checkInRaw))->format('M d, g:i A'); } catch (Throwable $e) {}
+           try {
+               $checkInLocal = $toLocalDt((string) $checkInRaw);
+               if ($checkInLocal) $checkInFormat = $checkInLocal->format('M d, g:i A');
+           } catch (Throwable $e) {}
         }
         $checkOutFormat = '—';
         if ($checkOutRaw) {
-           try { $checkOutFormat = (new DateTimeImmutable($checkOutRaw))->format('M d, g:i A'); } catch (Throwable $e) {}
+           try {
+               $checkOutLocal = $toLocalDt((string) $checkOutRaw);
+               if ($checkOutLocal) $checkOutFormat = $checkOutLocal->format('M d, g:i A');
+           } catch (Throwable $e) {}
         }
 
         $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
@@ -501,9 +528,14 @@ render_header('Participants', $user);
            </div>
             
            <?php if ($role === 'admin'): ?>
-              <button class="btnRemove w-full mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800 hover:bg-red-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
-                 Remove Participant
-              </button>
+              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button class="btnResetAttendance w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
+                  Reset Attendance
+                </button>
+                <button class="btnRemove w-full rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800 hover:bg-red-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
+                  Remove Participant
+                </button>
+              </div>
            <?php endif; ?>
         </div>
       </div>
@@ -513,6 +545,29 @@ render_header('Participants', $user);
 
 <?php if ($role === 'admin'): ?>
 <script>
+  document.querySelectorAll('.btnResetAttendance').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ok = confirm('Reset this participant attendance? This will clear status, check-in, and check-out.');
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        const registration_id = btn.dataset.id;
+        const res = await fetch('/api/participant_attendance_reset.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ registration_id, csrf_token: window.CSRF_TOKEN })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        window.location.reload();
+      } catch (e) {
+        alert(e.message || 'Failed');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
   document.querySelectorAll('.btnRemove').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ok = confirm('Remove this participant?');

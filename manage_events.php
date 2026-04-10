@@ -56,6 +56,19 @@ if ($res['ok']) {
     $events = is_array($decoded) ? $decoded : [];
 }
 
+$teacherAccounts = [];
+if ($role === 'admin') {
+    $teachersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+        . '?select=id,first_name,middle_name,last_name,suffix,email'
+        . '&role=eq.teacher'
+        . '&order=last_name.asc,first_name.asc';
+    $teachersRes = supabase_request('GET', $teachersUrl, $headers);
+    if ($teachersRes['ok']) {
+        $teacherRows = json_decode((string) $teachersRes['body'], true);
+        $teacherAccounts = is_array($teacherRows) ? $teacherRows : [];
+    }
+}
+
 render_header('Manage Events', $user);
 ?>
 
@@ -1065,8 +1078,12 @@ render_header('Manage Events', $user);
               <?php endif; ?>
               
               <?php if ($status === 'approved'): ?>
-                <button class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
-                        data-id="<?= htmlspecialchars($eid) ?>" data-status="published">Publish</button>
+                <button class="btnPublishEvent rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
+                        data-id="<?= htmlspecialchars($eid) ?>"
+                        data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+                        data-created_by="<?= htmlspecialchars($createdBy) ?>">
+                  Publish
+                </button>
               <?php endif; ?>
 
               <?php if ($status !== 'pending'): ?>
@@ -1109,6 +1126,101 @@ render_header('Manage Events', $user);
   </div>
 </div>
 
+<?php if ($role === 'admin'): ?>
+<div id="publishTeacherModal" class="modal-backdrop">
+  <div class="relative w-full max-w-2xl mx-4 bg-white border border-zinc-200 rounded-3xl shadow-xl overflow-hidden scale-95 transition-transform duration-300" id="publishTeacherPanel" style="transform: translateY(100%);">
+    <div class="px-6 py-5 border-b border-zinc-200 bg-zinc-50">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <div class="w-10 h-10 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+            </div>
+            <div>
+              <h3 class="text-xl font-bold text-zinc-900 tracking-tight">Assign Event Teachers</h3>
+              <p class="text-sm text-zinc-500">Pick the teachers included in this event or batch before publishing.</p>
+            </div>
+          </div>
+        </div>
+        <button type="button" id="btnClosePublishTeacherModal" class="p-2 rounded-xl text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="px-6 py-5 max-h-[65vh] overflow-y-auto">
+      <input type="hidden" id="publishTeacherEventId" value="">
+      <input type="hidden" id="publishTeacherCreatorId" value="">
+
+      <div class="rounded-2xl border border-orange-100 bg-orange-50/80 px-4 py-4 mb-5 text-sm text-orange-900">
+        <div class="font-bold mb-1">Publishing <span id="publishTeacherEventTitle">this event</span></div>
+        <div>Selected teachers will be part of this specific event or batch. QR scanner assignment will be managed separately after publishing.</div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div class="text-sm text-zinc-500">
+          <span id="publishTeacherCount" class="font-bold text-zinc-900">0</span> teacher(s) selected
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" id="btnPublishSelectAllTeachers" class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 hover:bg-sky-100 transition">All Teachers</button>
+          <button type="button" id="btnPublishClearTeachers" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-50 transition">Clear</button>
+        </div>
+      </div>
+
+      <?php if (empty($teacherAccounts)): ?>
+        <div class="rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50 px-6 py-12 text-center text-zinc-500">
+          No teacher accounts found yet.
+        </div>
+      <?php else: ?>
+        <div class="space-y-3" id="publishTeacherList">
+          <?php foreach ($teacherAccounts as $teacher): ?>
+            <?php
+              $teacherId = (string) ($teacher['id'] ?? '');
+              $fullName = trim((string) (($teacher['first_name'] ?? '') . ' ' . ($teacher['last_name'] ?? '') . ' ' . ($teacher['suffix'] ?? '')));
+              $email = (string) ($teacher['email'] ?? '');
+              $initialsParts = preg_split('/\s+/', trim($fullName)) ?: [];
+              $initials = '';
+              foreach ($initialsParts as $part) {
+                  if ($part !== '') {
+                      $initials .= strtoupper($part[0]);
+                  }
+                  if (strlen($initials) >= 2) {
+                      break;
+                  }
+              }
+              if ($initials === '') $initials = 'T';
+            ?>
+            <label class="publish-teacher-card flex items-center gap-4 rounded-2xl border border-zinc-200 bg-white px-4 py-4 hover:border-zinc-300 transition">
+              <input type="checkbox" value="<?= htmlspecialchars($teacherId) ?>" class="publish-teacher-checkbox h-5 w-5 rounded border-zinc-300 text-orange-600 focus:ring-orange-500">
+              <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500 to-red-600 text-white flex items-center justify-center font-black text-sm shadow-sm">
+                <?= htmlspecialchars($initials) ?>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <div class="text-sm font-bold text-zinc-900 truncate"><?= htmlspecialchars($fullName !== '' ? $fullName : 'Unnamed Teacher') ?></div>
+                  <span class="creator-badge hidden text-[10px] font-bold uppercase tracking-widest rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                    Creator
+                  </span>
+                </div>
+                <div class="text-xs text-zinc-500 mt-1"><?= htmlspecialchars($email) ?></div>
+              </div>
+            </label>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <div class="px-6 py-5 border-t border-zinc-200 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <p class="text-xs text-zinc-500">Students and selected teachers will receive notifications once publishing succeeds.</p>
+      <div class="flex items-center gap-2">
+        <button type="button" id="btnCancelPublishTeachers" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-50 transition">Cancel</button>
+        <button type="button" id="btnConfirmPublishTeachers" class="rounded-xl border border-emerald-600 bg-emerald-600 px-5 py-2 text-sm font-bold text-white hover:bg-emerald-700 transition shadow-sm">Publish Event</button>
+      </div>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
+
 <!-- ═══════════  REJECT PROPOSAL MODAL (Matches Page 34) ═══════════ -->
 <div id="rejectModal" class="modal-backdrop">
   <div class="relative w-full max-w-sm mx-4 bg-white border border-zinc-200 rounded-3xl shadow-xl overflow-hidden scale-95 transition-transform duration-300" id="rejectPanel" style="transform: translateY(100%);">
@@ -1144,15 +1256,28 @@ render_header('Manage Events', $user);
   // ── Modal helpers ──
   const eventModal = document.getElementById('eventModal');
   const archiveModal = document.getElementById('archiveModal');
+  const publishTeacherModal = document.getElementById('publishTeacherModal');
+  const publishTeacherPanel = document.getElementById('publishTeacherPanel');
 
   function openModal(el) { el.classList.add('active'); document.body.style.overflow = 'hidden'; }
   function closeModal(el) { el.classList.remove('active'); document.body.style.overflow = ''; }
+  function closePublishTeacherAssignmentModal() {
+    if (!publishTeacherModal || !publishTeacherPanel) return;
+    publishTeacherModal.classList.remove('active');
+    publishTeacherPanel.style.transform = 'translateY(100%)';
+    document.body.style.overflow = '';
+  }
 
   eventModal.addEventListener('click', (e) => { if (e.target === eventModal) closeModal(eventModal); });
   archiveModal.addEventListener('click', (e) => { if (e.target === archiveModal) closeModal(archiveModal); });
+  publishTeacherModal?.addEventListener('click', (e) => { if (e.target === publishTeacherModal) closePublishTeacherAssignmentModal(); });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeModal(eventModal); closeModal(archiveModal); }
+    if (e.key === 'Escape') {
+      closeModal(eventModal);
+      closeModal(archiveModal);
+      closePublishTeacherAssignmentModal();
+    }
   });
 
   // ── Flatpickr Initialization ──
@@ -1385,6 +1510,137 @@ render_header('Manage Events', $user);
     });
   });
 
+  // ── Publish Modal Teacher Assignment ──
+  const publishTeacherEventId = document.getElementById('publishTeacherEventId');
+  const publishTeacherCreatorId = document.getElementById('publishTeacherCreatorId');
+  const publishTeacherEventTitle = document.getElementById('publishTeacherEventTitle');
+  const publishTeacherCount = document.getElementById('publishTeacherCount');
+  const publishTeacherCheckboxes = Array.from(document.querySelectorAll('.publish-teacher-checkbox'));
+  const publishTeacherCards = Array.from(document.querySelectorAll('.publish-teacher-card'));
+  const btnPublishSelectAllTeachers = document.getElementById('btnPublishSelectAllTeachers');
+  const btnPublishClearTeachers = document.getElementById('btnPublishClearTeachers');
+  const btnClosePublishTeacherModal = document.getElementById('btnClosePublishTeacherModal');
+  const btnCancelPublishTeachers = document.getElementById('btnCancelPublishTeachers');
+  const btnConfirmPublishTeachers = document.getElementById('btnConfirmPublishTeachers');
+
+  function refreshPublishTeacherSelection() {
+    let total = 0;
+    publishTeacherCheckboxes.forEach((checkbox, index) => {
+      const checked = !!checkbox.checked;
+      const card = publishTeacherCards[index];
+      if (checked) {
+        total += 1;
+        card?.classList.remove('border-zinc-200', 'bg-white', 'hover:border-zinc-300');
+        card?.classList.add('border-orange-300', 'bg-orange-50/60');
+      } else {
+        card?.classList.remove('border-orange-300', 'bg-orange-50/60');
+        card?.classList.add('border-zinc-200', 'bg-white', 'hover:border-zinc-300');
+      }
+
+      const creatorBadge = card?.querySelector('.creator-badge');
+      if (creatorBadge) {
+        if (checkbox.value === (publishTeacherCreatorId?.value || '')) {
+          creatorBadge.classList.remove('hidden');
+        } else {
+          creatorBadge.classList.add('hidden');
+        }
+      }
+    });
+
+    if (publishTeacherCount) {
+      publishTeacherCount.textContent = String(total);
+    }
+  }
+
+  function openPublishTeacherAssignmentModal(eventId, title, creatorId) {
+    if (!publishTeacherModal || !publishTeacherPanel || !publishTeacherEventId || !publishTeacherEventTitle || !publishTeacherCreatorId) {
+      return;
+    }
+
+    publishTeacherEventId.value = eventId || '';
+    publishTeacherCreatorId.value = creatorId || '';
+    publishTeacherEventTitle.textContent = title || 'this event';
+
+    publishTeacherCheckboxes.forEach((checkbox) => {
+      checkbox.checked = creatorId !== '' && checkbox.value === creatorId;
+    });
+
+    refreshPublishTeacherSelection();
+    publishTeacherModal.classList.add('active');
+    publishTeacherPanel.style.transform = 'translateY(0)';
+    document.body.style.overflow = 'hidden';
+  }
+
+  document.querySelectorAll('.btnPublishEvent').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openPublishTeacherAssignmentModal(
+        btn.dataset.id || '',
+        btn.dataset.title || 'this event',
+        btn.dataset.created_by || ''
+      );
+    });
+  });
+
+  publishTeacherCheckboxes.forEach((checkbox) => {
+    checkbox.addEventListener('change', refreshPublishTeacherSelection);
+  });
+
+  btnPublishSelectAllTeachers?.addEventListener('click', () => {
+    publishTeacherCheckboxes.forEach((checkbox) => {
+      checkbox.checked = true;
+    });
+    refreshPublishTeacherSelection();
+  });
+
+  btnPublishClearTeachers?.addEventListener('click', () => {
+    publishTeacherCheckboxes.forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    refreshPublishTeacherSelection();
+  });
+
+  btnClosePublishTeacherModal?.addEventListener('click', closePublishTeacherAssignmentModal);
+  btnCancelPublishTeachers?.addEventListener('click', closePublishTeacherAssignmentModal);
+
+  btnConfirmPublishTeachers?.addEventListener('click', async () => {
+    const event_id = publishTeacherEventId?.value || '';
+    const teacher_ids = publishTeacherCheckboxes
+      .filter((checkbox) => checkbox.checked)
+      .map((checkbox) => checkbox.value);
+
+    if (!event_id) {
+      alert('Missing event id.');
+      return;
+    }
+
+    if (teacher_ids.length === 0) {
+      alert('Select at least one teacher before publishing this event.');
+      return;
+    }
+
+    btnConfirmPublishTeachers.disabled = true;
+    btnConfirmPublishTeachers.textContent = 'Publishing...';
+
+    try {
+      const res = await fetch('/api/events_approve.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id,
+          status: 'published',
+          teacher_ids,
+          csrf_token: window.CSRF_TOKEN
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Failed to publish event.');
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || 'Failed to publish event.');
+      btnConfirmPublishTeachers.disabled = false;
+      btnConfirmPublishTeachers.textContent = 'Publish Event';
+    }
+  });
   // ── Unified Filtering Logic (Tabs + Search + Type) ──
   const tabAll = document.getElementById('tabAll');
   const tabPending = document.getElementById('tabPending');
@@ -2143,3 +2399,4 @@ render_header('Manage Events', $user);
 </script>
 
 <?php render_footer(); ?>
+

@@ -53,6 +53,34 @@ if (count($studentIds) === 0) {
     json_response(['ok' => false, 'error' => 'No eligible participants'], 409);
 }
 
+// Require evaluation completion before certificate generation.
+$evaluatedMap = [];
+$evalUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers'
+    . '?select=student_id&event_id=eq.' . rawurlencode($eventId)
+    . '&student_id=in.(' . implode(',', array_map(static fn(string $id): string => rawurlencode($id), $studentIds)) . ')';
+$evalRes = supabase_request('GET', $evalUrl, $headers);
+if (!$evalRes['ok']) {
+    json_response(['ok' => false, 'error' => build_error($evalRes['body'] ?? null, (int) ($evalRes['status'] ?? 0), $evalRes['error'] ?? null, 'Evaluation lookup failed')], 500);
+}
+
+$evalRows = json_decode((string) $evalRes['body'], true);
+if (is_array($evalRows)) {
+    foreach ($evalRows as $row) {
+        $sid = (string) ($row['student_id'] ?? '');
+        if ($sid !== '') {
+            $evaluatedMap[$sid] = true;
+        }
+    }
+}
+
+$studentIds = array_values(array_filter(
+    $studentIds,
+    static fn(string $sid): bool => isset($evaluatedMap[$sid])
+));
+if (count($studentIds) === 0) {
+    json_response(['ok' => false, 'error' => 'No eligible participants have completed evaluation yet'], 409);
+}
+
 $payloads = [];
 foreach ($studentIds as $sid) {
     $payloads[] = [
