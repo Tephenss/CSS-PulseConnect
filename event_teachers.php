@@ -9,6 +9,8 @@ require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_tabs.php';
 
 $user = require_role(['admin']);
 $eventId = isset($_GET['event_id']) ? trim((string) $_GET['event_id']) : '';
@@ -27,7 +29,7 @@ $headers = [
 $writeHeaders = [
     'Accept: application/json',
     'Content-Type: application/json',
-    'Prefer: return=representation',
+    'Prefer: return=representation,resolution=merge-duplicates',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
@@ -64,8 +66,9 @@ function load_teacher_profiles(array $teacherIds, array $headers): array
     $inList = '(' . implode(',', array_map('rawurlencode', $teacherIds)) . ')';
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
         . '?select=id,first_name,middle_name,last_name,suffix,email'
+        . '&role=eq.teacher'
         . '&id=in.' . $inList
-        . '&role=eq.teacher';
+        . '&order=last_name.asc,first_name.asc';
 
     $res = supabase_request('GET', $url, $headers);
     $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
@@ -132,26 +135,36 @@ if (!is_array($event)) {
     exit;
 }
 
+$sessions = fetch_event_sessions($eventId, $headers);
+$usesSessions = count($sessions) > 0;
+
 $assignments = load_event_teachers_with_access($eventId, $headers);
-$teacherIds = [];
+$assignmentMap = [];
 foreach ($assignments as $row) {
     $teacherId = trim((string) ($row['teacher_id'] ?? ''));
-    if ($teacherId !== '') {
-        $teacherIds[$teacherId] = true;
+    if ($teacherId === '') {
+        continue;
     }
+    $assignmentMap[$teacherId] = is_array($row) ? $row : [];
 }
-$teacherProfiles = load_teacher_profiles(array_keys($teacherIds), $headers);
+
+$teacherProfiles = load_teacher_profiles(array_keys($assignmentMap), $headers);
+$teacherRows = [];
+foreach ($assignmentMap as $teacherId => $assignment) {
+    $teacherRows[] = [
+        'teacher_id' => $teacherId,
+        'can_scan' => !empty($assignment['can_scan']),
+        'can_manage_assistants' => !empty($assignment['can_manage_assistants']),
+    ];
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_validate(isset($_POST['csrf_token']) ? (string) $_POST['csrf_token'] : null);
 
     $validTeacherIds = [];
     $currentlyEnabled = [];
-    foreach ($assignments as $row) {
+    foreach ($teacherRows as $row) {
         $teacherId = trim((string) ($row['teacher_id'] ?? ''));
-        if ($teacherId === '') {
-            continue;
-        }
         $validTeacherIds[$teacherId] = true;
         if (!empty($row['can_scan'])) {
             $currentlyEnabled[$teacherId] = true;
@@ -169,31 +182,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $newlyEnabled = [];
     $errors = [];
+    $upsertRows = [];
     foreach (array_keys($validTeacherIds) as $teacherId) {
         $enableQr = isset($selected[$teacherId]);
         if ($enableQr && !isset($currentlyEnabled[$teacherId])) {
             $newlyEnabled[] = $teacherId;
         }
 
-        $payload = json_encode([
+        $upsertRows[] = [
+            'event_id' => $eventId,
+            'teacher_id' => $teacherId,
             'can_scan' => $enableQr,
             'can_manage_assistants' => $enableQr,
             'assigned_by' => (string) ($user['id'] ?? ''),
             'assigned_at' => gmdate('c'),
-        ], JSON_UNESCAPED_SLASHES);
+        ];
+    }
 
+    if (count($upsertRows) > 0) {
+        $payload = json_encode($upsertRows, JSON_UNESCAPED_SLASHES);
         if (!is_string($payload)) {
             $errors[] = 'Failed to prepare QR access payload.';
-            continue;
-        }
+        } else {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+                . '?on_conflict=event_id,teacher_id';
 
-        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
-            . '?event_id=eq.' . rawurlencode($eventId)
-            . '&teacher_id=eq.' . rawurlencode($teacherId);
-
-        $res = supabase_request('PATCH', $url, $writeHeaders, $payload);
-        if (!$res['ok']) {
-            $errors[] = build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to update QR assignment');
+            $res = supabase_request('POST', $url, $writeHeaders, $payload);
+            if (!$res['ok']) {
+                $errors[] = build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to update QR assignment');
+            }
         }
     }
 
@@ -214,21 +231,22 @@ unset($_SESSION['flash_success'], $_SESSION['flash_error']);
 
 $csrfToken = csrf_ensure_token();
 $status = strtolower((string) ($event['status'] ?? 'draft'));
+$isFinishedEvent = $status === 'finished';
+if ($isFinishedEvent) {
+    header('Location: /event_view.php?id=' . rawurlencode($eventId));
+    exit;
+}
 $statusColor = match ($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
+    'finished' => 'bg-zinc-200 text-zinc-700 border-zinc-300',
     'pending' => 'bg-amber-100 text-amber-900 border-amber-200',
     'approved' => 'bg-sky-100 text-sky-900 border-sky-200',
     default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
 };
 
-$totalAssigned = 0;
+$totalAssigned = count($teacherRows);
 $totalQrEnabled = 0;
-foreach ($assignments as $row) {
-    $teacherId = trim((string) ($row['teacher_id'] ?? ''));
-    if ($teacherId === '') {
-        continue;
-    }
-    $totalAssigned += 1;
+foreach ($teacherRows as $row) {
     if (!empty($row['can_scan'])) {
         $totalQrEnabled += 1;
     }
@@ -329,26 +347,15 @@ render_header('QR Scanner Assignment', $user);
 
     </div>
 
-    <!-- TABS NAVIGATION (Aligned with event_view.php) -->
-    <div class="border-b border-zinc-200 mb-6">
-        <nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
-            <a href="/event_view.php?id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Event Details
-            </a>
-            <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Event Participants
-            </a>
-            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Event Feedback
-            </a>
-            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Evaluation Questions
-            </a>
-            <a href="/event_teachers.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-orange-500 text-orange-600 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-bold">
-                QR Scanner Access
-            </a>
-        </nav>
-    </div>
+    <?php
+    render_event_tabs([
+        'event_id' => $eventId,
+        'current_tab' => 'qr',
+        'role' => 'admin',
+        'uses_sessions' => $usesSessions,
+        'event_status' => $status,
+    ]);
+    ?>
 
     <!-- Layout Grid -->
     <div class="flex flex-col xl:flex-row gap-6">
@@ -397,17 +404,17 @@ render_header('QR Scanner Assignment', $user);
                                 <div class="w-16 h-16 rounded-full bg-zinc-100 flex items-center justify-center mx-auto mb-4 text-zinc-400">
                                     <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a5.971 5.971 0 00-.94 3.197m0 0l.001.031c0 .225.012.447.037.666A11.944 11.944 0 0112 21c2.17 0 4.207-.576 5.963-1.584A6.062 6.062 0 0118 18.722m-12 0a5.971 5.971 0 00.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 005.058 2.772m0 0a5.971 5.971 0 00.94 3.197M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zm.45-1.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM19.35 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0zM6.75 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0z"/></svg>
                                 </div>
-                                <h4 class="text-zinc-900 font-black text-lg mb-1">No Teachers Assigned</h4>
-                                <p class="text-xs text-zinc-500 font-medium">No event coordinators found for this event.</p>
+                                <h4 class="text-zinc-900 font-black text-lg mb-1">No Assigned Teachers Yet</h4>
+                                <p class="text-xs text-zinc-500 font-medium">Only teachers assigned by admin during publish will appear here.</p>
                             </div>
                         <?php else: ?>
                             <div class="grid grid-cols-1 gap-4" id="qrTeacherList">
-                                <?php foreach ($assignments as $row): ?>
+                                <?php foreach ($teacherRows as $row): ?>
                                     <?php
                                     $teacherId = trim((string) ($row['teacher_id'] ?? ''));
                                     if ($teacherId === '') continue;
                                     $profile = is_array($teacherProfiles[$teacherId] ?? null) ? $teacherProfiles[$teacherId] : [];
-                                    $fullName = trim((string) (($profile['first_name'] ?? '') . ' ' . ($profile['last_name'] ?? '') . ' ' . ($profile['suffix'] ?? '')));
+                                    $fullName = trim((string) (($profile['first_name'] ?? '') . ' ' . ($profile['middle_name'] ?? '') . ' ' . ($profile['last_name'] ?? '') . ' ' . ($profile['suffix'] ?? '')));
                                     $email = (string) ($profile['email'] ?? '');
                                     $isQrEnabled = !empty($row['can_scan']);
 
@@ -511,7 +518,6 @@ render_header('QR Scanner Assignment', $user);
 </div>
 
 <script>
-pt>
   (function () {
     const checkboxes = Array.from(document.querySelectorAll('.qr-teacher-checkbox'));
     const cards = Array.from(document.querySelectorAll('.qr-teacher-card'));

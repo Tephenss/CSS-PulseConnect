@@ -14,6 +14,7 @@ $data = require_post_json();
 require_csrf_from_json($data);
 
 $questionId = isset($data['question_id']) ? (string) $data['question_id'] : '';
+$sessionId = isset($data['session_id']) ? trim((string) $data['session_id']) : '';
 $required = isset($data['required']) ? (bool) $data['required'] : false;
 if ($questionId === '') {
     json_response(['ok' => false, 'error' => 'question_id required'], 400);
@@ -24,7 +25,8 @@ $payload = [
     'updated_at' => gmdate('c'),
 ];
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?id=eq.' . rawurlencode($questionId) . '&select=id,required';
+$table = $sessionId !== '' ? 'event_session_evaluation_questions' : 'evaluation_questions';
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table . '?id=eq.' . rawurlencode($questionId) . '&select=id,required';
 $headers = [
     'Content-Type: application/json',
     'Accept: application/json',

@@ -71,7 +71,17 @@ function send_fcm_notification(array $tokens, string $title, string $body, array
             ];
         
         if (!empty($data)) {
-            $message['data'] = (object) $data;
+            $stringData = [];
+            foreach ($data as $key => $value) {
+                $k = trim((string) $key);
+                if ($k === '') {
+                    continue;
+                }
+                $stringData[$k] = (string) $value;
+            }
+            if (!empty($stringData)) {
+                $message['data'] = $stringData;
+            }
         }
 
         $payload = ['message' => $message];

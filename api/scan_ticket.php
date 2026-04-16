@@ -8,19 +8,17 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/scan_context.php';
 
 $user = require_role(['teacher', 'admin']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
 $token = isset($data['token']) ? (string) $data['token'] : '';
-$action = isset($data['action']) ? (string) $data['action'] : 'check_in'; // check_in|check_out
 
 if ($token === '' || !preg_match('/^[a-f0-9]{32}$/', $token)) {
     json_response(['ok' => false, 'error' => 'Invalid Ticket'], 400);
-}
-if (!in_array($action, ['check_in', 'check_out'], true)) {
-    json_response(['ok' => false, 'error' => 'Invalid action'], 400);
 }
 
 $headers = [
@@ -47,13 +45,104 @@ if (!is_array($ticket) || empty($ticket['id'])) {
 }
 
 $ticketId = (string) $ticket['id'];
+$registrationId = (string) ($ticket['registration_id'] ?? '');
 $eventId = '';
 if (isset($ticket['event_registrations']) && is_array($ticket['event_registrations'])) {
     $eventId = (string) ($ticket['event_registrations']['event_id'] ?? '');
 }
+if ($registrationId === '' || $eventId === '') {
+    json_response(['ok' => false, 'error' => 'Invalid Ticket'], 409);
+}
+
+$nowIso = gmdate('c');
+$now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+// Load event and validate scanner access.
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at,location,event_mode,event_structure'
+    . '&id=eq.' . rawurlencode($eventId)
+    . '&limit=1';
+$eventRes = supabase_request('GET', $eventUrl, $headers);
+$eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : [];
+$event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
+if (!is_array($event)) {
+    json_response(['ok' => false, 'error' => 'Event lookup failed'], 500);
+}
+
+if (strtolower((string) ($event['status'] ?? 'draft')) !== 'published') {
+    json_response(['ok' => false, 'error' => 'Scanning is only allowed for published events'], 409);
+}
+
+$role = (string) ($user['role'] ?? 'teacher');
+if ($role === 'teacher' && !teacher_can_scan_event((string) ($user['id'] ?? ''), $eventId, $headers)) {
+    json_response(['ok' => false, 'error' => 'You are not assigned to scan this event'], 403);
+}
+
+$scanContext = resolve_event_scan_context($event, $now, $headers);
+$scanStatus = (string) ($scanContext['status'] ?? 'closed');
+if ($scanStatus !== 'open') {
+    $statusMessage = match ($scanStatus) {
+        'waiting' => 'Scanning has not opened yet for this schedule.',
+        'closed' => 'Scanning window is closed for this schedule.',
+        'missing_schedule' => 'No valid schedule found for scanning.',
+        'conflict' => 'Schedule conflict detected. Contact admin.',
+        default => 'Scanning is unavailable right now.',
+    };
+    json_response(['ok' => false, 'error' => $statusMessage], 409);
+}
+
+if ((string) ($scanContext['source'] ?? '') === 'session') {
+    $sessionContext = is_array($scanContext['session'] ?? null) ? $scanContext['session'] : [];
+    $sessionId = (string) ($sessionContext['id'] ?? '');
+    if ($sessionId === '') {
+        json_response(['ok' => false, 'error' => 'Seminar lookup failed'], 500);
+    }
+
+    $sessionAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,check_in_at,last_scanned_at'
+        . '&session_id=eq.' . rawurlencode($sessionId)
+        . '&ticket_id=eq.' . rawurlencode($ticketId)
+        . '&limit=1';
+    $sessionAttendanceRes = supabase_request('GET', $sessionAttendanceUrl, $headers);
+    if (!$sessionAttendanceRes['ok']) {
+        json_response(['ok' => false, 'error' => build_error($sessionAttendanceRes['body'] ?? null, (int) ($sessionAttendanceRes['status'] ?? 0), $sessionAttendanceRes['error'] ?? null, 'Seminar attendance lookup failed')], 500);
+    }
+    $sessionAttendanceRows = json_decode((string) $sessionAttendanceRes['body'], true);
+    $existingSessionAttendance = is_array($sessionAttendanceRows) && isset($sessionAttendanceRows[0]) ? $sessionAttendanceRows[0] : null;
+    if (is_array($existingSessionAttendance) && !empty($existingSessionAttendance['id'])) {
+        json_response(['ok' => false, 'error' => 'This ticket is already recorded for the active seminar'], 409);
+    }
+
+    $payload = [[
+        'session_id' => $sessionId,
+        'registration_id' => $registrationId,
+        'ticket_id' => $ticketId,
+        'status' => 'present',
+        'check_in_at' => $nowIso,
+        'last_scanned_by' => (string) ($user['id'] ?? ''),
+        'last_scanned_at' => $nowIso,
+        'updated_at' => $nowIso,
+    ]];
+    $writeHeaders = [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: return=representation',
+    ];
+    $writeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,last_scanned_at';
+    $writeRes = supabase_request('POST', $writeUrl, $writeHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
+    if (!$writeRes['ok']) {
+        json_response(['ok' => false, 'error' => build_error($writeRes['body'] ?? null, (int) ($writeRes['status'] ?? 0), $writeRes['error'] ?? null, 'Seminar scan update failed')], 500);
+    }
+
+    $writeRows = json_decode((string) $writeRes['body'], true);
+    $attendance = is_array($writeRows) && isset($writeRows[0]) ? $writeRows[0] : null;
+    $sessionName = trim((string) ($sessionContext['display_name'] ?? $sessionContext['title'] ?? 'Seminar'));
+    $message = 'Checked in for ' . ($sessionName !== '' ? $sessionName : 'Seminar');
+    json_response(['ok' => true, 'message' => $message, 'attendance' => $attendance], 200);
+}
 
 // Load attendance row
-$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,check_in_at,check_out_at,status,last_scanned_at'
+$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,check_in_at,status,last_scanned_at'
     . '&ticket_id=eq.' . rawurlencode($ticketId)
     . '&limit=1';
 $attRes = supabase_request('GET', $attUrl, $headers);
@@ -64,8 +153,6 @@ if (!is_array($att) || empty($att['id'])) {
 }
 
 $attId = (string) $att['id'];
-$nowIso = gmdate('c');
-$now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
 // Cooldown for repeated scans
 $lastScannedAt = isset($att['last_scanned_at']) ? (string) $att['last_scanned_at'] : '';
@@ -80,56 +167,21 @@ if ($lastScannedAt !== '') {
     }
 }
 
-// Load event start/end (for early/late checks)
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,start_at,end_at'
-    . '&id=eq.' . rawurlencode($eventId)
-    . '&limit=1';
-$eventRes = supabase_request('GET', $eventUrl, $headers);
-$eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : null;
-$event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
-if (!is_array($event)) {
-    json_response(['ok' => false, 'error' => 'Event lookup failed'], 500);
-}
-
-$startAt = isset($event['start_at']) ? new DateTimeImmutable((string) $event['start_at']) : null;
-$endAt = isset($event['end_at']) ? new DateTimeImmutable((string) $event['end_at']) : null;
-
 $update = [
     'last_scanned_by' => (string) ($user['id'] ?? ''),
     'last_scanned_at' => $nowIso,
     'updated_at' => $nowIso,
 ];
 
-if ($action === 'check_in') {
-    if (!empty($att['check_in_at'])) {
-        json_response(['ok' => false, 'error' => 'Ticket already scanned recently. Try again later.'], 409);
-    }
-    if ($startAt && $now < $startAt) {
-        // Mark early but keep status as early
-        $update['check_in_at'] = $nowIso;
-        $update['status'] = 'early';
-        $message = 'The event has not started yet.';
-    } else {
-        $update['check_in_at'] = $nowIso;
-        $lateThreshold = $startAt ? $startAt->modify('+15 minutes') : null;
-        $update['status'] = ($lateThreshold && $now > $lateThreshold) ? 'late' : 'present';
-        $message = 'Checked in at ' . $now->format('Y-m-d H:i') . (($update['status'] === 'late') ? ' (Arrived late)' : '');
-    }
-} else {
-    if (empty($att['check_in_at'])) {
-        json_response(['ok' => false, 'error' => 'Not checked in yet'], 409);
-    }
-    if (!empty($att['check_out_at'])) {
-        json_response(['ok' => false, 'error' => 'Ticket already scanned recently. Try again later.'], 409);
-    }
-    $update['check_out_at'] = $nowIso;
-    $attendanceStatus = (string) ($att['status'] ?? 'present');
-    $attendanceLabel = $attendanceStatus === 'late' ? 'Late' : 'Present';
-    $message = 'Checked out at ' . $now->format('Y-m-d H:i') . ' (Attendance: ' . $attendanceLabel . ')';
-    // Keep existing status (present/late/early)
+if (!empty($att['check_in_at'])) {
+    json_response(['ok' => false, 'error' => 'Ticket already scanned recently. Try again later.'], 409);
 }
 
-$patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?id=eq.' . rawurlencode($attId) . '&select=id,status,check_in_at,check_out_at,last_scanned_at';
+$update['check_in_at'] = $nowIso;
+$update['status'] = 'present';
+$message = 'Checked in for ' . ((string) ($event['title'] ?? 'event'));
+
+$patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?id=eq.' . rawurlencode($attId) . '&select=id,status,check_in_at,last_scanned_at';
 $patchHeaders = [
     'Content-Type: application/json',
     'Accept: application/json',

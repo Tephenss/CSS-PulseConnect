@@ -8,6 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_tabs.php';
 
 $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
@@ -43,6 +45,35 @@ if ($role === 'student' && (string) ($event['status'] ?? '') !== 'published') {
     exit;
 }
 
+$sessions = fetch_event_sessions($id, $headers);
+$sessionsJsonForAttr = htmlspecialchars(
+    (string) (json_encode($sessions, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'),
+    ENT_QUOTES
+);
+
+$effectiveEndAt = null;
+try {
+    $effectiveEndAt = !empty($event['end_at']) ? new DateTimeImmutable((string) $event['end_at']) : null;
+} catch (Throwable $e) {
+    $effectiveEndAt = null;
+}
+foreach ($sessions as $session) {
+    try {
+        $sessionEnd = !empty($session['end_at'])
+            ? new DateTimeImmutable((string) $session['end_at'])
+            : (!empty($session['start_at']) ? (new DateTimeImmutable((string) $session['start_at']))->modify('+1 hour') : null);
+    } catch (Throwable $e) {
+        $sessionEnd = null;
+    }
+
+    if ($sessionEnd instanceof DateTimeImmutable && (!$effectiveEndAt instanceof DateTimeImmutable || $sessionEnd > $effectiveEndAt)) {
+        $effectiveEndAt = $sessionEnd;
+    }
+}
+$eventFinishedForCertificates = $effectiveEndAt instanceof DateTimeImmutable
+    ? $effectiveEndAt <= new DateTimeImmutable('now')
+    : false;
+
 // 2. Fetch Participants to compute statistics
 $childSelect = 'select=id,student_id,tickets(attendance(status))';
 $partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?' . $childSelect . '&event_id=eq.' . rawurlencode($id);
@@ -75,14 +106,117 @@ if (is_array($participants)) {
     }
 }
 
+$certificateTemplates = [];
+if ($role === 'admin') {
+    $sessionLookup = [];
+    foreach ($sessions as $sessionRow) {
+        if (!is_array($sessionRow)) {
+            continue;
+        }
+        $sid = (string) ($sessionRow['id'] ?? '');
+        if ($sid === '') {
+            continue;
+        }
+        $sessionLookup[$sid] = $sessionRow;
+    }
+
+    $eventTemplateRows = null;
+    $eventTemplateSelects = [
+        '?select=id,title,thumbnail_url,event_id,created_at&order=created_at.desc',
+        '?select=id,title,event_id,created_at&order=created_at.desc',
+        '?select=id,title,event_id&order=id.desc',
+    ];
+    foreach ($eventTemplateSelects as $selectQuery) {
+        $eventTemplateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates' . $selectQuery;
+        $eventTemplateRes = supabase_request('GET', $eventTemplateUrl, $headers);
+        if (!$eventTemplateRes['ok']) {
+            continue;
+        }
+        $decodedRows = json_decode((string) $eventTemplateRes['body'], true);
+        if (is_array($decodedRows)) {
+            $eventTemplateRows = $decodedRows;
+            break;
+        }
+    }
+    if (is_array($eventTemplateRows)) {
+        foreach ($eventTemplateRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $row['thumbnail_url'] = (string) ($row['thumbnail_url'] ?? '');
+            $row['created_at'] = (string) ($row['created_at'] ?? '');
+            $certificateTemplates[] = [
+                ...$row,
+                'template_scope' => 'event',
+                'scope_session_id' => '',
+                'scope_label' => 'Event Template',
+                'linked_event_label' => (string) ($row['event_id'] ?? '') === $id
+                    ? (string) ($event['title'] ?? 'Current Event')
+                    : 'Template Library',
+            ];
+        }
+    }
+
+    $sessionIds = array_values(array_filter(array_map(
+        static fn (array $session): string => (string) ($session['id'] ?? ''),
+        $sessions
+    )));
+    if (count($sessionIds) > 0) {
+        $sessionTemplateRows = null;
+        $sessionSelects = [
+            ['query' => '?select=id,title,thumbnail_url,session_id,created_at', 'order' => '&order=created_at.desc'],
+            ['query' => '?select=id,title,session_id,created_at', 'order' => '&order=created_at.desc'],
+            ['query' => '?select=id,title,session_id', 'order' => '&order=id.desc'],
+        ];
+        foreach ($sessionSelects as $selectConfig) {
+            $sessionTemplateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificate_templates'
+                . (string) ($selectConfig['query'] ?? '')
+                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+                . (string) ($selectConfig['order'] ?? '');
+            $sessionTemplateRes = supabase_request('GET', $sessionTemplateUrl, $headers);
+            if (!$sessionTemplateRes['ok']) {
+                continue;
+            }
+            $decodedRows = json_decode((string) $sessionTemplateRes['body'], true);
+            if (is_array($decodedRows)) {
+                $sessionTemplateRows = $decodedRows;
+                break;
+            }
+        }
+        if (is_array($sessionTemplateRows)) {
+            foreach ($sessionTemplateRows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $row['thumbnail_url'] = (string) ($row['thumbnail_url'] ?? '');
+                $row['created_at'] = (string) ($row['created_at'] ?? '');
+                $sessionMeta = $sessionLookup[(string) ($row['session_id'] ?? '')] ?? [];
+                $certificateTemplates[] = [
+                    ...$row,
+                    'template_scope' => 'session',
+                    'scope_session_id' => (string) ($row['session_id'] ?? ''),
+                    'scope_label' => build_session_display_name($sessionMeta),
+                    'linked_event_label' => (string) ($event['title'] ?? 'Current Event'),
+                ];
+            }
+        }
+    }
+
+    usort($certificateTemplates, static function (array $a, array $b): int {
+        return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
+    });
+}
+
 // Map the Supabase status to the "Allow Registration" UI Toggle 
 // If published = ON, if pending/draft/archived = OFF.
 $status = (string)($event['status'] ?? '');
+$isFinishedEvent = strtolower(trim($status)) === 'finished';
 $isRegistrationAllowed = ($status === 'published');
 $canToggleRegistration = in_array($status, ['draft', 'published'], true);
 
 $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
+    'finished' => 'bg-zinc-200 text-zinc-700 border-zinc-300',
     'pending' => 'bg-amber-100 text-amber-900 border-amber-200',
     'approved' => 'bg-sky-100 text-sky-900 border-sky-200',
     'draft' => 'bg-orange-100 text-orange-900 border-orange-200',
@@ -94,9 +228,7 @@ render_header('Event Details', $user);
 ?>
 
 <?php
-    $referer = $_SERVER['HTTP_REFERER'] ?? '';
-    // Make sure we only fallback safely 
-    $backUrl = str_contains($referer, 'events.php') ? '/events.php' : '/manage_events.php';
+    $backUrl = '/events.php';
 ?>
 <div class="mb-4">
     <!-- Back Button & Header Row -->
@@ -119,9 +251,16 @@ render_header('Event Details', $user);
                     <span class="relative z-10">Approve Proposal</span>
                 </button>
             <?php else: ?>
-                <button id="btnSendCert" class="rounded-xl border border-emerald-500 bg-emerald-50 text-emerald-700 font-bold px-4 py-2 text-[13px] hover:bg-emerald-100 transition shadow-sm relative overflow-hidden">
+                <?php if ($eventFinishedForCertificates): ?>
+                <button
+                    id="btnSendCert"
+                    data-event-finished="1"
+                    class="rounded-xl border font-bold px-4 py-2 text-[13px] transition shadow-sm relative overflow-hidden border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                >
                     <span class="relative z-10">Send Certificate</span>
                 </button>
+                <?php endif; ?>
+                <?php if (!$isFinishedEvent): ?>
                 <a href="/certificate_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white text-zinc-700 font-bold px-4 py-2 text-[13px] hover:bg-zinc-50 transition shadow-sm">
                     Create Certificate
                 </a>
@@ -132,44 +271,33 @@ render_header('Event Details', $user);
                         data-description="<?= htmlspecialchars((string) ($event['description'] ?? '')) ?>"
                         data-start_at="<?= htmlspecialchars((string) ($event['start_at'] ?? '')) ?>"
                         data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
-
+                        data-event_mode="<?= htmlspecialchars(count($sessions) > 0 ? 'seminar_based' : 'simple') ?>"
+                        data-sessions="<?= $sessionsJsonForAttr ?>"
                 >
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
                     Edit Event
                 </button>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
         <?php endif; ?>
     </div>
 
+    <?php
+    render_event_tabs([
+        'event_id' => $id,
+        'current_tab' => 'details',
+        'role' => $role,
+        'uses_sessions' => count($sessions) > 0,
+        'event_status' => $status,
+    ]);
+    ?>
+
     <!-- Layout Grid: Left Sidebar & Main Content -->
     <div class="flex flex-col xl:flex-row gap-6">
         
-        <!-- MAIN CONTENT AREA (Tabs) -->
+        <!-- MAIN CONTENT AREA -->
         <div class="flex-1 min-w-0">
-            <!-- TABS NAVIGATION -->
-            <div class="border-b border-zinc-200 mb-6">
-                <nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
-                    <a href="/event_view.php?id=<?= htmlspecialchars($id) ?>" class="border-orange-500 text-orange-600 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-bold">
-                        Event Details
-                    </a>
-                    <a href="/participants.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                        Event Participants
-                    </a>
-                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                        Event Feedback
-                    </a>
-                    <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($id) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                        Evaluation Questions
-                    </a>
-                    <?php if ($role === 'admin'): ?>
-                    <a href="/event_teachers.php?event_id=<?= htmlspecialchars($id) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                        QR Scanner Access
-                    </a>
-                    <?php endif; ?>
-                </nav>
-            </div>
-
             <!-- Tab Content: Details -->
             <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm relative overflow-hidden mb-6">
 
@@ -229,6 +357,25 @@ render_header('Event Details', $user);
                     </div>
                  </div>
 
+                 <?php if (count($sessions) > 0): ?>
+                 <h3 class="text-sm font-black text-zinc-400 uppercase tracking-widest mt-8 mb-4">Seminar Sessions</h3>
+                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
+                    <?php foreach ($sessions as $session): ?>
+                    <div class="rounded-xl bg-orange-50/50 border border-orange-200 p-4">
+                        <div class="text-xs text-orange-700 font-bold mb-1">Seminar</div>
+                        <div class="text-[15px] font-bold text-zinc-900"><?= htmlspecialchars(build_session_display_name($session)) ?></div>
+                        <div class="mt-3 text-sm text-zinc-600">
+                            <div><span class="font-semibold text-zinc-800">Starts:</span> <?= htmlspecialchars(format_date_local((string) ($session['start_at'] ?? ''), 'F j, Y, g:i A')) ?></div>
+                            <div class="mt-1"><span class="font-semibold text-zinc-800">Ends:</span> <?= htmlspecialchars(format_date_local((string) ($session['end_at'] ?? ''), 'F j, Y, g:i A')) ?></div>
+                            <?php if (!empty($session['location'])): ?>
+                            <div class="mt-1"><span class="font-semibold text-zinc-800">Location:</span> <?= htmlspecialchars((string) $session['location']) ?></div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                 </div>
+                 <?php endif; ?>
+
                  <?php if ($role === 'admin' && $event['status'] === 'pending'): ?>
                  <h3 class="text-sm font-black text-zinc-400 uppercase tracking-widest mt-8 mb-4">Attached Proposal Document</h3>
                  <div class="rounded-xl bg-blue-50/50 border border-blue-200 p-4 max-w-3xl flex items-center justify-between group hover:border-blue-300 transition-colors">
@@ -272,7 +419,7 @@ render_header('Event Details', $user);
 
         <!-- RIGHT SIDEBAR (Stats & Controls) -->
         <?php if ($role === 'admin' || $role === 'teacher'): ?>
-        <div class="w-full xl:w-80 flex-shrink-0 flex flex-col gap-4">
+        <div class="w-full xl:w-80 flex-shrink-0 flex flex-col gap-4 xl:mt-16">
             
             <!-- Cards from manual -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm hover:border-emerald-300 transition-all group flex items-center gap-4">
@@ -305,6 +452,7 @@ render_header('Event Details', $user);
                 </div>
             </div>
 
+            <?php if (!$isFinishedEvent): ?>
             <!-- Registration Toggle (Matches Manual Design) -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm mt-2">
                 <div class="flex items-center justify-between mb-2">
@@ -323,6 +471,7 @@ render_header('Event Details', $user);
                 </div>
                 <p class="text-[11px] text-zinc-500 font-medium">Turn ON to let students register and generate tickets instantly.</p>
             </div>
+            <?php endif; ?>
             
         </div>
         <?php endif; ?>
@@ -351,10 +500,11 @@ render_header('Event Details', $user);
       </button>
     </div>
 
-    <div class="p-5 sm:p-6 overflow-y-auto">
+    <div class="p-5 sm:p-6 overflow-y-auto overflow-x-hidden">
       <form id="eventForm">
         <input type="hidden" id="event_id" value="">
         <input type="hidden" id="mode" value="edit">
+        <input type="hidden" id="event_mode" value="simple">
 
         <div class="space-y-4">
           <div>
@@ -376,7 +526,7 @@ render_header('Event Details', $user);
             </div>
           </div>
           
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
              <div>
                 <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
                 <div class="relative">
@@ -395,6 +545,60 @@ render_header('Event Details', $user);
                 <input id="end_at_local" name="end_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
                 </div>
             </div>
+          </div>
+
+          <div id="seminarEditSection" class="hidden rounded-2xl border border-orange-200 bg-orange-50/60 p-4 space-y-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="text-xs font-bold uppercase tracking-wide text-orange-700">Seminar Sessions</div>
+                <p class="text-[11px] text-orange-700/80 mt-1">For seminar-based events, update each seminar schedule here.</p>
+              </div>
+              <button type="button" id="btnToggleSeminar2" class="shrink-0 rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-[11px] font-bold text-orange-700 hover:bg-orange-100 transition">
+                Add Seminar 2
+              </button>
+            </div>
+
+            <div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">
+              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 1</div>
+              <div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                  <input id="seminar1_title" type="text" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" placeholder="Seminar title" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <input id="seminar1_start_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <input id="seminar1_end_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+              </div>
+            </div>
+
+            <div id="seminar2Editor" class="hidden rounded-xl border border-orange-200 bg-white p-4 space-y-3">
+              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
+              <div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                  <input id="seminar2_title" type="text" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" placeholder="Seminar title" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <input id="seminar2_start_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <input id="seminar2_end_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-orange-700/80">Main event start/end will auto-sync with seminar schedules when this event is seminar-based.</p>
           </div>
 
           <div>
@@ -521,12 +725,186 @@ render_header('Event Details', $user);
             <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
         </div>
         <h3 class="text-xl font-bold text-emerald-900 tracking-tight leading-none mb-2">Certificates Sent Successfully</h3>
-        <p class="text-sm font-semibold text-emerald-700 leading-relaxed">Certificates sent to <?= $completedCount ?> participants.</p>
+        <p id="successCertMessage" class="text-sm font-semibold text-emerald-700 leading-relaxed">Certificates sent to <?= $completedCount ?> participants.</p>
     </div>
   </div>
 </div>
 
 <!-- ═══════════  REGISTRATION CONFIRM MODAL  ═══════════ -->
+<div id="pendingCertModal" class="fixed inset-0 z-[151] hidden items-center justify-center p-4 bg-zinc-900/60 backdrop-blur-sm transition-opacity duration-300">
+  <div class="w-full max-w-2xl max-h-[95vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden scale-95 transition-transform duration-300" id="pendingCertContent">
+    <div class="p-6 border-b border-zinc-200 shrink-0">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h3 class="text-xl font-bold text-zinc-900 tracking-tight">Pending evaluation before certificate sending</h3>
+          <p class="text-sm text-zinc-500 mt-1">Only eligible attendees will receive certificates right now.</p>
+        </div>
+        <button id="btnClosePendingCertModal" class="text-zinc-500 hover:text-zinc-800 focus:outline-none">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="p-6 overflow-y-auto flex-1">
+      <div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 mb-4">
+        Are you sure these students still have not answered their required evaluation?
+      </div>
+      <div id="pendingCertList" class="max-h-80 overflow-y-auto space-y-3"></div>
+    </div>
+    <div class="flex items-center justify-between gap-3 px-6 py-4 border-t border-zinc-200 bg-zinc-50 shrink-0">
+      <button id="btnCancelPendingCert" class="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-100 transition">Cancel</button>
+      <button id="btnConfirmPendingCert" class="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 transition">Send Eligible Certificates</button>
+    </div>
+  </div>
+</div>
+
+<div id="templateCertModal" class="fixed inset-0 z-[152] hidden items-center justify-center p-4 bg-zinc-900/60 backdrop-blur-sm transition-opacity duration-300">
+  <div class="w-full max-w-6xl max-h-[95vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden scale-95 transition-transform duration-300" id="templateCertContent">
+    <div class="p-6 border-b border-zinc-200 shrink-0">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h3 class="text-xl font-bold text-zinc-900 tracking-tight">Preview Certificate Sending</h3>
+          <p class="text-sm text-zinc-500 mt-1">Choose the exact saved template to use before certificates are sent.</p>
+        </div>
+        <div class="flex items-start gap-3 flex-shrink-0">
+          <div class="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 min-w-[96px]">
+            <div class="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Eligible</div>
+            <div id="templateCertEligibleCount" class="text-2xl font-black text-zinc-900 leading-none">0</div>
+            <div class="text-[11px] text-zinc-500 mt-1">ready</div>
+          </div>
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 min-w-[96px]">
+            <div class="text-[10px] font-black text-amber-700 uppercase tracking-widest mb-1">Pending</div>
+            <div id="templateCertPendingCount" class="text-2xl font-black text-amber-800 leading-none">0</div>
+            <div class="text-[11px] text-amber-700 mt-1">incomplete</div>
+          </div>
+          <button id="btnCloseTemplateCertModal" class="text-zinc-500 hover:text-zinc-800 focus:outline-none mt-1">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="p-6 overflow-y-auto flex-1">
+      <div class="grid grid-cols-1 xl:grid-cols-[280px,minmax(0,1fr)] gap-5 items-start">
+        <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 space-y-3 xl:sticky xl:top-0">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="text-sm font-black text-zinc-900 uppercase tracking-widest">Saved Templates</div>
+              <div class="text-xs text-zinc-500 mt-1">Drag from here, or click then assign on center board.</div>
+            </div>
+            <a href="/certificate_admin.php?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-[11px] font-bold text-zinc-700 hover:bg-zinc-50 transition">Editor</a>
+          </div>
+
+          <div id="templateCertGrid" class="max-h-[64vh] overflow-y-auto pr-1 grid grid-cols-1 gap-3">
+          <?php if (count($certificateTemplates) === 0): ?>
+            <div class="rounded-2xl border border-dashed border-zinc-300 bg-white px-5 py-8 text-center">
+              <div class="text-sm font-bold text-zinc-800">No saved templates yet</div>
+              <div class="text-xs text-zinc-500 mt-1">Create at least one built-in certificate template before sending.</div>
+            </div>
+          <?php endif; ?>
+
+          <?php foreach ($certificateTemplates as $template): ?>
+            <?php
+              $templateId = (string) ($template['id'] ?? '');
+              $templateTitle = (string) ($template['title'] ?? 'Certificate Template');
+              $templateScope = (string) ($template['template_scope'] ?? 'event');
+              $templateSessionId = (string) ($template['scope_session_id'] ?? '');
+              $templateScopeLabel = (string) ($template['scope_label'] ?? ($templateScope === 'session' ? 'Seminar' : 'Whole Event'));
+              $templateEventTitle = $templateScope === 'session'
+                  ? $templateScopeLabel
+                  : 'Whole Event';
+              $templateThumb = trim((string) ($template['thumbnail_url'] ?? ''));
+              $badgeClasses = $templateScope === 'session'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : 'bg-emerald-100 text-emerald-800 border-emerald-200';
+            ?>
+            <button
+              type="button"
+              class="template-send-card group text-left rounded-2xl border border-zinc-200 bg-white overflow-hidden shadow-sm hover:border-emerald-400 hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
+              draggable="true"
+              data-template-id="<?= htmlspecialchars($templateId) ?>"
+              data-template-title="<?= htmlspecialchars($templateTitle, ENT_QUOTES) ?>"
+              data-template-event="<?= htmlspecialchars($templateEventTitle, ENT_QUOTES) ?>"
+              data-template-scope="<?= htmlspecialchars($templateScope) ?>"
+              data-template-session-id="<?= htmlspecialchars($templateSessionId) ?>"
+              data-template-scope-label="<?= htmlspecialchars($templateScopeLabel, ENT_QUOTES) ?>"
+              data-template-thumb="<?= htmlspecialchars($templateThumb, ENT_QUOTES) ?>"
+              data-template-linked-event="<?= htmlspecialchars((string) ($template['linked_event_label'] ?? ''), ENT_QUOTES) ?>"
+            >
+              <div class="h-32 bg-zinc-100 border-b border-zinc-200 overflow-hidden relative">
+                <?php if ($templateThumb !== ''): ?>
+                  <img src="<?= htmlspecialchars($templateThumb) ?>" alt="<?= htmlspecialchars($templateTitle) ?>" class="w-full h-full object-cover">
+                <?php else: ?>
+                  <div class="w-full h-full flex items-center justify-center text-zinc-300">
+                    <svg class="w-12 h-12" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.75 19.25h14.5a1.5 1.5 0 001.5-1.5V6.25a1.5 1.5 0 00-1.5-1.5H4.75a1.5 1.5 0 00-1.5 1.5v11.5a1.5 1.5 0 001.5 1.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h8M8 15h5M8 9h8"/></svg>
+                  </div>
+                <?php endif; ?>
+                <span class="absolute top-3 left-3 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest shadow-sm <?= htmlspecialchars($badgeClasses) ?>">
+                  <?= htmlspecialchars($templateScopeLabel) ?>
+                </span>
+              </div>
+              <div class="p-4">
+                <div class="text-sm font-black text-zinc-900 truncate"><?= htmlspecialchars($templateTitle) ?></div>
+                <div class="text-xs text-zinc-500 mt-1 truncate"><?= htmlspecialchars($templateEventTitle) ?></div>
+              </div>
+            </button>
+          <?php endforeach; ?>
+          </div>
+        </div>
+
+        <div id="seminarTemplateAssignWrap" class="hidden rounded-2xl border border-amber-200 bg-amber-50/70 px-6 py-6 space-y-4 min-h-[64vh]">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
+            </div>
+            <div>
+              <div class="text-base font-black text-amber-900">Assignment Center</div>
+              <div id="templateModeLabel" class="text-xs text-amber-700 mt-0.5">Mode: Simple (Whole Event)</div>
+            </div>
+          </div>
+          <div class="rounded-xl border border-amber-200 bg-white/90 px-3 py-2 text-[11px] font-semibold text-amber-700">
+            Drop template cards here. You can also click a template and then click a target.
+          </div>
+          <div id="seminarTemplateAssignRows" class="space-y-3"></div>
+        </div>
+
+        <div id="templateCertSidebar" class="space-y-4 xl:col-start-2">
+          <div id="templateCertSelectedWrap" class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">
+            <div class="text-[11px] font-black text-amber-700 uppercase tracking-widest mb-2">Selected Template</div>
+            <div id="templateCertSelectedLabel" class="text-sm font-black text-amber-900 leading-snug">None selected yet</div>
+            <div class="text-xs text-amber-700 mt-1">Only the chosen template will be sent.</div>
+          </div>
+
+          <div id="templateCertSinglePreviewWrap" class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+            <div class="text-[11px] font-black text-zinc-500 uppercase tracking-widest mb-3">Preview</div>
+            <div class="rounded-2xl border border-zinc-200 bg-white overflow-hidden shadow-sm">
+              <div id="templateCertPreviewThumbWrap" class="aspect-[4/3] bg-zinc-100 flex items-center justify-center overflow-hidden">
+                <img id="templateCertPreviewThumb" src="" alt="" class="hidden w-full h-full object-cover">
+                <div id="templateCertPreviewEmpty" class="text-center px-4">
+                  <div class="text-sm font-bold text-zinc-700">No template selected yet</div>
+                  <div class="text-xs text-zinc-500 mt-1">Pick a saved template to preview.</div>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm mt-3">
+              <div id="templateCertPreviewTitle" class="text-base font-black text-zinc-900">No template selected yet</div>
+              <div id="templateCertPreviewScope" class="mt-2 inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-black uppercase tracking-widest text-zinc-600">Choose a template</div>
+              <div id="templateCertPreviewEvent" class="mt-2 text-xs font-semibold text-zinc-500"></div>
+            </div>
+          </div>
+
+          <div id="templateCertPendingWrap" class="hidden rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">
+            <div class="text-sm font-bold text-amber-900 mb-3">Pending evaluation participants (excluded from sending).</div>
+            <div id="templateCertPendingList" class="max-h-36 overflow-y-auto space-y-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center justify-between gap-3 px-6 py-4 border-t border-zinc-200 bg-zinc-50 shrink-0">
+      <button id="btnCancelTemplateCert" class="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-100 transition">Cancel</button>
+      <button id="btnConfirmTemplateCert" class="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 transition">Send Using Selected Template</button>
+    </div>
+  </div>
+</div>
+
 <div id="confirmRegModal" class="fixed inset-0 z-[100] hidden items-center justify-center p-4 bg-zinc-900/50 backdrop-blur-sm">
   <div class="w-full max-w-sm rounded-3xl bg-white border border-zinc-200 shadow-xl overflow-hidden">
     <div class="p-6 pb-5 text-center">
@@ -572,6 +950,18 @@ render_header('Event Details', $user);
   </div>
 </div>
 
+<style>
+@keyframes assignmentDropzonePop {
+  0% { transform: scale(1); box-shadow: 0 0 0 rgba(245, 158, 11, 0); }
+  40% { transform: scale(1.015); box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.18); }
+  100% { transform: scale(1); box-shadow: 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+.assignment-dropzone-pop {
+  animation: assignmentDropzonePop 380ms ease-out;
+}
+</style>
+
 <script>
 <?php if ($role === 'admin' || $role === 'teacher'): ?>
 // ------------------------------------------------------------------
@@ -591,6 +981,10 @@ const mainAiBtn = document.getElementById('mainAiImproveBtn');
 const mainUndoBtn = document.getElementById('mainUndoBtn');
 const mainAiStatus = document.getElementById('mainAiStatus');
 const mainModalPanel = document.getElementById('modalContent');
+const eventModeInput = document.getElementById('event_mode');
+const seminarEditSection = document.getElementById('seminarEditSection');
+const seminar2Editor = document.getElementById('seminar2Editor');
+const btnToggleSeminar2 = document.getElementById('btnToggleSeminar2');
 
 let mainIsExpanded = false;
 let originalMainDesc = '';
@@ -629,6 +1023,61 @@ function toLocalInput(iso) {
     return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 
+function clearSeminarEditor(prefix) {
+    document.getElementById(`${prefix}_title`).value = '';
+    document.getElementById(`${prefix}_start_local`).value = '';
+    document.getElementById(`${prefix}_end_local`).value = '';
+}
+
+function fillSeminarEditor(prefix, session) {
+    document.getElementById(`${prefix}_title`).value = session?.title || '';
+    document.getElementById(`${prefix}_start_local`).value = toLocalInput(session?.start_at || '');
+    document.getElementById(`${prefix}_end_local`).value = toLocalInput(session?.end_at || '');
+}
+
+function setSeminar2Visible(visible) {
+    seminar2Editor?.classList.toggle('hidden', !visible);
+    if (btnToggleSeminar2) {
+        btnToggleSeminar2.textContent = visible ? 'Remove Seminar 2' : 'Add Seminar 2';
+    }
+}
+
+function collectSeminar(prefix) {
+    const title = document.getElementById(`${prefix}_title`).value.trim();
+    const startLocal = document.getElementById(`${prefix}_start_local`).value;
+    const endLocal = document.getElementById(`${prefix}_end_local`).value;
+
+    if (!title && !startLocal && !endLocal) {
+        return null;
+    }
+    if (!startLocal || !endLocal) {
+        throw new Error('Please complete seminar start and end date/time.');
+    }
+
+    const start = new Date(startLocal);
+    const end = new Date(endLocal);
+    if (!(start instanceof Date) || Number.isNaN(start.getTime()) || !(end instanceof Date) || Number.isNaN(end.getTime())) {
+        throw new Error('Invalid seminar date/time.');
+    }
+    if (end <= start) {
+        throw new Error('Each seminar end time must be after its start time.');
+    }
+
+    return {
+        title: title || 'Seminar',
+        start_at: start.toISOString(),
+        end_at: end.toISOString()
+    };
+}
+
+btnToggleSeminar2?.addEventListener('click', () => {
+    const willShow = seminar2Editor?.classList.contains('hidden') ?? true;
+    setSeminar2Visible(willShow);
+    if (!willShow) {
+        clearSeminarEditor('seminar2');
+    }
+});
+
 if (btnEdit) {
   btnEdit.addEventListener('click', () => {
     resetMainEditorTools();
@@ -640,6 +1089,31 @@ if (btnEdit) {
     document.getElementById('start_at_local').value = toLocalInput(btnEdit.dataset.start_at);
     document.getElementById('end_at_local').value = toLocalInput(btnEdit.dataset.end_at);
 
+    let sessions = [];
+    try {
+        sessions = JSON.parse(btnEdit.dataset.sessions || '[]');
+    } catch (_) {
+        sessions = [];
+    }
+    const isSeminarBased = (btnEdit.dataset.event_mode || 'simple') === 'seminar_based' || sessions.length > 0;
+    eventModeInput.value = isSeminarBased ? 'seminar_based' : 'simple';
+    seminarEditSection?.classList.toggle('hidden', !isSeminarBased);
+    clearSeminarEditor('seminar1');
+    clearSeminarEditor('seminar2');
+    setSeminar2Visible(false);
+    if (isSeminarBased) {
+        if (sessions[0]) {
+            fillSeminarEditor('seminar1', sessions[0]);
+        } else {
+            document.getElementById('seminar1_title').value = 'Seminar 1';
+            document.getElementById('seminar1_start_local').value = toLocalInput(btnEdit.dataset.start_at);
+            document.getElementById('seminar1_end_local').value = toLocalInput(btnEdit.dataset.end_at);
+        }
+        if (sessions[1]) {
+            fillSeminarEditor('seminar2', sessions[1]);
+            setSeminar2Visible(true);
+        }
+    }
 
     eventModal.classList.remove('opacity-0', 'pointer-events-none');
     modalContent.classList.remove('scale-95');
@@ -677,9 +1151,25 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       description: document.getElementById('description').value.trim(),
       start_at: sd.toISOString(),
       end_at: ed.toISOString(),
+      event_mode: eventModeInput?.value || 'simple',
 
       csrf_token: window.CSRF_TOKEN
     };
+
+    if ((eventModeInput?.value || 'simple') === 'seminar_based') {
+      try {
+        const seminar1 = collectSeminar('seminar1');
+        if (!seminar1) {
+          throw new Error('Seminar 1 schedule is required for seminar-based events.');
+        }
+        const seminar2Visible = !(seminar2Editor?.classList.contains('hidden'));
+        const seminar2 = seminar2Visible ? collectSeminar('seminar2') : null;
+        payload.sessions = seminar2 ? [seminar1, seminar2] : [seminar1];
+      } catch (seminarErr) {
+        msg.textContent = seminarErr.message || 'Invalid seminar schedule.';
+        return;
+      }
+    }
     
     document.getElementById('btnSubmitForm').textContent = 'Saving...';
     try {
@@ -750,46 +1240,612 @@ const btnSendCert = document.getElementById('btnSendCert');
 const certModal = document.getElementById('successCertModal');
 const certContent = document.getElementById('successCertContent');
 const btnCloseCertModal = document.getElementById('btnCloseCertModal');
+const successCertMessage = document.getElementById('successCertMessage');
+const pendingCertModal = document.getElementById('pendingCertModal');
+const pendingCertContent = document.getElementById('pendingCertContent');
+const pendingCertList = document.getElementById('pendingCertList');
+const btnClosePendingCertModal = document.getElementById('btnClosePendingCertModal');
+const btnCancelPendingCert = document.getElementById('btnCancelPendingCert');
+const btnConfirmPendingCert = document.getElementById('btnConfirmPendingCert');
+const templateCertModal = document.getElementById('templateCertModal');
+const templateCertContent = document.getElementById('templateCertContent');
+const btnCloseTemplateCertModal = document.getElementById('btnCloseTemplateCertModal');
+const btnCancelTemplateCert = document.getElementById('btnCancelTemplateCert');
+const btnConfirmTemplateCert = document.getElementById('btnConfirmTemplateCert');
+const templateCertEligibleCount = document.getElementById('templateCertEligibleCount');
+const templateCertPendingCount = document.getElementById('templateCertPendingCount');
+const templateCertSelectedLabel = document.getElementById('templateCertSelectedLabel');
+const templateCertPendingWrap = document.getElementById('templateCertPendingWrap');
+const templateCertPendingList = document.getElementById('templateCertPendingList');
+const templateSendCards = Array.from(document.querySelectorAll('.template-send-card'));
+const templateCertPreviewThumb = document.getElementById('templateCertPreviewThumb');
+const templateCertPreviewEmpty = document.getElementById('templateCertPreviewEmpty');
+const templateCertPreviewTitle = document.getElementById('templateCertPreviewTitle');
+const templateCertPreviewScope = document.getElementById('templateCertPreviewScope');
+const templateCertPreviewEvent = document.getElementById('templateCertPreviewEvent');
+const seminarTemplateAssignWrap = document.getElementById('seminarTemplateAssignWrap');
+const seminarTemplateAssignRows = document.getElementById('seminarTemplateAssignRows');
+const templateModeLabel = document.getElementById('templateModeLabel');
+const templateCertSelectedWrap = document.getElementById('templateCertSelectedWrap');
+const templateCertSinglePreviewWrap = document.getElementById('templateCertSinglePreviewWrap');
+let selectedCertificateTemplateId = '';
+let selectedCertificateTemplateTitle = '';
+let selectedCertificateTemplateScope = 'event';
+let selectedCertificateTemplateSessionId = '';
+let previewMode = 'simple';
+let selectedSeminarTemplateMap = {};
+let armedAssignmentTemplateId = '';
+const modalSessions = <?= json_encode(array_map(static function (array $s): array {
+    return [
+        'id' => (string) ($s['id'] ?? ''),
+        'label' => build_session_display_name($s),
+    ];
+}, $sessions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+
+function openPendingCertModal() {
+    pendingCertModal?.classList.remove('hidden');
+    pendingCertModal?.classList.add('flex');
+    setTimeout(() => {
+        pendingCertModal?.classList.remove('opacity-0');
+        pendingCertContent?.classList.remove('scale-95');
+        pendingCertContent?.classList.add('scale-100');
+    }, 10);
+}
+
+function closePendingCertModal() {
+    pendingCertModal?.classList.add('opacity-0');
+    pendingCertContent?.classList.remove('scale-100');
+    pendingCertContent?.classList.add('scale-95');
+    setTimeout(() => {
+        pendingCertModal?.classList.add('hidden');
+        pendingCertModal?.classList.remove('flex');
+    }, 300);
+}
+
+function openTemplateCertModal() {
+    templateCertModal?.classList.remove('hidden');
+    templateCertModal?.classList.add('flex');
+    setTimeout(() => {
+        templateCertModal?.classList.remove('opacity-0');
+        templateCertContent?.classList.remove('scale-95');
+        templateCertContent?.classList.add('scale-100');
+    }, 10);
+}
+
+function closeTemplateCertModal() {
+    templateCertModal?.classList.add('opacity-0');
+    templateCertContent?.classList.remove('scale-100');
+    templateCertContent?.classList.add('scale-95');
+    setTimeout(() => {
+        templateCertModal?.classList.add('hidden');
+        templateCertModal?.classList.remove('flex');
+    }, 300);
+}
+
+function renderPendingStudents(items) {
+    if (!pendingCertList) return;
+    if (!Array.isArray(items) || items.length === 0) {
+        pendingCertList.innerHTML = '<div class="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500">All eligible attendees have already completed evaluation.</div>';
+        return;
+    }
+
+    pendingCertList.innerHTML = items.map((item) => {
+        const label = item?.label || item?.name || 'Student';
+        const reasons = Array.isArray(item?.reasons) ? item.reasons : [];
+        const reasonsHtml = reasons.length > 0
+            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${reason}</span>`).join('')}</div>`
+            : '';
+
+        return `
+            <div class="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                <div class="text-sm font-bold text-zinc-900">${label}</div>
+                ${reasonsHtml}
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTemplatePendingStudents(items) {
+    if (!templateCertPendingList || !templateCertPendingWrap) return;
+    if (!Array.isArray(items) || items.length === 0) {
+        templateCertPendingWrap.classList.add('hidden');
+        templateCertPendingList.innerHTML = '';
+        return;
+    }
+
+    templateCertPendingWrap.classList.remove('hidden');
+    templateCertPendingList.innerHTML = items.map((item) => {
+        const label = item?.label || item?.name || 'Student';
+        const reasons = Array.isArray(item?.reasons) ? item.reasons : [];
+        const reasonsHtml = reasons.length > 0
+            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${reason}</span>`).join('')}</div>`
+            : '';
+
+        return `
+            <div class="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                <div class="text-sm font-bold text-zinc-900">${label}</div>
+                ${reasonsHtml}
+            </div>
+        `;
+    }).join('');
+}
+
+function updateSelectedTemplateCard() {
+    templateSendCards.forEach((card) => {
+        const active = card.dataset.templateId === selectedCertificateTemplateId;
+        card.classList.toggle('border-amber-500', active);
+        card.classList.toggle('ring-2', active);
+        card.classList.toggle('ring-amber-200', active);
+        card.classList.toggle('bg-amber-50', active);
+    });
+
+    if (templateCertSelectedLabel) {
+        templateCertSelectedLabel.textContent = selectedCertificateTemplateTitle || 'None selected yet';
+    }
+
+    const selectedCard = templateSendCards.find((card) => card.dataset.templateId === selectedCertificateTemplateId);
+    if (templateCertPreviewTitle) {
+        templateCertPreviewTitle.textContent = selectedCertificateTemplateTitle || 'No template selected yet';
+    }
+    if (templateCertPreviewScope) {
+        templateCertPreviewScope.textContent = selectedCard?.dataset.templateScopeLabel || 'Choose a template';
+    }
+    if (templateCertPreviewEvent) {
+        templateCertPreviewEvent.textContent = selectedCard?.dataset.templateLinkedEvent || '';
+    }
+    if (templateCertPreviewThumb && templateCertPreviewEmpty) {
+        const thumb = selectedCard?.dataset.templateThumb || '';
+        if (thumb) {
+            templateCertPreviewThumb.src = thumb;
+            templateCertPreviewThumb.alt = selectedCertificateTemplateTitle || 'Certificate template preview';
+            templateCertPreviewThumb.classList.remove('hidden');
+            templateCertPreviewEmpty.classList.add('hidden');
+        } else {
+            templateCertPreviewThumb.src = '';
+            templateCertPreviewThumb.alt = '';
+            templateCertPreviewThumb.classList.add('hidden');
+            templateCertPreviewEmpty.classList.remove('hidden');
+        }
+    }
+}
+
+function getTemplateCardById(templateId) {
+    return templateSendCards.find((card) => (card.dataset.templateId || '') === templateId);
+}
+
+function canAssignTemplateToTarget(card, targetKind, targetSessionId) {
+    if (!card) return false;
+    const scope = card.dataset.templateScope || 'event';
+    const cardSessionId = card.dataset.templateSessionId || '';
+    if (targetKind === 'event') {
+        return scope === 'event';
+    }
+    if (scope === 'event') {
+        return true;
+    }
+    return scope === 'session' && cardSessionId !== '' && cardSessionId === targetSessionId;
+}
+
+function clearDropzoneHighlight(dropzone) {
+    if (!dropzone) return;
+    dropzone.classList.remove('border-amber-500', 'ring-2', 'ring-amber-200', 'bg-amber-50');
+}
+
+function setDropzoneAssignedState(dropzone, isAssigned) {
+    if (!dropzone) return;
+    dropzone.classList.toggle('border-amber-400', isAssigned);
+    dropzone.classList.toggle('bg-amber-50', isAssigned);
+    dropzone.classList.toggle('shadow-sm', isAssigned);
+}
+
+function assignTemplateToTarget(targetRow, templateId) {
+    const targetKind = targetRow?.dataset?.targetKind || '';
+    const targetSessionId = targetRow?.dataset?.sessionId || '';
+    const card = getTemplateCardById(templateId);
+    if (!card) return false;
+
+    if (!canAssignTemplateToTarget(card, targetKind, targetSessionId)) {
+        alert(targetKind === 'event'
+            ? 'Whole Event target only accepts whole-event templates.'
+            : 'This seminar target only accepts its own seminar template or a whole-event template.');
+        return false;
+    }
+
+    const templateTitle = card.dataset.templateTitle || 'Template';
+    const templateScopeLabel = card.dataset.templateScopeLabel || 'Template';
+    const templateScope = card.dataset.templateScope || 'event';
+    const templateSessionId = card.dataset.templateSessionId || '';
+    const templateEventTitle = card.dataset.templateEvent || '';
+    const templateThumb = card.dataset.templateThumb || '';
+    const assignedLabel = targetRow.querySelector('.assignment-template-label');
+    const assignedMeta = targetRow.querySelector('.assignment-template-meta');
+    const assignedPreviewImg = targetRow.querySelector('.assignment-template-preview-img');
+    const assignedPreviewEmpty = targetRow.querySelector('.assignment-template-preview-empty');
+    const clearBtn = targetRow.querySelector('.assignment-clear-btn');
+    const dropzone = targetRow.querySelector('.assignment-dropzone');
+
+    if (assignedLabel) {
+        assignedLabel.textContent = templateTitle;
+    }
+    if (assignedMeta) {
+        assignedMeta.textContent = `${templateScopeLabel}${templateEventTitle ? ` - ${templateEventTitle}` : ''}`;
+    }
+    if (assignedPreviewImg && assignedPreviewEmpty) {
+        if (templateThumb) {
+            assignedPreviewImg.src = templateThumb;
+            assignedPreviewImg.alt = templateTitle;
+            assignedPreviewImg.classList.remove('hidden');
+            assignedPreviewEmpty.classList.add('hidden');
+        } else {
+            assignedPreviewImg.src = '';
+            assignedPreviewImg.alt = '';
+            assignedPreviewImg.classList.add('hidden');
+            assignedPreviewEmpty.classList.remove('hidden');
+        }
+    }
+    if (clearBtn) {
+        clearBtn.classList.remove('hidden');
+    }
+    setDropzoneAssignedState(dropzone, true);
+    if (dropzone) {
+        dropzone.classList.remove('assignment-dropzone-pop');
+        void dropzone.offsetWidth;
+        dropzone.classList.add('assignment-dropzone-pop');
+    }
+
+    targetRow.dataset.assignedTemplateId = card.dataset.templateId || '';
+    targetRow.dataset.assignedTemplateScope = templateScope;
+    targetRow.dataset.assignedTemplateSessionId = templateSessionId;
+
+    if (targetKind === 'event') {
+        setSelectedCertificateTemplate(
+            card.dataset.templateId || '',
+            templateTitle,
+            templateEventTitle
+        );
+    } else if (targetSessionId !== '') {
+        selectedSeminarTemplateMap[targetSessionId] = {
+            template_id: card.dataset.templateId || '',
+            template_scope: templateScope === 'session' ? 'session' : 'event',
+        };
+    }
+
+    return true;
+}
+
+function clearTemplateFromTarget(targetRow) {
+    const targetKind = targetRow?.dataset?.targetKind || '';
+    const targetSessionId = targetRow?.dataset?.sessionId || '';
+    const targetLabel = targetRow?.dataset?.targetLabel || 'target';
+    const assignedLabel = targetRow?.querySelector('.assignment-template-label');
+    const assignedMeta = targetRow?.querySelector('.assignment-template-meta');
+    const assignedPreviewImg = targetRow?.querySelector('.assignment-template-preview-img');
+    const assignedPreviewEmpty = targetRow?.querySelector('.assignment-template-preview-empty');
+    const clearBtn = targetRow?.querySelector('.assignment-clear-btn');
+    const dropzone = targetRow?.querySelector('.assignment-dropzone');
+
+    if (assignedLabel) {
+        assignedLabel.textContent = `No template assigned for ${targetLabel}`;
+    }
+    if (assignedMeta) {
+        assignedMeta.textContent = 'Drop or click a template card to assign.';
+    }
+    if (assignedPreviewImg && assignedPreviewEmpty) {
+        assignedPreviewImg.src = '';
+        assignedPreviewImg.alt = '';
+        assignedPreviewImg.classList.add('hidden');
+        assignedPreviewEmpty.classList.remove('hidden');
+    }
+    if (clearBtn) {
+        clearBtn.classList.add('hidden');
+    }
+    setDropzoneAssignedState(dropzone, false);
+    clearDropzoneHighlight(dropzone);
+
+    delete targetRow.dataset.assignedTemplateId;
+    delete targetRow.dataset.assignedTemplateScope;
+    delete targetRow.dataset.assignedTemplateSessionId;
+
+    if (targetKind === 'event') {
+        setSelectedCertificateTemplate('', '', '');
+    } else if (targetSessionId !== '') {
+        delete selectedSeminarTemplateMap[targetSessionId];
+    }
+}
+
+function bindAssignmentRowInteractions(targetRow) {
+    const dropzone = targetRow.querySelector('.assignment-dropzone');
+    const clearBtn = targetRow.querySelector('.assignment-clear-btn');
+    if (!dropzone) return;
+
+    const assignFromArmedCard = () => {
+        if (!armedAssignmentTemplateId) {
+            alert('Click a template card first, then click this target to assign.');
+            return;
+        }
+        assignTemplateToTarget(targetRow, armedAssignmentTemplateId);
+    };
+
+    dropzone.addEventListener('click', assignFromArmedCard);
+    dropzone.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        dropzone.classList.add('border-amber-500', 'ring-2', 'ring-amber-200', 'bg-amber-50');
+    });
+    dropzone.addEventListener('dragleave', () => {
+        clearDropzoneHighlight(dropzone);
+    });
+    dropzone.addEventListener('drop', (event) => {
+        event.preventDefault();
+        clearDropzoneHighlight(dropzone);
+        const droppedTemplateId = event.dataTransfer?.getData('text/template-id') || '';
+        if (!droppedTemplateId) return;
+        assignTemplateToTarget(targetRow, droppedTemplateId);
+    });
+
+    clearBtn?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        clearTemplateFromTarget(targetRow);
+    });
+}
+
+function renderSeminarTemplateAssignments(sessionSummary) {
+    if (!seminarTemplateAssignWrap || !seminarTemplateAssignRows) return;
+    const sourceSessions = previewMode === 'seminar_based'
+        ? (Array.isArray(sessionSummary) && sessionSummary.length > 0 ? sessionSummary : modalSessions)
+        : [];
+
+    seminarTemplateAssignWrap.classList.remove('hidden');
+    selectedSeminarTemplateMap = {};
+    armedAssignmentTemplateId = '';
+
+    const wholeEventRow = `
+        <div class="assignment-target-row rounded-2xl border border-amber-200 bg-white p-3 space-y-3" data-target-kind="event" data-session-id="" data-target-label="Whole Event">
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-sm font-black text-zinc-900">Whole Event</div>
+                <span class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-amber-700">Simple Mode Target</span>
+            </div>
+            <button type="button" class="assignment-dropzone w-full text-left rounded-xl border border-dashed border-amber-300 bg-amber-50/40 px-4 py-3 hover:bg-amber-50 transition-all duration-200">
+                <div class="flex items-start gap-3">
+                    <div class="w-20 h-14 rounded-lg border border-zinc-200 bg-zinc-100 overflow-hidden flex items-center justify-center flex-shrink-0">
+                        <img src="" alt="" class="assignment-template-preview-img hidden w-full h-full object-cover">
+                        <div class="assignment-template-preview-empty text-[10px] font-bold text-zinc-400">No Preview</div>
+                    </div>
+                    <div class="min-w-0">
+                        <div class="assignment-template-label text-sm font-bold text-zinc-900">No template assigned for Whole Event</div>
+                        <div class="assignment-template-meta mt-1 text-xs text-zinc-500">Drop or click a template card to assign.</div>
+                    </div>
+                </div>
+            </button>
+            <div class="flex justify-end">
+                <button type="button" class="assignment-clear-btn hidden rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:bg-zinc-50 transition">Clear</button>
+            </div>
+        </div>
+    `;
+
+    const seminarRows = sourceSessions.map((session) => {
+        const sessionId = String(session?.session_id || session?.id || '');
+        const sessionLabel = String(session?.session_title || session?.label || 'Seminar');
+        const eligibleCount = Number(session?.eligible_count || 0);
+        const pendingCount = Number(session?.pending_count || 0);
+        return `
+            <div class="assignment-target-row rounded-2xl border border-amber-200 bg-white p-3 space-y-3" data-target-kind="session" data-session-id="${sessionId}" data-target-label="${sessionLabel.replace(/"/g, '&quot;')}">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm font-black text-zinc-900">${sessionLabel}</div>
+                    <div class="text-[11px] font-bold text-zinc-500">Eligible: ${eligibleCount} | Pending: ${pendingCount}</div>
+                </div>
+                <button type="button" class="assignment-dropzone w-full text-left rounded-xl border border-dashed border-amber-300 bg-amber-50/40 px-4 py-3 hover:bg-amber-50 transition-all duration-200">
+                    <div class="flex items-start gap-3">
+                        <div class="w-20 h-14 rounded-lg border border-zinc-200 bg-zinc-100 overflow-hidden flex items-center justify-center flex-shrink-0">
+                            <img src="" alt="" class="assignment-template-preview-img hidden w-full h-full object-cover">
+                            <div class="assignment-template-preview-empty text-[10px] font-bold text-zinc-400">No Preview</div>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="assignment-template-label text-sm font-bold text-zinc-900">No template assigned for ${sessionLabel}</div>
+                            <div class="assignment-template-meta mt-1 text-xs text-zinc-500">Drop or click a template card to assign.</div>
+                        </div>
+                    </div>
+                </button>
+                <div class="flex justify-end">
+                    <button type="button" class="assignment-clear-btn hidden rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:bg-zinc-50 transition">Clear</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    seminarTemplateAssignRows.innerHTML = wholeEventRow + seminarRows;
+
+    seminarTemplateAssignRows.querySelectorAll('.assignment-target-row').forEach((row) => {
+        bindAssignmentRowInteractions(row);
+    });
+
+    if (previewMode !== 'seminar_based') {
+        seminarTemplateAssignRows.querySelectorAll('.assignment-target-row[data-target-kind="session"]').forEach((row) => {
+            row.classList.add('hidden');
+        });
+    } else {
+        seminarTemplateAssignRows.querySelectorAll('.assignment-target-row[data-target-kind="event"]').forEach((row) => {
+            row.classList.add('hidden');
+        });
+        setSelectedCertificateTemplate('', '', '');
+    }
+
+}
+
+function setSelectedCertificateTemplate(templateId, templateTitle, templateEventTitle) {
+    selectedCertificateTemplateId = templateId || '';
+    selectedCertificateTemplateTitle = selectedCertificateTemplateId
+        ? `${templateTitle}${templateEventTitle ? ` - ${templateEventTitle}` : ''}`
+        : '';
+    const selectedCard = templateSendCards.find((card) => card.dataset.templateId === selectedCertificateTemplateId);
+    selectedCertificateTemplateScope = selectedCard?.dataset.templateScope || 'event';
+    selectedCertificateTemplateSessionId = selectedCard?.dataset.templateSessionId || '';
+    updateSelectedTemplateCard();
+}
+
+function showTemplateSelectionPreview(data) {
+    // Always start empty when modal opens.
+    setSelectedCertificateTemplate('', '', '');
+    selectedSeminarTemplateMap = {};
+    armedAssignmentTemplateId = '';
+
+    previewMode = String(data?.mode || 'simple');
+    if (templateModeLabel) {
+        templateModeLabel.textContent = previewMode === 'seminar_based'
+            ? 'Mode: Seminar Based'
+            : 'Mode: Simple (Whole Event)';
+    }
+    if (templateCertEligibleCount) {
+        templateCertEligibleCount.textContent = String(data?.eligible_count || 0);
+    }
+    if (templateCertPendingCount) {
+        templateCertPendingCount.textContent = String(data?.pending_count || 0);
+    }
+    renderTemplatePendingStudents(data?.pending_students || []);
+    renderSeminarTemplateAssignments(Array.isArray(data?.session_summary) ? data.session_summary : []);
+    updateSelectedTemplateCard();
+
+    if (previewMode === 'seminar_based') {
+        templateCertSelectedWrap?.classList.add('hidden');
+        templateCertSinglePreviewWrap?.classList.add('hidden');
+    } else {
+        templateCertSelectedWrap?.classList.remove('hidden');
+        templateCertSinglePreviewWrap?.classList.remove('hidden');
+    }
+
+    openTemplateCertModal();
+}
+
+async function sendCertificates(templateId) {
+    const buildLoadingHtml = (label, iconColorClass = 'text-emerald-700') =>
+        `<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 ${iconColorClass}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>${label}</span>`;
+
+    const originalText = btnSendCert.innerHTML;
+    const originalConfirmTemplateText = btnConfirmTemplateCert ? btnConfirmTemplateCert.innerHTML : '';
+    btnSendCert.innerHTML = buildLoadingHtml('Sending...');
+    btnSendCert.disabled = true;
+    if (btnConfirmTemplateCert) {
+        btnConfirmTemplateCert.innerHTML = buildLoadingHtml('Sending...', 'text-white');
+        btnConfirmTemplateCert.disabled = true;
+        btnConfirmTemplateCert.classList.add('opacity-80', 'cursor-not-allowed');
+    }
+
+    const requestPayload = {
+        event_id: '<?= htmlspecialchars($id) ?>',
+        csrf_token: window.CSRF_TOKEN,
+    };
+    if (previewMode === 'seminar_based') {
+        requestPayload.session_template_map = selectedSeminarTemplateMap;
+    } else {
+        requestPayload.template_id = templateId;
+        requestPayload.template_scope = selectedCertificateTemplateScope;
+        requestPayload.template_session_id = selectedCertificateTemplateSessionId;
+    }
+
+    try {
+        const res = await fetch('/api/certificates_generate.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestPayload)
+        });
+        const data = await res.json();
+        if (!data.ok) {
+            throw new Error(data.error || 'Failed to generate certificates');
+        }
+
+        if (successCertMessage) {
+            const baseText = `Successfully generated ${data.count} certificate${data.count === 1 ? '' : 's'} for eligible participants.`;
+            const notif = data?.notification || {};
+            const attemptedUsers = Number(notif?.attempted_users || 0);
+            const resolvedTokens = Number(notif?.resolved_tokens || 0);
+            const sent = notif?.sent === true;
+            const notifText = attemptedUsers > 0
+                ? (resolvedTokens > 0
+                    ? ` Push delivery: ${resolvedTokens} active device token${resolvedTokens === 1 ? '' : 's'}${sent ? ' notified.' : ' attempted (check FCM credentials/logs).'}`
+                    : ' Push delivery: no active device token found. Ask student to log in again on the app device.')
+                : '';
+            successCertMessage.textContent = `${baseText}${notifText}`;
+        }
+        closeTemplateCertModal();
+        certModal.classList.remove('hidden');
+        certModal.classList.add('flex');
+        setTimeout(() => {
+            certModal.classList.remove('opacity-0');
+            certContent.classList.remove('scale-95');
+            certContent.classList.add('scale-100');
+        }, 10);
+    } catch (err) {
+        alert('Error generating certificates: ' + err.message);
+    } finally {
+        btnSendCert.innerHTML = originalText;
+        btnSendCert.disabled = btnSendCert.dataset.eventFinished !== '1';
+        if (btnConfirmTemplateCert) {
+            btnConfirmTemplateCert.innerHTML = originalConfirmTemplateText;
+            btnConfirmTemplateCert.disabled = false;
+            btnConfirmTemplateCert.classList.remove('opacity-80', 'cursor-not-allowed');
+        }
+    }
+}
+
+templateSendCards.forEach((card) => {
+    card.addEventListener('dragstart', (event) => {
+        const templateId = card.dataset.templateId || '';
+        if (!templateId) return;
+        armedAssignmentTemplateId = templateId;
+        event.dataTransfer?.setData('text/template-id', templateId);
+        event.dataTransfer.effectAllowed = 'copy';
+    });
+    card.addEventListener('click', () => {
+        armedAssignmentTemplateId = card.dataset.templateId || '';
+        const wholeEventTarget = seminarTemplateAssignRows?.querySelector('.assignment-target-row[data-target-kind="event"]');
+        if (wholeEventTarget) {
+            assignTemplateToTarget(wholeEventTarget, armedAssignmentTemplateId);
+            return;
+        }
+        setSelectedCertificateTemplate(
+            card.dataset.templateId || '',
+            card.dataset.templateTitle || 'Template',
+            card.dataset.templateEvent || ''
+        );
+    });
+});
 
 if (btnSendCert) {
     btnSendCert.addEventListener('click', async () => {
-        const completeds = <?= $completedCount ?>;
-        if (completeds === 0) {
-            alert("No completed participants to send certificates to!");
+        if (btnSendCert.dataset.eventFinished !== '1') {
+            alert('Certificates can only be sent after the event has finished.');
             return;
         }
 
         const originalText = btnSendCert.innerHTML;
-        btnSendCert.innerHTML = '<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 text-emerald-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...</span>';
+        btnSendCert.innerHTML = '<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 text-emerald-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Checking...</span>';
         btnSendCert.disabled = true;
 
         try {
             const res = await fetch('/api/certificates_generate.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ event_id: '<?= htmlspecialchars($id) ?>', csrf_token: window.CSRF_TOKEN })
+                body: JSON.stringify({ event_id: '<?= htmlspecialchars($id) ?>', preview_only: true, csrf_token: window.CSRF_TOKEN })
             });
             const data = await res.json();
-            
-            if (!data.ok) throw new Error(data.error || 'Failed to generate certificates');
-            
+            if (!data.ok) {
+                throw new Error(data.error || 'Failed to preview certificates');
+            }
+
             btnSendCert.innerHTML = originalText;
             btnSendCert.disabled = false;
-            
-            document.querySelector('#successCertContent p.text-zinc-600').textContent = `Successfully generated and sent ${data.count} certificates to eligible participants via email!`;
-            
-            certModal.classList.remove('hidden');
-            certModal.classList.add('flex');
-            setTimeout(() => {
-                certModal.classList.remove('opacity-0');
-                certContent.classList.remove('scale-95');
-                certContent.classList.add('scale-100');
-            }, 10);
-            
+
+            if ((data.eligible_count || 0) === 0) {
+                alert(data.pending_count > 0
+                    ? 'No certificates can be sent yet because the present participants still have incomplete evaluation.'
+                    : 'No eligible participants found for certificate sending.');
+                return;
+            }
+
+            showTemplateSelectionPreview(data);
         } catch (err) {
             alert('Error generating certificates: ' + err.message);
             btnSendCert.innerHTML = originalText;
-            btnSendCert.disabled = false;
+            btnSendCert.disabled = btnSendCert.dataset.eventFinished !== '1';
         }
     });
 
@@ -804,6 +1860,55 @@ if (btnSendCert) {
     };
 
     btnCloseCertModal.addEventListener('click', closeCertModal);
+    btnClosePendingCertModal?.addEventListener('click', closePendingCertModal);
+    btnCancelPendingCert?.addEventListener('click', closePendingCertModal);
+    btnCloseTemplateCertModal?.addEventListener('click', closeTemplateCertModal);
+    btnCancelTemplateCert?.addEventListener('click', closeTemplateCertModal);
+    pendingCertModal?.addEventListener('click', (e) => {
+        if (e.target === pendingCertModal) {
+            closePendingCertModal();
+        }
+    });
+    templateCertModal?.addEventListener('click', (e) => {
+        if (e.target === templateCertModal) {
+            closeTemplateCertModal();
+        }
+    });
+    btnConfirmPendingCert?.addEventListener('click', async () => {
+        closePendingCertModal();
+        showTemplateSelectionPreview({
+            eligible_count: Number(templateCertEligibleCount?.textContent || '0'),
+            pending_count: Number(templateCertPendingCount?.textContent || '0'),
+            pending_students: [],
+            mode: previewMode,
+            session_summary: modalSessions.map((session) => ({
+                session_id: session.id,
+                session_title: session.label,
+                eligible_count: 0,
+                pending_count: 0,
+            })),
+        });
+    });
+    btnConfirmTemplateCert?.addEventListener('click', async () => {
+        if (previewMode === 'seminar_based') {
+            const sessionRows = Array.isArray(modalSessions) ? modalSessions : [];
+            const missing = sessionRows.filter((session) => {
+                const sessionId = String(session?.id || '');
+                return sessionId !== '' && !selectedSeminarTemplateMap[sessionId];
+            });
+            if (missing.length > 0) {
+                alert('Please select a template for each seminar before sending.');
+                return;
+            }
+            await sendCertificates('');
+            return;
+        }
+        if (!selectedCertificateTemplateId) {
+            alert('Please select a saved certificate template first.');
+            return;
+        }
+        await sendCertificates(selectedCertificateTemplateId);
+    });
 }
 
 // ------------------------------------------------------------------

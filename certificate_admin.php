@@ -5,48 +5,97 @@ session_start();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
+require_once __DIR__ . '/includes/event_sessions.php';
 
 $user = require_role(['admin', 'teacher']);
 $eventId = isset($_GET['event_id']) ? (string) $_GET['event_id'] : '';
 $templateId = isset($_GET['template_id']) ? (string) $_GET['template_id'] : '';
+$sessionId = isset($_GET['session_id']) ? trim((string) $_GET['session_id']) : '';
+
+$headers = [
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY
+];
 
 $eventName = 'Sample Event One';
+$sessions = [];
 if ($eventId !== '') {
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=title&id=eq.' . rawurlencode($eventId);
-    $res = supabase_request('GET', $url, [
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY
-    ]);
+    $res = supabase_request('GET', $url, $headers);
     if ($res['ok']) {
         $arr = json_decode((string) $res['body'], true);
         if (is_array($arr) && isset($arr[0]['title'])) {
             $eventName = $arr[0]['title'];
         }
     }
+
+    $sessions = fetch_event_sessions($eventId, $headers);
+    $knownSessionIds = array_map(static fn (array $session): string => (string) ($session['id'] ?? ''), $sessions);
+    if ($sessionId !== '' && !in_array($sessionId, $knownSessionIds, true)) {
+        $sessionId = '';
+    }
 }
 
 // Fetch saved templates for this workspace
 $customTemplates = [];
 if ($eventId !== '') {
-    $tplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
-    $tplRes = supabase_request('GET', $tplUrl, [
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY
-    ]);
-    if ($tplRes['ok']) {
-        $arrTpl = json_decode((string) $tplRes['body'], true);
+    $eventTplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
+    $eventTplRes = supabase_request('GET', $eventTplUrl, $headers);
+    if ($eventTplRes['ok']) {
+        $arrTpl = json_decode((string) $eventTplRes['body'], true);
         if (is_array($arrTpl)) {
-            $customTemplates = $arrTpl;
+            foreach ($arrTpl as $tpl) {
+                if (!is_array($tpl)) {
+                    continue;
+                }
+                $customTemplates[] = [
+                    ...$tpl,
+                    'template_scope' => 'event',
+                    'scope_session_id' => '',
+                    'scope_label' => 'Whole Event',
+                ];
+            }
+        }
+    }
+
+    if (count($sessions) > 0) {
+        $sessionIds = array_values(array_filter(array_map(
+            static fn (array $session): string => (string) ($session['id'] ?? ''),
+            $sessions
+        )));
+
+        if (count($sessionIds) > 0) {
+            $sessionTplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificate_templates'
+                . '?select=id,title,canvas_state,thumbnail_url,session_id,event_sessions(title,topic)'
+                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+                . '&order=created_at.desc';
+            $sessionTplRes = supabase_request('GET', $sessionTplUrl, $headers);
+            if ($sessionTplRes['ok']) {
+                $sessionTplRows = json_decode((string) $sessionTplRes['body'], true);
+                if (is_array($sessionTplRows)) {
+                    foreach ($sessionTplRows as $tpl) {
+                        if (!is_array($tpl)) {
+                            continue;
+                        }
+                        $sessionMeta = isset($tpl['event_sessions']) && is_array($tpl['event_sessions'])
+                            ? $tpl['event_sessions']
+                            : [];
+                        $customTemplates[] = [
+                            ...$tpl,
+                            'template_scope' => 'session',
+                            'scope_session_id' => (string) ($tpl['session_id'] ?? ''),
+                            'scope_label' => build_session_display_name($sessionMeta),
+                        ];
+                    }
+                }
+            }
         }
     }
 } else {
     // Fetch all recent templates if no event context
     $limit = $templateId !== '' ? 20 : 10;
     $tplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&order=created_at.desc&limit=' . $limit;
-    $tplRes = supabase_request('GET', $tplUrl, [
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY
-    ]);
+    $tplRes = supabase_request('GET', $tplUrl, $headers);
     if ($tplRes['ok']) {
         $arrTpl = json_decode((string) $tplRes['body'], true);
         if (is_array($arrTpl)) {
@@ -54,6 +103,20 @@ if ($eventId !== '') {
         }
     }
 }
+
+if ($templateId !== '' && count($customTemplates) > 0) {
+    foreach ($customTemplates as $tpl) {
+        if ((string) ($tpl['id'] ?? '') !== $templateId) {
+            continue;
+        }
+        if ((string) ($tpl['template_scope'] ?? 'event') === 'session') {
+            $sessionId = (string) ($tpl['scope_session_id'] ?? '');
+        }
+        break;
+    }
+}
+
+$initialTemplateScope = $sessionId !== '' ? 'session' : 'event';
 ?>
 <!doctype html>
 <html lang="en">
@@ -247,6 +310,10 @@ if ($eventId !== '') {
              
              <div class="h-6 w-px bg-zinc-700"></div>
 
+             <button id="btnUndo" class="flex items-center gap-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 px-3 py-1.5 rounded-md text-xs font-semibold transition border border-transparent opacity-50 pointer-events-none" title="Undo (Ctrl+Z)">
+                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9m0 0l5-5M4 9h9a7 7 0 110 14h-1"/></svg> Undo
+             </button>
+
              <button id="btnDuplicate" class="flex items-center gap-1.5 text-zinc-300 hover:text-orange-400 bg-zinc-800 hover:bg-orange-500/10 border border-zinc-700 hover:border-orange-500/30 px-3 py-1.5 rounded-md text-xs font-semibold transition">
                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 15L12 18.75 15.75 15M12 18.75V8.25"/></svg> Copy
              </button>
@@ -290,15 +357,47 @@ if ($eventId !== '') {
                 
                 <!-- TEMPLATES PANEL (NEW) -->
                 <div id="panel-templates" class="tab-panel flex flex-col gap-4">
+                    <?php if ($eventId !== '' && count($sessions) > 0): ?>
+                    <div class="rounded-lg border border-zinc-800 bg-[#18181b] p-3 shadow-sm">
+                        <div class="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Template Scope</div>
+                        <select id="templateScopeSelect" class="select-clean w-full text-sm font-semibold">
+                            <option value="event" <?= $initialTemplateScope === 'event' ? 'selected' : '' ?>>Whole Event</option>
+                            <?php foreach ($sessions as $session): ?>
+                                <?php
+                                    $scopeValue = 'session:' . (string) ($session['id'] ?? '');
+                                    $selectedScope = $initialTemplateScope === 'session' && (string) ($session['id'] ?? '') === $sessionId;
+                                ?>
+                                <option value="<?= htmlspecialchars($scopeValue) ?>" <?= $selectedScope ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars(build_session_display_name($session)) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p id="templateScopeHint" class="mt-2 text-[11px] text-zinc-400 leading-relaxed">
+                            Save and browse templates for the selected certificate scope.
+                        </p>
+                    </div>
+                    <?php endif; ?>
                     
-                    <?php if (count($customTemplates) > 0): ?>
                     <h3 class="text-xs font-bold text-zinc-100 flex items-center gap-2">
                         <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
                         Saved Templates
                     </h3>
+                    <?php if (count($customTemplates) > 0): ?>
                     <?php foreach ($customTemplates as $tpl): ?>
-                        <div class="custom-template-card border border-zinc-700 bg-[#18181b] rounded-lg p-2 cursor-pointer transition-all flex flex-col gap-2 shadow-sm hover:border-orange-500 relative group" data-json="<?= htmlspecialchars(json_encode($tpl['canvas_state'])) ?>" data-id="<?= htmlspecialchars($tpl['id']) ?>">
-                            <button class="delete-tpl-btn" onclick="event.stopPropagation(); deleteCustomTemplate('<?= htmlspecialchars($tpl['id']) ?>', this.parentElement)">
+                        <?php
+                            $cardScope = (string) ($tpl['template_scope'] ?? 'event');
+                            $cardSessionId = (string) ($tpl['scope_session_id'] ?? '');
+                            $cardScopeLabel = (string) ($tpl['scope_label'] ?? ($cardScope === 'session' ? 'Seminar' : 'Whole Event'));
+                        ?>
+                        <div
+                            class="custom-template-card border border-zinc-700 bg-[#18181b] rounded-lg p-2 cursor-pointer transition-all flex flex-col gap-2 shadow-sm hover:border-orange-500 relative group"
+                            data-json="<?= htmlspecialchars(json_encode($tpl['canvas_state'])) ?>"
+                            data-id="<?= htmlspecialchars($tpl['id']) ?>"
+                            data-scope="<?= htmlspecialchars($cardScope) ?>"
+                            data-session-id="<?= htmlspecialchars($cardSessionId) ?>"
+                            data-scope-label="<?= htmlspecialchars($cardScopeLabel) ?>"
+                        >
+                            <button class="delete-tpl-btn" onclick="event.stopPropagation(); deleteCustomTemplate('<?= htmlspecialchars($tpl['id']) ?>', this.parentElement, '<?= htmlspecialchars($cardScope) ?>', '<?= htmlspecialchars($cardSessionId) ?>')">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                             </button>
                             <div class="w-full h-32 bg-zinc-900 rounded border border-zinc-800 overflow-hidden relative pointer-events-none flex items-center justify-center">
@@ -308,10 +407,20 @@ if ($eventId !== '') {
                                     <div class="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">No Preview</div>
                                 <?php endif; ?>
                             </div>
-                            <div class="text-xs font-semibold text-zinc-300 text-center truncate px-1"><?= htmlspecialchars((string)$tpl['title']) ?></div>
+                            <div class="flex items-center justify-between gap-2 px-1">
+                                <div class="text-xs font-semibold text-zinc-300 truncate"><?= htmlspecialchars((string)$tpl['title']) ?></div>
+                                <span class="shrink-0 rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400"><?= htmlspecialchars($cardScopeLabel) ?></span>
+                            </div>
                         </div>
                     <?php endforeach; ?>
+                    <div id="savedTemplatesEmpty" class="hidden rounded-lg border border-dashed border-zinc-700 bg-[#18181b] px-4 py-6 text-center text-[11px] text-zinc-500 font-semibold">
+                        No saved templates for the selected scope yet.
+                    </div>
                     <div class="h-4"></div>
+                    <?php else: ?>
+                    <div id="savedTemplatesEmpty" class="rounded-lg border border-dashed border-zinc-700 bg-[#18181b] px-4 py-6 text-center text-[11px] text-zinc-500 font-semibold">
+                        No saved templates for the selected scope yet.
+                    </div>
                     <?php endif; ?>
 
                     <div class="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Premade Designs</div>
@@ -347,7 +456,7 @@ if ($eventId !== '') {
                         Upload Background
                         <input type="file" id="uploadBg" class="hidden" accept="image/*">
                     </label>
-                    <button class="w-full py-2.5 bg-red-500/10 text-red-500 border border-red-500/20 rounded-md text-xs font-semibold hover:bg-red-500 hover:text-white transition shadow-sm" onclick="canvas.setBackgroundImage(null, canvas.renderAll.bind(canvas));">Remove Background</button>
+                    <button id="btnRemoveBackground" class="w-full py-2.5 bg-red-500/10 text-red-500 border border-red-500/20 rounded-md text-xs font-semibold hover:bg-red-500 hover:text-white transition shadow-sm">Remove Background</button>
                     
                     <div class="rounded-lg bg-[#18181b] border border-zinc-800 p-4 mt-2">
                         <p class="text-[11px] text-zinc-400 font-medium leading-relaxed">
@@ -561,9 +670,96 @@ fabric.Object.prototype.set({
 let isCanvasDirty = false;
 let isProgrammaticChange = false;
 
-canvas.on('object:added',    () => { if (!isProgrammaticChange) isCanvasDirty = true; });
-canvas.on('object:modified', () => { if (!isProgrammaticChange) isCanvasDirty = true; });
-canvas.on('object:removed',  () => { if (!isProgrammaticChange) isCanvasDirty = true; });
+// --- Undo History ---
+const HISTORY_MAX = 80;
+const historyStack = [];
+let historyIndex = -1;
+let historySuspend = false;
+const btnUndo = document.getElementById('btnUndo');
+
+function currentCanvasSnapshot() {
+    const state = canvas.toDatalessJSON([
+        'lockMovementX', 'lockMovementY', 'lockRotation', 'lockScalingX', 'lockScalingY',
+        'hasControls', 'hoverCursor'
+    ]);
+    state.customFonts = (typeof activeCustomFonts !== 'undefined' && Array.isArray(activeCustomFonts))
+        ? activeCustomFonts
+        : [];
+    return JSON.stringify(state);
+}
+
+function updateUndoUi() {
+    if (!btnUndo) return;
+    const canUndo = historyIndex > 0;
+    btnUndo.classList.toggle('opacity-50', !canUndo);
+    btnUndo.classList.toggle('pointer-events-none', !canUndo);
+    btnUndo.classList.toggle('text-zinc-400', !canUndo);
+    btnUndo.classList.toggle('text-zinc-300', canUndo);
+    btnUndo.title = canUndo ? `Undo (${historyIndex} step${historyIndex > 1 ? 's' : ''})` : 'Undo (Ctrl+Z)';
+}
+
+function pushHistoryState(force = false) {
+    if (isProgrammaticChange || historySuspend) return;
+    const snapshot = currentCanvasSnapshot();
+    if (!force && historyIndex >= 0 && historyStack[historyIndex] === snapshot) return;
+
+    if (historyIndex < historyStack.length - 1) {
+        historyStack.splice(historyIndex + 1);
+    }
+    historyStack.push(snapshot);
+    if (historyStack.length > HISTORY_MAX) {
+        historyStack.shift();
+    } else {
+        historyIndex += 1;
+    }
+    if (historyStack.length > 0 && historyIndex >= historyStack.length) {
+        historyIndex = historyStack.length - 1;
+    }
+    updateUndoUi();
+}
+
+function resetHistoryBaseline() {
+    historyStack.length = 0;
+    historyIndex = -1;
+    pushHistoryState(true);
+    isCanvasDirty = false;
+}
+
+function undoCanvasState() {
+    if (historyIndex <= 0) return;
+    historyIndex -= 1;
+    updateUndoUi();
+    historySuspend = true;
+    isProgrammaticChange = true;
+    clearSnapLines();
+    const snapshot = historyStack[historyIndex];
+    canvas.loadFromJSON(JSON.parse(snapshot), () => {
+        canvas.renderAll();
+        syncToolbars();
+        isProgrammaticChange = false;
+        historySuspend = false;
+        isCanvasDirty = historyIndex > 0;
+    });
+}
+
+canvas.on('object:added', () => {
+    if (!isProgrammaticChange) {
+        isCanvasDirty = true;
+        pushHistoryState();
+    }
+});
+canvas.on('object:modified', () => {
+    if (!isProgrammaticChange) {
+        isCanvasDirty = true;
+        pushHistoryState();
+    }
+});
+canvas.on('object:removed', () => {
+    if (!isProgrammaticChange) {
+        isCanvasDirty = true;
+        pushHistoryState();
+    }
+});
 
 window.addEventListener('beforeunload', e => { if (isCanvasDirty) { e.preventDefault(); e.returnValue = ''; } });
 
@@ -657,6 +853,9 @@ function initializePersistentFonts() {
 // Initialize everything on load
 initializePersistentFonts();
 setTimeout(autoFitCanvas, 150);
+setTimeout(resetHistoryBaseline, 0);
+btnUndo?.addEventListener('click', undoCanvasState);
+updateUndoUi();
 
 // --- Magnetic Snap Lines ---
 const SNAP = 15;
@@ -707,7 +906,11 @@ function handleImageUpload(e, isBackground = false) {
         fabric.Image.fromURL(f.target.result, img => {
             if (isBackground) {
                 img.set({ scaleX: canvas.width / img.width, scaleY: canvas.height / img.height, originX: 'left', originY: 'top', left: 0, top: 0 });
-                canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                canvas.setBackgroundImage(img, () => {
+                    canvas.renderAll();
+                    isCanvasDirty = true;
+                    pushHistoryState();
+                });
                 isCanvasDirty = true;
             } else {
                 img.set({ left: canvas.width / 2, top: canvas.height / 2, originX: 'center', originY: 'center' });
@@ -721,6 +924,13 @@ function handleImageUpload(e, isBackground = false) {
 document.getElementById('uploadBg').addEventListener('change',  e => handleImageUpload(e, true));
 document.getElementById('uploadLogo').addEventListener('change', e => handleImageUpload(e, false));
 document.getElementById('uploadSig').addEventListener('change',  e => handleImageUpload(e, false));
+document.getElementById('btnRemoveBackground')?.addEventListener('click', () => {
+    canvas.setBackgroundImage(null, () => {
+        canvas.renderAll();
+        isCanvasDirty = true;
+        pushHistoryState();
+    });
+});
 
 // --- Toolbar Sync ---
 const objToolbar  = document.getElementById('objectToolbar');
@@ -771,7 +981,13 @@ function syncToolbars() {
 
 function executeActiveObj(fn) {
     const obj = canvas.getActiveObject();
-    if (obj) { fn(obj); canvas.renderAll(); syncToolbars(); }
+    if (obj) {
+        fn(obj);
+        canvas.renderAll();
+        syncToolbars();
+        isCanvasDirty = true;
+        pushHistoryState();
+    }
 }
 
 // --- Object Toolbar Actions ---
@@ -816,6 +1032,20 @@ document.getElementById('btnDeleteObj').addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', e => {
+    const target = e.target;
+    const isTypingTarget = !!target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+    );
+    const wantsUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z';
+    if (wantsUndo && !isTypingTarget) {
+        e.preventDefault();
+        undoCanvasState();
+        return;
+    }
+
     const obj = canvas.getActiveObject();
     if (e.key === 'Delete') {
         if (obj && !obj.isEditing) { canvas.remove(obj); canvas.discardActiveObject(); canvas.renderAll(); }
@@ -833,6 +1063,7 @@ window.addEventListener('keydown', e => {
         obj.setCoords();
         canvas.requestRenderAll();
         isCanvasDirty = true;
+        pushHistoryState();
     }
 });
 
@@ -884,7 +1115,13 @@ document.getElementById('btnUnderline').addEventListener('click', () => executeA
 
 // --- Page Size ---
 document.getElementById('pageSize').addEventListener('change', e => {
-    const dim = sizes[e.target.value]; canvas.setWidth(dim.width); canvas.setHeight(dim.height); canvas.renderAll(); autoFitCanvas();
+    const dim = sizes[e.target.value];
+    canvas.setWidth(dim.width);
+    canvas.setHeight(dim.height);
+    canvas.renderAll();
+    autoFitCanvas();
+    isCanvasDirty = true;
+    pushHistoryState();
 });
 
 // --- HD Preview ---
@@ -919,11 +1156,16 @@ document.getElementById('btnSaveTemplate').addEventListener('click', async () =>
         btn.disabled = true;
 
         try {
+            const scopeValue = document.getElementById('templateScopeSelect')?.value || 'event';
+            const templateScope = scopeValue.startsWith('session:') ? 'session' : 'event';
+            const selectedSessionId = scopeValue.startsWith('session:') ? scopeValue.split(':')[1] : '';
             const res = await fetch('/api/certificate_save.php', {
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     event_id: '<?php echo htmlspecialchars($eventId); ?>',
+                    session_id: selectedSessionId,
+                    template_scope: templateScope,
                     title: name, 
                     canvas_state: jsonState, 
                     thumbnail_url: thumb,
@@ -940,7 +1182,18 @@ document.getElementById('btnSaveTemplate').addEventListener('click', async () =>
             btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg> Saved!`;
             btn.classList.add('!from-emerald-500', '!to-emerald-400');
             
-            setTimeout(() => window.location.reload(), 1000);
+            setTimeout(() => {
+                const nextUrl = new URL(window.location.href);
+                if (data?.template_id) {
+                    nextUrl.searchParams.set('template_id', data.template_id);
+                }
+                if (data?.template_scope === 'session' && data?.session_id) {
+                    nextUrl.searchParams.set('session_id', data.session_id);
+                } else {
+                    nextUrl.searchParams.delete('session_id');
+                }
+                window.location.href = nextUrl.toString();
+            }, 1000);
         } catch (err) {
             showNotification(err.message, 'error');
             btn.innerHTML = originalBtnContent; 
@@ -953,6 +1206,52 @@ document.getElementById('btnSaveTemplate').addEventListener('click', async () =>
 function setActiveCard(el) {
     document.querySelectorAll('.template-card, .custom-template-card').forEach(c => c.classList.remove('active-template'));
     if (el) el.classList.add('active-template');
+}
+
+const templateScopeSelect = document.getElementById('templateScopeSelect');
+const templateScopeHint = document.getElementById('templateScopeHint');
+const savedTemplatesEmpty = document.getElementById('savedTemplatesEmpty');
+
+function getTemplateScopeMeta() {
+    const scopeValue = templateScopeSelect?.value || 'event';
+    if (scopeValue.startsWith('session:')) {
+        const sessionId = scopeValue.split(':')[1] || '';
+        const sessionLabel = templateScopeSelect?.selectedOptions?.[0]?.textContent?.trim() || 'Seminar';
+        return { scope: 'session', sessionId, label: sessionLabel };
+    }
+    return { scope: 'event', sessionId: '', label: 'Whole Event' };
+}
+
+function filterCustomTemplatesByScope() {
+    const { scope, sessionId, label } = getTemplateScopeMeta();
+    let visibleCount = 0;
+    const activeHidden = !!document.querySelector('.custom-template-card.active-template');
+
+    document.querySelectorAll('.custom-template-card').forEach((card) => {
+        const cardScope = card.dataset.scope || 'event';
+        const cardSessionId = card.dataset.sessionId || '';
+        const visible = cardScope === scope && (scope !== 'session' || cardSessionId === sessionId);
+        card.classList.toggle('hidden', !visible);
+        if (visible) {
+            visibleCount += 1;
+        } else if (card.classList.contains('active-template')) {
+            card.classList.remove('active-template');
+        }
+    });
+
+    if (savedTemplatesEmpty) {
+        savedTemplatesEmpty.classList.toggle('hidden', visibleCount > 0);
+    }
+
+    if (templateScopeHint) {
+        templateScopeHint.textContent = scope === 'session'
+            ? `You are editing templates for ${label}.`
+            : 'You are editing templates for the whole event.';
+    }
+
+    if (activeHidden && !document.querySelector('.custom-template-card.active-template')) {
+        setActiveCard(null);
+    }
 }
 
 // --- Load Preset Template --- (FIX: set backgroundColor AFTER clear, no intermediate renderAll)
@@ -977,7 +1276,9 @@ function doLoadPreset(type, cardEl) {
     }
 
     canvas.renderAll();
-    isCanvasDirty = false; isProgrammaticChange = false;
+    isCanvasDirty = false;
+    isProgrammaticChange = false;
+    resetHistoryBaseline();
     setActiveCard(cardEl); autoFitCanvas();
 }
 
@@ -997,7 +1298,9 @@ function doLoadCustom(cardEl) {
         isProgrammaticChange = true;
         canvas.loadFromJSON(parsed, () => {
             canvas.renderAll(); autoFitCanvas();
-            isCanvasDirty = false; isProgrammaticChange = false;
+            isCanvasDirty = false;
+            isProgrammaticChange = false;
+            resetHistoryBaseline();
             setActiveCard(cardEl);
         });
     } catch (e) {
@@ -1028,12 +1331,24 @@ const loadTemplateId = "<?= htmlspecialchars($templateId ?? '', ENT_QUOTES, 'UTF
 if (loadTemplateId !== '') {
     setTimeout(() => {
         const targetCard = document.querySelector(`.custom-template-card[data-id="${loadTemplateId}"]`);
-        if (targetCard) doLoadCustom(targetCard);
+        if (targetCard) {
+            if (templateScopeSelect) {
+                const scope = targetCard.dataset.scope || 'event';
+                const sessionId = targetCard.dataset.sessionId || '';
+                templateScopeSelect.value = scope === 'session' && sessionId ? `session:${sessionId}` : 'event';
+                filterCustomTemplatesByScope();
+            }
+            doLoadCustom(targetCard);
+        } else {
+            filterCustomTemplatesByScope();
+        }
     }, 300);
+} else {
+    filterCustomTemplatesByScope();
 }
 
 // --- Delete Custom Template ---
-async function deleteCustomTemplate(id, cardEl) {
+async function deleteCustomTemplate(id, cardEl, scope = 'event', sessionId = '') {
     showConfirm('Are you sure you want to delete this template forever?', async () => {
         try {
             const res = await fetch('/api/certificate_delete.php', {
@@ -1041,6 +1356,8 @@ async function deleteCustomTemplate(id, cardEl) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     template_id: id,
+                    template_scope: scope,
+                    session_id: sessionId,
                     csrf_token: <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>
                 })
             });
@@ -1050,13 +1367,18 @@ async function deleteCustomTemplate(id, cardEl) {
             showNotification('Template deleted.');
             cardEl.style.transform = 'scale(0.8)';
             cardEl.style.opacity = '0';
-            setTimeout(() => cardEl.remove(), 300);
+            setTimeout(() => {
+                cardEl.remove();
+                filterCustomTemplatesByScope();
+            }, 300);
         } catch (err) {
             showNotification(err.message, 'error');
             console.error(err);
         }
     });
 }
+
+templateScopeSelect?.addEventListener('change', filterCustomTemplatesByScope);
 </script>
     <!-- ══════ IMPORT FONT MODAL ══════ -->
     <div id="font-import-modal" style="z-index:9999;" class="fixed inset-0 hidden items-center justify-center px-4 bg-zinc-950/80 backdrop-blur-md transition-opacity">

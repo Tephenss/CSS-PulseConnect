@@ -45,7 +45,6 @@ $ticketId = (string) $ticket['id'];
 $patchPayload = [
     'status' => 'unscanned',
     'check_in_at' => null,
-    'check_out_at' => null,
     'last_scanned_at' => null,
     'last_scanned_by' => null,
     'updated_at' => gmdate('c'),
@@ -60,7 +59,7 @@ $writeHeaders = [
 ];
 
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId)
-    . '&select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by';
+    . '&select=id,ticket_id,status,check_in_at,last_scanned_at,last_scanned_by';
 $patchRes = supabase_request('PATCH', $patchUrl, $writeHeaders, json_encode($patchPayload, JSON_UNESCAPED_SLASHES));
 if (!$patchRes['ok']) {
     json_response([
@@ -77,11 +76,10 @@ if (!is_array($attendance)) {
         'ticket_id' => $ticketId,
         'status' => 'unscanned',
         'check_in_at' => null,
-        'check_out_at' => null,
         'last_scanned_at' => null,
         'last_scanned_by' => null,
     ]];
-    $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by';
+    $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,ticket_id,status,check_in_at,last_scanned_at,last_scanned_by';
     $createRes = supabase_request('POST', $createUrl, $writeHeaders, json_encode($createPayload, JSON_UNESCAPED_SLASHES));
     if (!$createRes['ok']) {
         json_response([
@@ -97,6 +95,10 @@ if (!is_array($attendance)) {
 if (!is_array($attendance)) {
     json_response(['ok' => false, 'error' => 'Attendance reset failed'], 500);
 }
+
+$sessionResetUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+    . '?registration_id=eq.' . rawurlencode($registrationId);
+supabase_request('DELETE', $sessionResetUrl, $readHeaders);
 
 json_response(['ok' => true, 'attendance' => $attendance], 200);
 

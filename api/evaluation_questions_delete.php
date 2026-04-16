@@ -14,14 +14,20 @@ $data = require_post_json();
 require_csrf_from_json($data);
 
 $questionId = isset($data['question_id']) ? (string) $data['question_id'] : '';
+$sessionId = isset($data['session_id']) ? trim((string) $data['session_id']) : '';
 if ($questionId === '') {
     json_response(['ok' => false, 'error' => 'question_id required'], 400);
 }
 
 // Optional ownership check for teacher
 if ((string) ($user['role'] ?? 'teacher') === 'teacher') {
-    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?select=id,event_id,events(created_by)&'
-        . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
+    if ($sessionId !== '') {
+        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions?select=id,session_id,event_sessions(event_id,events(created_by))&'
+            . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
+    } else {
+        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?select=id,event_id,events(created_by)&'
+            . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
+    }
     $headers = [
         'Accept: application/json',
         'apikey: ' . SUPABASE_KEY,
@@ -30,12 +36,16 @@ if ((string) ($user['role'] ?? 'teacher') === 'teacher') {
     $checkRes = supabase_request('GET', $checkUrl, $headers);
     $rows = $checkRes['ok'] ? json_decode((string) $checkRes['body'], true) : null;
     $q = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
-    if (!is_array($q) || (string) (($q['events']['created_by'] ?? '') ?? '') !== (string) ($user['id'] ?? '')) {
+    $ownerId = $sessionId !== ''
+        ? (string) ((($q['event_sessions']['events']['created_by'] ?? '') ?? ''))
+        : (string) (($q['events']['created_by'] ?? '') ?? '');
+    if (!is_array($q) || $ownerId !== (string) ($user['id'] ?? '')) {
         json_response(['ok' => false, 'error' => 'Forbidden'], 403);
     }
 }
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?id=eq.' . rawurlencode($questionId);
+$table = $sessionId !== '' ? 'event_session_evaluation_questions' : 'evaluation_questions';
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table . '?id=eq.' . rawurlencode($questionId);
 $headers = [
     'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,

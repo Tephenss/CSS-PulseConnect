@@ -20,13 +20,22 @@ csrf_validate($input['csrf_token'] ?? null);
 error_log("Delete API: CSRF validated.");
 
 $template_id = trim((string) ($input['template_id'] ?? ''));
+$template_scope = strtolower(trim((string) ($input['template_scope'] ?? 'event')));
 error_log("Delete API: Template ID: " . $template_id);
 
 if (empty($template_id)) {
     json_response(['ok' => false, 'error' => 'Template ID is required.'], 400);
 }
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?id=eq.' . urlencode($template_id);
+if (!in_array($template_scope, ['event', 'session'], true)) {
+    $template_scope = 'event';
+}
+
+$url = rtrim(SUPABASE_URL, '/') . (
+    $template_scope === 'session'
+        ? '/rest/v1/event_session_certificate_templates?id=eq.' . urlencode($template_id)
+        : '/rest/v1/certificate_templates?id=eq.' . urlencode($template_id)
+);
 error_log("Delete API: Request URL: " . $url);
 $headers = [
     'apikey: ' . SUPABASE_KEY,

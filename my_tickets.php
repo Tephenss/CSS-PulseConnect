@@ -30,7 +30,7 @@ render_header('My Tickets', $user);
 <div class="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
   <div>
     <h2 class="text-xl font-bold text-zinc-900 mb-1">My Tickets</h2>
-    <p class="text-zinc-400 text-sm">Present your QR ticket for attendance check-in and check-out.</p>
+    <p class="text-zinc-400 text-sm">Present your QR ticket for attendance check-in.</p>
   </div>
 </div>
 

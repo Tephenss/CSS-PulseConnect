@@ -8,19 +8,45 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/event_sessions.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
 
-$select = 'select=id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,users:created_by(first_name,last_name,suffix)';
-if ($role === 'admin') {
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&status=neq.archived&order=created_at.desc';
-} else {
-    // Teacher sees their own events OR any published events
-    // We remove status=neq.archived here so they can see rejected (archived) ones
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc';
+function events_missing_column_error(array $response): bool
+{
+    $body = strtolower((string) ($response['body'] ?? ''));
+    if ($body === '') {
+        return false;
+    }
+
+    return str_contains($body, 'events')
+        && str_contains($body, 'column')
+        && (
+            str_contains($body, 'does not exist')
+            || str_contains($body, 'schema cache')
+            || str_contains($body, 'could not find')
+        );
 }
+
+function build_manage_events_url(string $selectColumns, string $role, string $userId): string
+{
+    $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $selectColumns;
+    if ($role === 'admin') {
+        return $base . '&status=neq.archived&order=created_at.desc';
+    }
+
+    // Teacher sees their own events OR any published events.
+    return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc';
+}
+
+$eventSelectVariants = [
+    'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,users:created_by(first_name,last_name,suffix)',
+    'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,users:created_by(first_name,last_name,suffix)',
+    'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,users:created_by(first_name,last_name,suffix)',
+    'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,users:created_by(first_name,last_name,suffix)',
+];
 
 $headers = [
     'Accept: application/json',
@@ -28,7 +54,7 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-// Auto-archive events that have already ended.
+// Auto-finish events that have already ended.
 try {
     $nowUtc = gmdate('c');
     $archiveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
@@ -41,7 +67,7 @@ try {
         'apikey: ' . SUPABASE_KEY,
         'Authorization: Bearer ' . SUPABASE_KEY,
     ];
-    $archivePayload = json_encode(['status' => 'archived'], JSON_UNESCAPED_SLASHES);
+    $archivePayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
     if (is_string($archivePayload)) {
         supabase_request('PATCH', $archiveUrl, $archiveHeaders, $archivePayload);
     }
@@ -50,10 +76,22 @@ try {
 }
 
 $events = [];
-$res = supabase_request('GET', $url, $headers);
-if ($res['ok']) {
-    $decoded = json_decode((string) $res['body'], true);
-    $events = is_array($decoded) ? $decoded : [];
+foreach ($eventSelectVariants as $selectColumns) {
+    $eventsUrl = build_manage_events_url($selectColumns, $role, $userId);
+    $res = supabase_request('GET', $eventsUrl, $headers);
+
+    if ($res['ok']) {
+        $decoded = json_decode((string) $res['body'], true);
+        $events = is_array($decoded) ? $decoded : [];
+        break;
+    }
+
+    if (!events_missing_column_error($res)) {
+        break;
+    }
+}
+if (!empty($events)) {
+    $events = attach_event_sessions_to_events($events, $headers);
 }
 
 $teacherAccounts = [];
@@ -294,6 +332,30 @@ render_header('Manage Events', $user);
 
 
 <!-- ═══════════  EVENT WIZARD MODAL  ═══════════ -->
+<!-- Custom Date/Time Picker (restored) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<style>
+  .flatpickr-calendar {
+    border-radius: 1rem !important;
+    border: 1px solid #e4e4e7 !important;
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.16) !important;
+    z-index: 9999 !important;
+  }
+  .flatpickr-day.selected {
+    background: #ea580c !important;
+    border-color: #ea580c !important;
+  }
+  .flatpickr-input[readonly] {
+    background-color: #fff !important;
+    cursor: pointer;
+  }
+  .flatpickr-input[disabled] {
+    background-color: #f4f4f5 !important;
+    cursor: not-allowed;
+  }
+</style>
+
 <div id="eventModal" class="modal-backdrop">
   <div class="modal-panel">
 
@@ -318,6 +380,8 @@ render_header('Manage Events', $user);
       <form id="eventForm" class="space-y-3">
         <input type="hidden" name="mode" id="mode" value="create" />
         <input type="hidden" name="event_id" id="event_id" value="" />
+        <input type="hidden" name="event_mode" id="event_mode" value="simple" />
+        <input type="hidden" name="seminar_count" id="seminar_count" value="0" />
 
         <!-- Stepper -->
         <div class="wizard-stepper mb-2">
@@ -377,17 +441,31 @@ render_header('Manage Events', $user);
             </div>
           </div>
           
-          <!-- NEW: Batch Selection -->
-          <div id="batchSelectionContainer" class="pt-2">
-            <label class="relative flex items-start gap-3.5 p-3.5 mt-1 border border-zinc-200 rounded-xl cursor-pointer hover:border-orange-300 hover:bg-orange-50/50 transition-all shadow-sm group">
-              <div class="flex items-center h-5 mt-0.5">
-                <input type="checkbox" id="chkBatch2" value="1" class="peer w-4 h-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500 transition cursor-pointer accent-orange-600">
+          <div class="pt-2">
+            <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide">Event Structure</label>
+            <div class="grid grid-cols-1 gap-3">
+              <button type="button" class="structure-option group rounded-2xl border border-orange-300 bg-orange-50/70 p-4 text-left transition-all shadow-sm" data-mode="simple" data-seminars="0">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[13px] font-bold text-zinc-900 group-hover:text-orange-700 transition-colors">Simple Event</div>
+                    <p class="mt-1 text-[11px] leading-snug text-zinc-500">One event, one schedule, one attendance flow. This keeps the existing logic intact.</p>
+                  </div>
+                  <span class="structure-badge rounded-full border border-orange-300 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-orange-700">Default</span>
+                </div>
+              </button>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button type="button" class="structure-option group rounded-2xl border border-zinc-200 bg-white p-4 text-left transition-all shadow-sm hover:border-orange-300 hover:bg-orange-50/40" data-mode="seminar_based" data-seminars="1">
+                  <div class="text-[13px] font-bold text-zinc-900 group-hover:text-orange-700 transition-colors">1 Seminar</div>
+                  <p class="mt-1 text-[11px] leading-snug text-zinc-500">Single seminar session with its own title and schedule.</p>
+                </button>
+
+                <button type="button" class="structure-option group rounded-2xl border border-zinc-200 bg-white p-4 text-left transition-all shadow-sm hover:border-orange-300 hover:bg-orange-50/40" data-mode="seminar_based" data-seminars="2">
+                  <div class="text-[13px] font-bold text-zinc-900 group-hover:text-orange-700 transition-colors">2 Seminars</div>
+                  <p class="mt-1 text-[11px] leading-snug text-zinc-500">Two seminar sessions under one event, each with separate attendance tracking.</p>
+                </button>
               </div>
-              <div class="flex-1">
-                <p class="text-[13px] font-bold text-zinc-800 group-hover:text-orange-700 transition-colors">Split Event into 2 Batches</p>
-                <p class="text-[11px] text-zinc-500 leading-snug mt-0.5">Allows you to set up two completely separate schedules (Batch 1 & Batch 2) on the final step.</p>
-              </div>
-            </label>
+            </div>
           </div>
         </div>
 
@@ -427,41 +505,19 @@ render_header('Manage Events', $user);
 
         </div>
 
-<!-- ── Flatpickr (Premium Picker) ── -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
-<style>
-  /* Flatpickr PulseConnect Branding */
-  .flatpickr-calendar {
-      border-radius: 1rem !important;
-      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
-      border: 1px solid #e4e4e7 !important;
-  }
-  .flatpickr-day.selected {
-      background: #ea580c !important;
-      border-color: #ea580c !important;
-  }
-  .flatpickr-time input:hover, .flatpickr-time .flatpickr-am-pm:hover {
-      background: #f4f4f5 !important;
-  }
-  /* Ensure the picker is readable */
-  .flatpickr-input[readonly] { background-color: #fff !important; cursor: pointer; }
-  .flatpickr-input[disabled] { background-color: #f4f4f5 !important; cursor: not-allowed; }
-</style>
 
         <!-- Step 3: Schedule -->
         <div id="step3" class="space-y-4 hidden pb-4">
-          <!-- Standard Single or Batch 1 Schedule -->
-          <div id="scheduleBatch1" class="space-y-4">
-            <div id="lblBatch1" class="hidden mb-1"><span class="text-[10px] font-black tracking-widest text-orange-600 uppercase bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">Batch 1 Schedule</span></div>
-            <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
-              <div class="field-icon-wrap">
-                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <input id="grace_time" name="grace_time" type="number" min="0" value="15" class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
-              </div>
+          <div>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
+            <div class="field-icon-wrap">
+              <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <input id="grace_time" name="grace_time" type="number" min="0" value="15" class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
             </div>
+          </div>
+
+          <div id="simpleScheduleSection" class="space-y-4">
             <div>
               <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
               <div class="field-icon-wrap">
@@ -473,30 +529,55 @@ render_header('Manage Events', $user);
               <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">End Date & Time</label>
               <div class="field-icon-wrap">
                 <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <input id="end_at_local" name="end_at_local" type="text" placeholder="Select End Date & Time..." disabled class="datetime-picker w-full rounded-xl bg-zinc-50 border border-zinc-200 py-3 text-sm text-zinc-500 outline-none cursor-not-allowed transition" />
+                <input id="end_at_local" name="end_at_local" type="text" placeholder="Select End Date & Time..." class="datetime-picker w-full rounded-xl bg-zinc-50 border border-zinc-200 py-3 text-sm text-zinc-500 outline-none cursor-not-allowed transition" />
               </div>
             </div>
           </div>
 
-          <!-- Batch 2 Schedule -->
-          <div id="scheduleBatch2" class="space-y-4 pt-5 mt-5 border-t border-zinc-200 border-dashed hidden relative before:content-[''] before:absolute before:-top-px before:left-0 before:w-16 before:h-px before:bg-orange-500">
-            <div class="mb-1"><span class="text-[10px] font-black tracking-widest text-orange-600 uppercase bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">Batch 2 Schedule</span></div>
-            <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Batch 2 - Start Date & Time</label>
-              <div class="field-icon-wrap">
-                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
-                <input id="start_at_batch2" type="text" placeholder="Select Batch 2 Start..." class="datetime-picker w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+          <div id="seminarScheduleSection" class="hidden rounded-2xl border border-orange-200 bg-orange-50/60 p-4 space-y-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="text-xs font-bold uppercase tracking-wide text-orange-700">Seminar Sessions</div>
+                <p class="mt-1 text-[11px] leading-snug text-orange-700/80">Each seminar keeps its own attendance and evaluation flow. The parent event window will auto-sync from these schedules.</p>
               </div>
+              <span id="seminarSummaryBadge" class="rounded-full border border-orange-300 bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wide text-orange-700">1 Seminar</span>
             </div>
-            <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Batch 2 - End Date & Time</label>
-              <div class="field-icon-wrap">
-                <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <input id="end_at_batch2" type="text" placeholder="Select Batch 2 End..." disabled class="datetime-picker w-full rounded-xl bg-zinc-50 border border-zinc-200 py-3 text-sm text-zinc-500 outline-none cursor-not-allowed transition" />
+
+            <div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">
+              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 1</div>
+              <div>
+                <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                <input id="seminar1_title" type="text" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" placeholder="Seminar 1 title" />
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <input id="seminar1_start_local" type="text" placeholder="Select start date & time..." class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <input id="seminar1_end_local" type="text" placeholder="Select end date & time..." class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 bg-zinc-50 outline-none cursor-not-allowed transition" />
+                </div>
               </div>
             </div>
 
-
+            <div id="seminar2Editor" class="hidden rounded-xl border border-orange-200 bg-white p-4 space-y-3">
+              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
+              <div>
+                <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                <input id="seminar2_title" type="text" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" placeholder="Seminar 2 title" />
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <input id="seminar2_start_local" type="text" placeholder="Select start date & time..." class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                </div>
+                <div>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <input id="seminar2_end_local" type="text" placeholder="Select end date & time..." class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 bg-zinc-50 outline-none cursor-not-allowed transition" />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1099,6 +1180,8 @@ render_header('Manage Events', $user);
                       data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
                       data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
                       data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
+                      data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
+                      data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
                       data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                       data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
                       data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
@@ -1280,99 +1363,416 @@ render_header('Manage Events', $user);
     }
   });
 
-  // ── Flatpickr Initialization ──
-  const fpConfig = {
+  // Wizard initialization (simple + seminar based)
+    let step = 1;
+
+  const structureOptions = Array.from(document.querySelectorAll('.structure-option'));
+  const eventModeInput = document.getElementById('event_mode');
+  const seminarCountInput = document.getElementById('seminar_count');
+  const simpleScheduleSection = document.getElementById('simpleScheduleSection');
+  const seminarScheduleSection = document.getElementById('seminarScheduleSection');
+  const seminar2Editor = document.getElementById('seminar2Editor');
+  const seminarSummaryBadge = document.getElementById('seminarSummaryBadge');
+
+  const startAtInput = document.getElementById('start_at_local');
+  const endAtInput = document.getElementById('end_at_local');
+  const seminar1StartInput = document.getElementById('seminar1_start_local');
+  const seminar1EndInput = document.getElementById('seminar1_end_local');
+  const seminar2StartInput = document.getElementById('seminar2_start_local');
+  const seminar2EndInput = document.getElementById('seminar2_end_local');
+
+  const flatpickrConfig = {
     enableTime: true,
-    dateFormat: "Y-m-d H:i",
+    noCalendar: false,
+    dateFormat: 'Y-m-d H:i',
     altInput: true,
-    altFormat: "F j, Y · h:i K",
+    altFormat: 'F j, Y - h:i K',
     minuteIncrement: 30,
-    minDate: new Date().fp_incr(1),
-    disableMobile: true
+    defaultHour: 7,
+    defaultMinute: 0,
+    minTime: '07:00',
+    position: 'auto center',
+    disableMobile: true,
+    allowInput: false
   };
 
-  function setPickerDisabled(fp, isDisabled) {
-      if (!fp) return;
-      fp.set('clickOpens', !isDisabled);
-      if (fp.altInput) {
-          fp.altInput.disabled = isDisabled;
-          fp.altInput.classList.toggle('bg-zinc-50', isDisabled);
-          fp.altInput.classList.toggle('text-zinc-500', isDisabled);
-          fp.altInput.classList.toggle('cursor-not-allowed', isDisabled);
-          fp.altInput.classList.toggle('bg-white', !isDisabled);
-          fp.altInput.classList.toggle('text-zinc-900', !isDisabled);
+  function keepPickerVisible(instance) {
+    if (!instance || !instance.calendarContainer || !eventModal) return;
+    const modalBody = eventModal.querySelector('.modal-body');
+    if (!modalBody) return;
+
+    requestAnimationFrame(() => {
+      const calRect = instance.calendarContainer.getBoundingClientRect();
+      const bodyRect = modalBody.getBoundingClientRect();
+      const pad = 12;
+
+      if (calRect.bottom > bodyRect.bottom - pad) {
+        modalBody.scrollTop += calRect.bottom - (bodyRect.bottom - pad);
+      } else if (calRect.top < bodyRect.top + pad) {
+        modalBody.scrollTop -= (bodyRect.top + pad) - calRect.top;
       }
+    });
   }
 
-  const startFp = flatpickr("#start_at_local", {
-    ...fpConfig,
-    onChange: (selectedDates, dateStr, instance) => {
-      if (selectedDates.length > 0) {
-        endFp.set('minDate', dateStr); // End cannot be before start
-        // Removed auto-sync setDate call as per user request
-        setPickerDisabled(endFp, false); // Unlock end picker
+  function formatLocalForPicker(d) {
+    if (!d || Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function toLocalInput(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return formatLocalForPicker(d);
+  }
+
+  function parseLocalDate(value) {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+    if (m) {
+      const d = new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        0,
+        0
+      );
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function nowLocalDate() {
+    const d = new Date();
+    d.setSeconds(0, 0);
+    return d;
+  }
+
+  function earliestAllowedCreateDateTime() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 1);
+    d.setHours(7, 0, 0, 0);
+    return d;
+  }
+
+  function isBeforeAllowedScheduleTime(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return true;
+    const hour = date.getHours();
+    const minute = date.getMinutes();
+    return hour < 7 || (minute !== 0 && minute !== 30);
+  }
+
+  function setPickerMin(input, minDate) {
+    if (!input) return;
+    if (input._flatpickr) {
+      input._flatpickr.set('minDate', minDate || null);
+    }
+    if (minDate) {
+      const minDateObj = minDate instanceof Date ? minDate : parseLocalDate(minDate);
+      input.min = minDateObj ? formatLocalForPicker(minDateObj) : String(minDate);
+    } else {
+      input.removeAttribute('min');
+    }
+  }
+
+  function setPickerValue(input, value) {
+    if (!input) return;
+    const normalized = (value || '').toString().trim();
+    if (input._flatpickr) {
+      if (normalized) {
+        input._flatpickr.setDate(normalized, true, 'Y-m-d H:i');
       } else {
-        setPickerDisabled(endFp, true);
+        input._flatpickr.clear();
+      }
+      return;
+    }
+    input.value = normalized;
+  }
+
+  function setPickerDisabled(input, disabled) {
+    if (!input) return;
+    input.disabled = disabled;
+    input.classList.toggle('bg-zinc-50', disabled);
+    input.classList.toggle('text-zinc-500', disabled);
+    input.classList.toggle('cursor-not-allowed', disabled);
+    input.classList.toggle('bg-white', !disabled);
+    input.classList.toggle('text-zinc-900', !disabled);
+
+    if (input._flatpickr) {
+      input._flatpickr.set('clickOpens', !disabled);
+      if (input._flatpickr.altInput) {
+        input._flatpickr.altInput.disabled = disabled;
+        input._flatpickr.altInput.classList.toggle('bg-zinc-50', disabled);
+        input._flatpickr.altInput.classList.toggle('text-zinc-500', disabled);
+        input._flatpickr.altInput.classList.toggle('cursor-not-allowed', disabled);
+        input._flatpickr.altInput.classList.toggle('bg-white', !disabled);
+        input._flatpickr.altInput.classList.toggle('text-zinc-900', !disabled);
       }
     }
-  });
+  }
 
-  const endFp = flatpickr("#end_at_local", {
-    ...fpConfig,
-    clickOpens: false,
-    onReady: (sd, ds, fp) => setPickerDisabled(fp, true) // Start locked
-  });
-
-  const startFp2 = flatpickr("#start_at_batch2", {
-    ...fpConfig,
-    onChange: (selectedDates, dateStr, instance) => {
-      if (selectedDates.length > 0) {
-        endFp2.set('minDate', dateStr);
-        setPickerDisabled(endFp2, false);
-      } else {
-        setPickerDisabled(endFp2, true);
-      }
+  function setEndLocked(endInput, locked) {
+    if (!endInput) return;
+    setPickerDisabled(endInput, locked);
+    if (locked) {
+      if (endInput._flatpickr) endInput._flatpickr.clear();
+      endInput.value = '';
     }
-  });
+  }
 
-  const endFp2 = flatpickr("#end_at_batch2", {
-    ...fpConfig,
-    clickOpens: false,
-    onReady: (sd, ds, fp) => setPickerDisabled(fp, true)
-  });
+  function updateEndMin(startInput, endInput) {
+    if (!startInput || !endInput) return;
 
-  // ── Create Event button ──
-  document.getElementById('btnCreateEvent').addEventListener('click', () => {
-    // Reset Pickers
-    [startFp, endFp, startFp2, endFp2].forEach(fp => {
-        fp.clear();
-        fp.set('minDate', new Date().fp_incr(1));
+    const startValue = (startInput.value || '').trim();
+    const startDate = parseLocalDate(startValue);
+    if (startDate) {
+      setEndLocked(endInput, false);
+      setPickerMin(endInput, startDate);
+
+      const endDate = parseLocalDate(endInput.value);
+      if (endDate && endDate < startDate) {
+        if (endInput._flatpickr) {
+          endInput._flatpickr.setDate(startDate, true, 'Y-m-d H:i');
+        } else {
+          endInput.value = formatLocalForPicker(startDate);
+        }
+      }
+    } else {
+      setEndLocked(endInput, true);
+      setPickerMin(endInput, null);
+    }
+  }
+
+  if (typeof flatpickr === 'function') {
+    [startAtInput, endAtInput, seminar1StartInput, seminar1EndInput, seminar2StartInput, seminar2EndInput]
+      .filter(Boolean)
+      .forEach((input) => {
+        flatpickr(input, {
+          ...flatpickrConfig,
+          onOpen: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
+          onMonthChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
+          onYearChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
+        });
+      });
+  }
+
+  function updateStructureOptionUI() {
+    const activeMode = eventModeInput?.value || 'simple';
+    const activeSeminars = Number.parseInt(seminarCountInput?.value || '0', 10) || 0;
+
+    structureOptions.forEach((option) => {
+      const mode = option.dataset.mode || 'simple';
+      const seminars = Number.parseInt(option.dataset.seminars || '0', 10) || 0;
+      const isActive = mode === activeMode && seminars === activeSeminars;
+
+      option.classList.toggle('border-orange-300', isActive);
+      option.classList.toggle('bg-orange-50/70', isActive);
+      option.classList.toggle('shadow-md', isActive);
+
+      if (!isActive) {
+        option.classList.remove('bg-orange-50/70', 'shadow-md');
+        option.classList.add('border-zinc-200', 'bg-white');
+      } else {
+        option.classList.remove('border-zinc-200', 'bg-white');
+      }
     });
-    
-    // Lock end pickers
-    setPickerDisabled(endFp, true);
-    setPickerDisabled(endFp2, true);
+  }
 
+  function setStructure(mode, seminarCount) {
+    const normalizedMode = mode === 'seminar_based' ? 'seminar_based' : 'simple';
+    const normalizedCount = normalizedMode === 'seminar_based'
+      ? Math.min(2, Math.max(1, Number.parseInt(String(seminarCount || 1), 10) || 1))
+      : 0;
+
+    if (eventModeInput) eventModeInput.value = normalizedMode;
+    if (seminarCountInput) seminarCountInput.value = String(normalizedCount);
+
+    const isSeminar = normalizedMode === 'seminar_based';
+    simpleScheduleSection?.classList.toggle('hidden', isSeminar);
+    seminarScheduleSection?.classList.toggle('hidden', !isSeminar);
+    seminar2Editor?.classList.toggle('hidden', !(isSeminar && normalizedCount === 2));
+
+    const seminar1Title = document.getElementById('seminar1_title');
+    const seminar2Title = document.getElementById('seminar2_title');
+
+    if (startAtInput) startAtInput.required = !isSeminar;
+    if (endAtInput) endAtInput.required = !isSeminar;
+    if (seminar1Title) seminar1Title.required = isSeminar;
+    if (seminar1StartInput) seminar1StartInput.required = isSeminar;
+    if (seminar1EndInput) seminar1EndInput.required = isSeminar;
+    if (seminar2Title) seminar2Title.required = isSeminar && normalizedCount === 2;
+    if (seminar2StartInput) seminar2StartInput.required = isSeminar && normalizedCount === 2;
+    if (seminar2EndInput) seminar2EndInput.required = isSeminar && normalizedCount === 2;
+
+    if (seminarSummaryBadge) {
+      seminarSummaryBadge.textContent = isSeminar
+        ? (normalizedCount === 2 ? '2 Seminars' : '1 Seminar')
+        : 'Simple Event';
+    }
+
+    updateStructureOptionUI();
+  }
+
+  function collectSeminarPayload(index) {
+    const titleInput = document.getElementById(`seminar${index}_title`);
+    const startInput = document.getElementById(`seminar${index}_start_local`);
+    const endInput = document.getElementById(`seminar${index}_end_local`);
+
+    const title = (titleInput?.value || '').trim();
+    const startRaw = (startInput?.value || '').trim();
+    const endRaw = (endInput?.value || '').trim();
+
+    if (!title || !startRaw || !endRaw) {
+      throw new Error(`Seminar ${index} requires title, start, and end time.`);
+    }
+
+    const start = parseLocalDate(startRaw);
+    const end = parseLocalDate(endRaw);
+    if (!start || !end) {
+      throw new Error(`Seminar ${index} has an invalid schedule.`);
+    }
+    if (end <= start) {
+      throw new Error(`Seminar ${index} end time must be after start time.`);
+    }
+
+    return {
+      title,
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+    };
+  }
+
+  function deriveWindowFromSessions(sessions) {
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      return null;
+    }
+
+    let minStart = null;
+    let maxEnd = null;
+
+    sessions.forEach((session) => {
+      const s = new Date(session.start_at);
+      const e = new Date(session.end_at);
+      if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return;
+      if (!minStart || s < minStart) minStart = s;
+      if (!maxEnd || e > maxEnd) maxEnd = e;
+    });
+
+    if (!minStart || !maxEnd) return null;
+    return { start: minStart, end: maxEnd };
+  }
+
+  function sanitizeSessions(rawSessions) {
+    if (!Array.isArray(rawSessions)) return [];
+    return rawSessions
+      .map((session) => {
+        if (!session || typeof session !== 'object') return null;
+        const title = (session.title || '').toString().trim();
+        const startAt = (session.start_at || '').toString().trim();
+        const endAt = (session.end_at || '').toString().trim();
+        if (!title || !startAt || !endAt) return null;
+        return { title, start_at: startAt, end_at: endAt };
+      })
+      .filter(Boolean);
+  }
+
+  const subtitles = ['Fill in the event info', 'Add a description', 'Set the schedule'];
+
+  function setWizardStep(s) {
+    document.getElementById('step1')?.classList.toggle('hidden', s !== 1);
+    document.getElementById('step2')?.classList.toggle('hidden', s !== 2);
+    document.getElementById('step3')?.classList.toggle('hidden', s !== 3);
+
+    const btnBack = document.getElementById('btnBack');
+    const btnNext = document.getElementById('btnNext');
+    const btnSubmit = document.getElementById('btnSubmit');
+
+    if (btnBack) btnBack.disabled = s === 1;
+    btnNext?.classList.toggle('hidden', s === 3);
+    btnSubmit?.classList.toggle('hidden', s !== 3);
+
+    const subtitle = document.getElementById('modalSubtitle');
+    if (subtitle) subtitle.textContent = subtitles[s - 1] || '';
+
+    ['ws1', 'ws2', 'ws3'].forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove('active', 'completed');
+      if ((i + 1) === s) el.classList.add('active');
+      if ((i + 1) < s) el.classList.add('completed');
+    });
+  }
+
+  structureOptions.forEach((option) => {
+    option.addEventListener('click', () => {
+      const mode = option.dataset.mode || 'simple';
+      const seminars = Number.parseInt(option.dataset.seminars || '0', 10) || 0;
+      setStructure(mode, seminars);
+    });
+  });
+
+  startAtInput?.addEventListener('change', () => updateEndMin(startAtInput, endAtInput));
+  seminar1StartInput?.addEventListener('change', () => updateEndMin(seminar1StartInput, seminar1EndInput));
+  seminar2StartInput?.addEventListener('change', () => updateEndMin(seminar2StartInput, seminar2EndInput));
+
+  startAtInput?.addEventListener('input', () => updateEndMin(startAtInput, endAtInput));
+  seminar1StartInput?.addEventListener('input', () => updateEndMin(seminar1StartInput, seminar1EndInput));
+  seminar2StartInput?.addEventListener('input', () => updateEndMin(seminar2StartInput, seminar2EndInput));
+
+  setStructure(eventModeInput?.value || 'simple', seminarCountInput?.value || '0');
+  setWizardStep(1);
+  setEndLocked(endAtInput, true);
+  setEndLocked(seminar1EndInput, true);
+  setEndLocked(seminar2EndInput, true);
+
+  document.getElementById('btnCreateEvent').addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
-
-
     document.getElementById('event_id').value = '';
+
     document.getElementById('title').value = '';
     document.getElementById('location').value = '';
     document.getElementById('description').value = '';
-    document.getElementById('start_at_local').value = '';
-    document.getElementById('end_at_local').value = '';
-    document.getElementById('start_at_batch2').value = '';
-    document.getElementById('end_at_batch2').value = '';
+    setPickerValue(startAtInput, '');
+    setPickerValue(endAtInput, '');
 
-    document.getElementById('formMsg').textContent = '';
-    document.getElementById('modalTitle').textContent = 'Create Event';
-    document.getElementById('modalSubtitle').textContent = 'Fill in the details below';
-    
-    // Reset and show batch options for creation
-    document.getElementById('batchSelectionContainer').style.display = 'block';
-    if (document.getElementById('chkBatch2')) document.getElementById('chkBatch2').checked = false;
-    updateBatchScheduleView();
+    document.getElementById('seminar1_title').value = '';
+    setPickerValue(document.getElementById('seminar1_start_local'), '');
+    setPickerValue(document.getElementById('seminar1_end_local'), '');
+    document.getElementById('seminar2_title').value = '';
+    setPickerValue(document.getElementById('seminar2_start_local'), '');
+    setPickerValue(document.getElementById('seminar2_end_local'), '');
+
+    if (document.getElementById('event_type')) document.getElementById('event_type').value = 'Event';
+    if (document.getElementById('event_for')) document.getElementById('event_for').value = 'All';
+    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '15';
+
+    const msg = document.getElementById('formMsg');
+    if (msg) {
+      msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
+      msg.textContent = '';
+    }
+
+    const modalTitle = document.getElementById('modalTitle');
+    if (modalTitle) modalTitle.textContent = 'Create Event';
+
+    setStructure('simple', 0);
+
+    const createMinDate = earliestAllowedCreateDateTime();
+    setPickerMin(startAtInput, createMinDate);
+    setPickerMin(seminar1StartInput, createMinDate);
+    setPickerMin(seminar2StartInput, createMinDate);
+
+    updateEndMin(startAtInput, endAtInput);
+    updateEndMin(seminar1StartInput, seminar1EndInput);
+    updateEndMin(seminar2StartInput, seminar2EndInput);
 
     step = 1;
     setWizardStep(1);
@@ -1381,58 +1781,11 @@ render_header('Manage Events', $user);
 
   document.getElementById('btnCloseModal').addEventListener('click', () => closeModal(eventModal));
 
-  // ── Wizard step logic ──
-  function toLocalInput(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    const pad = (n) => String(n).padStart(2, '0');
-    // Using space instead of 'T' for broader compatibility with Flatpickr/Date parsing
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  const subtitles = ['Fill in the event info', 'Add a description', 'Set the schedule'];
-
-  function setWizardStep(s) {
-    document.getElementById('step1').classList.toggle('hidden', s !== 1);
-    document.getElementById('step2').classList.toggle('hidden', s !== 2);
-    document.getElementById('step3').classList.toggle('hidden', s !== 3);
-    document.getElementById('btnBack').disabled = s === 1;
-    document.getElementById('btnNext').classList.toggle('hidden', s === 3);
-    document.getElementById('btnSubmit').classList.toggle('hidden', s !== 3);
-    document.getElementById('modalSubtitle').textContent = subtitles[s - 1] || '';
-
-    // Update stepper
-    ['ws1','ws2','ws3'].forEach((id, i) => {
-      const el = document.getElementById(id);
-      el.classList.remove('active', 'completed');
-      if ((i + 1) === s) el.classList.add('active');
-      else if ((i + 1) < s) el.classList.add('completed');
-    });
-  }
-
-  // ── Batch Checkbox Logic ──
-  function updateBatchScheduleView() {
-    const isDoubleBatch = document.getElementById('chkBatch2')?.checked;
-    
-    if (isDoubleBatch) {
-      document.getElementById('scheduleBatch2').classList.remove('hidden');
-      document.getElementById('lblBatch1').classList.remove('hidden');
-    } else {
-      document.getElementById('scheduleBatch2').classList.add('hidden');
-      document.getElementById('lblBatch1').classList.add('hidden');
-    }
-  }
-
-  document.getElementById('chkBatch2')?.addEventListener('change', updateBatchScheduleView);
-
-  let step = 1;
-
   document.getElementById('btnNext').addEventListener('click', () => {
     if (step === 1) {
       if (!document.getElementById('title').value.trim()) return;
       step = 2;
     } else if (step === 2) {
-      // Step 2 is now Details — no required validation, just proceed
       step = 3;
     }
     setWizardStep(step);
@@ -1443,42 +1796,76 @@ render_header('Manage Events', $user);
     setWizardStep(step);
   });
 
-  // Submit button is outside <form>, so we trigger submit manually
   document.getElementById('btnSubmit').addEventListener('click', () => {
     document.getElementById('eventForm').requestSubmit();
   });
 
-  // ── Edit buttons → open modal ──
-  document.querySelectorAll('.btnEdit').forEach(btn => {
+  document.querySelectorAll('.btnEdit').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.getElementById('mode').value = 'edit';
       document.getElementById('event_id').value = btn.dataset.id || '';
       document.getElementById('title').value = btn.dataset.title || '';
       document.getElementById('location').value = btn.dataset.location || '';
       document.getElementById('description').value = btn.dataset.description || '';
+
       if (document.getElementById('event_type')) document.getElementById('event_type').value = btn.dataset.event_type || 'Event';
       if (document.getElementById('event_for')) document.getElementById('event_for').value = btn.dataset.event_for || 'All';
       if (document.getElementById('grace_time')) document.getElementById('grace_time').value = btn.dataset.grace_time || '15';
 
-      // Load dates into Flatpickr
-      startFp.setDate(btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : null);
-      endFp.setDate(btn.dataset.end_at ? toLocalInput(btn.dataset.end_at) : null);
-      
-      // Enable end fields for editing
-      [document.getElementById('end_at_local'), document.getElementById('end_at_batch2')].forEach(el => {
-          el.disabled = false;
-          el.classList.remove('bg-zinc-50', 'text-zinc-500', 'cursor-not-allowed');
-          el._flatpickr.set('clickOpens', true);
-      });
+      setPickerValue(startAtInput, btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : '');
+      setPickerValue(endAtInput, btn.dataset.end_at ? toLocalInput(btn.dataset.end_at) : '');
 
-      document.getElementById('formMsg').textContent = '';
-      document.getElementById('modalTitle').textContent = 'Edit Event';
-      document.getElementById('modalSubtitle').textContent = 'Update the event details';
-      
-      // Hide batch options when editing
-      document.getElementById('batchSelectionContainer').style.display = 'none';
-      if (document.getElementById('chkBatch2')) document.getElementById('chkBatch2').checked = false;
-      updateBatchScheduleView();
+      let sessions = [];
+      try {
+        sessions = sanitizeSessions(JSON.parse(btn.dataset.sessions || '[]'));
+      } catch (err) {
+        sessions = [];
+      }
+
+      const dataMode = (btn.dataset.event_mode || '').trim();
+      const isSeminar = dataMode === 'seminar_based' || sessions.length > 0;
+
+      if (isSeminar) {
+        const seminarCount = sessions.length > 1 ? 2 : 1;
+        setStructure('seminar_based', seminarCount);
+
+        const s1 = sessions[0] || null;
+        const s2 = sessions[1] || null;
+
+        document.getElementById('seminar1_title').value = s1?.title || '';
+        setPickerValue(document.getElementById('seminar1_start_local'), s1?.start_at ? toLocalInput(s1.start_at) : '');
+        setPickerValue(document.getElementById('seminar1_end_local'), s1?.end_at ? toLocalInput(s1.end_at) : '');
+
+        document.getElementById('seminar2_title').value = s2?.title || '';
+        setPickerValue(document.getElementById('seminar2_start_local'), s2?.start_at ? toLocalInput(s2.start_at) : '');
+        setPickerValue(document.getElementById('seminar2_end_local'), s2?.end_at ? toLocalInput(s2.end_at) : '');
+      } else {
+        setStructure('simple', 0);
+
+        document.getElementById('seminar1_title').value = '';
+        setPickerValue(document.getElementById('seminar1_start_local'), '');
+        setPickerValue(document.getElementById('seminar1_end_local'), '');
+        document.getElementById('seminar2_title').value = '';
+        setPickerValue(document.getElementById('seminar2_start_local'), '');
+        setPickerValue(document.getElementById('seminar2_end_local'), '');
+      }
+
+      setPickerMin(startAtInput, null);
+      setPickerMin(seminar1StartInput, null);
+      setPickerMin(seminar2StartInput, null);
+
+      updateEndMin(startAtInput, endAtInput);
+      updateEndMin(seminar1StartInput, seminar1EndInput);
+      updateEndMin(seminar2StartInput, seminar2EndInput);
+
+      const msg = document.getElementById('formMsg');
+      if (msg) {
+        msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
+        msg.textContent = '';
+      }
+
+      const modalTitle = document.getElementById('modalTitle');
+      if (modalTitle) modalTitle.textContent = 'Edit Event';
 
       step = 1;
       setWizardStep(1);
@@ -1486,7 +1873,139 @@ render_header('Manage Events', $user);
     });
   });
 
-  // ── Approve (Page 34) ──
+  document.getElementById('eventForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (step !== 3) {
+      document.getElementById('btnNext').click();
+      return;
+    }
+
+    const mode = document.getElementById('mode').value;
+    const msg = document.getElementById('formMsg');
+    const submitBtn = document.getElementById('btnSubmit');
+
+    try {
+      const title = document.getElementById('title').value.trim();
+      const location = document.getElementById('location').value.trim();
+      const description = document.getElementById('description').value.trim();
+      const eventType = document.getElementById('event_type') ? document.getElementById('event_type').value : 'Event';
+      const eventFor = document.getElementById('event_for') ? document.getElementById('event_for').value : 'All';
+      const graceTime = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
+
+      const eventMode = (eventModeInput?.value || 'simple').trim();
+      const seminarCount = Number.parseInt(seminarCountInput?.value || '0', 10) || 0;
+
+      if (!title) {
+        throw new Error('Event title is required.');
+      }
+
+      let startDate = null;
+      let endDate = null;
+      let sessions = [];
+
+      if (eventMode === 'seminar_based') {
+        sessions.push(collectSeminarPayload(1));
+        if (seminarCount === 2) {
+          sessions.push(collectSeminarPayload(2));
+        }
+
+        const hasInvalidSeminarTime = sessions.some((session) => {
+          const sessionStart = new Date(session.start_at);
+          const sessionEnd = new Date(session.end_at);
+          return isBeforeAllowedScheduleTime(sessionStart) || isBeforeAllowedScheduleTime(sessionEnd);
+        });
+        if (hasInvalidSeminarTime) {
+          throw new Error('Seminar time must be 7:00 AM or later, and minutes must be 00 or 30 only.');
+        }
+
+        if (mode === 'create') {
+          const minAllowed = earliestAllowedCreateDateTime();
+          const hasEarlySeminar = sessions.some((session) => new Date(session.start_at) < minAllowed);
+          if (hasEarlySeminar) {
+            throw new Error('Seminar start date/time must be tomorrow or later (starting 7:00 AM).');
+          }
+        }
+
+        const windowRange = deriveWindowFromSessions(sessions);
+        if (!windowRange) {
+          throw new Error('Seminar schedule is invalid.');
+        }
+
+        startDate = windowRange.start;
+        endDate = windowRange.end;
+      } else {
+        const startRaw = (startAtInput?.value || '').trim();
+        const endRaw = (endAtInput?.value || '').trim();
+        if (!startRaw || !endRaw) {
+          throw new Error('Start and end schedule are required.');
+        }
+
+        startDate = parseLocalDate(startRaw);
+        endDate = parseLocalDate(endRaw);
+        if (!startDate || !endDate) {
+          throw new Error('Invalid date/time selection.');
+        }
+        if (isBeforeAllowedScheduleTime(startDate) || isBeforeAllowedScheduleTime(endDate)) {
+          throw new Error('Event time must be 7:00 AM or later, and minutes must be 00 or 30 only.');
+        }
+        if (mode === 'create' && startDate < earliestAllowedCreateDateTime()) {
+          throw new Error('Start date/time must be tomorrow or later (starting 7:00 AM).');
+        }
+        if (endDate <= startDate) {
+          throw new Error('End time must be after start time.');
+        }
+      }
+
+      const eventSpan = startDate.toDateString() === endDate.toDateString() ? 'single_day' : 'multi_day';
+
+      const payload = {
+        title,
+        location,
+        description,
+        event_type: eventType,
+        event_for: eventFor,
+        grace_time: graceTime,
+        event_mode: eventMode,
+        event_span: eventSpan,
+        start_at: startDate.toISOString(),
+        end_at: endDate.toISOString(),
+        sessions: eventMode === 'seminar_based' ? sessions : [],
+        csrf_token: window.CSRF_TOKEN
+      };
+
+      if (mode === 'edit') {
+        payload.event_id = document.getElementById('event_id').value;
+      }
+
+      msg.className = 'text-sm font-bold text-amber-600 mt-2 text-center';
+      msg.textContent = mode === 'edit' ? 'Updating event...' : 'Creating event...';
+      submitBtn.disabled = true;
+      submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+      const url = mode === 'edit' ? '/api/events_update.php' : '/api/events_create.php';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (!data.ok) {
+        throw new Error(data.error || 'Request failed.');
+      }
+
+      msg.className = 'text-sm font-bold text-emerald-500 mt-2 text-center';
+      msg.textContent = 'Success!';
+      setTimeout(() => window.location.reload(), 350);
+    } catch (err) {
+      msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
+      msg.textContent = err?.message || 'Server error encountered.';
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+  });
+// ── Approve (Page 34) ──
   document.querySelectorAll('.btnApprove').forEach(btn => {
     btn.addEventListener('click', async () => {
       const event_id = btn.dataset.id;
@@ -1794,119 +2313,6 @@ render_header('Manage Events', $user);
       alert(e.message || 'Archive failed');
       btn.disabled = false;
       btn.textContent = 'Archive';
-    }
-  });
-
-  // ── Form submit (Create / Edit) ──
-  document.getElementById('eventForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    if (step !== 3) {
-       // if they hit 'Enter' early, just go to the next step
-       document.getElementById('btnNext').click();
-       return;
-    }
-
-    const mode = document.getElementById('mode').value;
-    const msg = document.getElementById('formMsg');
-    
-    // Base inputs
-    const title = document.getElementById('title').value.trim();
-    const location = document.getElementById('location').value.trim();
-    const description = document.getElementById('description').value.trim();
-    
-    // Extracted Fields matching JADX Schema
-    const event_type = document.getElementById('event_type') ? document.getElementById('event_type').value : 'Event';
-    const event_for = document.getElementById('event_for') ? document.getElementById('event_for').value : 'All';
-    const grace_time = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
-
-
-    // Check batches
-    const isDoubleBatch = (mode === 'create' && document.getElementById('chkBatch2')?.checked);
-
-    const start1 = document.getElementById('start_at_local').value;
-    const end1 = document.getElementById('end_at_local').value;
-
-    let payloads = [];
-
-    if (isDoubleBatch) {
-      const start2 = document.getElementById('start_at_batch2').value;
-      const end2 = document.getElementById('end_at_batch2').value;
-
-      if (!start1 || !end1 || !start2 || !end2) { 
-        msg.textContent = 'All start and end dates are required for both batches.'; 
-        return; 
-      }
-      
-      const s1d = new Date(start1), e1d = new Date(end1);
-      const s2d = new Date(start2), e2d = new Date(end2);
-      
-      if (Number.isNaN(s1d.getTime()) || Number.isNaN(e1d.getTime()) || Number.isNaN(s2d.getTime()) || Number.isNaN(e2d.getTime())) { 
-        msg.textContent = 'Invalid datetime selection.'; return; 
-      }
-      if (e1d <= s1d || e2d <= s2d) { 
-        msg.textContent = 'End time must be after start time for both batches.'; return; 
-      }
-      
-      payloads.push({
-        title: title + " (Batch 1)", location, description, event_type, event_for, grace_time,
-        event_span: (s1d.toDateString() === e1d.toDateString()) ? 'single_day' : 'multi_day',
-        start_at: s1d.toISOString(), end_at: e1d.toISOString(), csrf_token: window.CSRF_TOKEN
-      });
-      payloads.push({
-        title: title + " (Batch 2)", location, description, event_type, event_for, grace_time,
-        event_span: (s2d.toDateString() === e2d.toDateString()) ? 'single_day' : 'multi_day',
-        start_at: s2d.toISOString(), end_at: e2d.toISOString(), csrf_token: window.CSRF_TOKEN
-      });
-      
-    } else {
-      if (!start1 || !end1) { msg.textContent = 'Start/end dates are required.'; return; }
-      
-      const s1d = new Date(start1), e1d = new Date(end1);
-      if (Number.isNaN(s1d.getTime()) || Number.isNaN(e1d.getTime())) { msg.textContent = 'Invalid datetime selection.'; return; }
-      if (e1d <= s1d) { msg.textContent = 'End time must be after start time.'; return; }
-      
-      payloads.push({
-        title: title, location, description, event_type, event_for, grace_time,
-        event_span: (s1d.toDateString() === e1d.toDateString()) ? 'single_day' : 'multi_day',
-        start_at: s1d.toISOString(), end_at: e1d.toISOString(), csrf_token: window.CSRF_TOKEN
-      });
-    }
-
-    msg.textContent = mode === 'edit' ? 'Updating...' : 'Building Event(s)...';
-    const submitBtn = document.getElementById('btnSubmit');
-    submitBtn.disabled = true;
-    submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
-
-    const event_id = document.getElementById('event_id').value;
-    const url = mode === 'edit' ? '/api/events_update.php' : '/api/events_create.php';
-
-    try {
-      if (mode === 'edit') {
-        const payload = { event_id, ...payloads[0] };
-        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Failed to update event');
-      } else {
-        // Execute creation of either single or double batch natively via Promise queue
-        const responses = await Promise.all(payloads.map(p => 
-           fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }).then(r => r.json())
-        ));
-        
-        for (let data of responses) {
-           if (!data.ok) throw new Error(data.error || 'Failed to construct event batches');
-        }
-      }
-      
-      msg.className = 'text-sm font-bold text-emerald-500 mt-2 text-center';
-      msg.textContent = 'Success!';
-      setTimeout(() => window.location.reload(), 400);
-      
-    } catch (err) {
-      msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
-      msg.textContent = err.message || 'Server error encountered.';
-      submitBtn.disabled = false;
-      submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     }
   });
 
@@ -2399,4 +2805,6 @@ render_header('Manage Events', $user);
 </script>
 
 <?php render_footer(); ?>
+
+
 

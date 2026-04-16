@@ -7,21 +7,64 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/event_sessions.php';
 
-$user = require_role(['admin']);
+$user = require_role(['student', 'teacher', 'admin']);
 $headers = [
     'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
+$legacyUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
     . '?select=id,certificate_code,issued_at,event_id,events(title,start_at)&student_id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
     . '&order=issued_at.desc';
 
-$res = supabase_request('GET', $url, $headers);
-$rows = $res['ok'] ? json_decode((string) $res['body'], true) : null;
-$certs = is_array($rows) ? $rows : [];
+$legacyRes = supabase_request('GET', $legacyUrl, $headers);
+$legacyRows = $legacyRes['ok'] ? json_decode((string) $legacyRes['body'], true) : null;
+$legacyCerts = is_array($legacyRows) ? $legacyRows : [];
+
+$sessionUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificates'
+    . '?select=id,certificate_code,issued_at,session_id,event_sessions(title,topic,start_at,event_id,events(title))'
+    . '&student_id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
+    . '&order=issued_at.desc';
+$sessionRes = supabase_request('GET', $sessionUrl, $headers);
+$sessionRows = $sessionRes['ok'] ? json_decode((string) $sessionRes['body'], true) : null;
+$sessionCerts = is_array($sessionRows) ? $sessionRows : [];
+
+$certs = [];
+foreach ($legacyCerts as $row) {
+    if (!is_array($row)) {
+        continue;
+    }
+    $event = isset($row['events']) && is_array($row['events']) ? $row['events'] : [];
+    $certs[] = [
+        'certificate_code' => (string) ($row['certificate_code'] ?? ''),
+        'issued_at' => (string) ($row['issued_at'] ?? ''),
+        'event_title' => (string) ($event['title'] ?? 'Event'),
+        'session_title' => '',
+        'is_session' => false,
+    ];
+}
+
+foreach ($sessionCerts as $row) {
+    if (!is_array($row)) {
+        continue;
+    }
+    $session = isset($row['event_sessions']) && is_array($row['event_sessions']) ? $row['event_sessions'] : [];
+    $event = isset($session['events']) && is_array($session['events']) ? $session['events'] : [];
+    $certs[] = [
+        'certificate_code' => (string) ($row['certificate_code'] ?? ''),
+        'issued_at' => (string) ($row['issued_at'] ?? ''),
+        'event_title' => (string) ($event['title'] ?? 'Event'),
+        'session_title' => build_session_display_name($session),
+        'is_session' => true,
+    ];
+}
+
+usort($certs, static function (array $a, array $b): int {
+    return strcmp((string) ($b['issued_at'] ?? ''), (string) ($a['issued_at'] ?? ''));
+});
 
 render_header('My Certificates', $user);
 ?>
@@ -38,15 +81,13 @@ render_header('My Certificates', $user);
     <div class="md:col-span-2 xl:col-span-3 rounded-3xl border border-dashed border-zinc-700/60 bg-zinc-900/20 py-16 flex flex-col items-center justify-center pointer-events-none">
         <svg class="w-10 h-10 text-zinc-600 mb-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
         <p class="text-zinc-400 font-bold text-sm">No certificates yet</p>
-        <p class="text-xs text-zinc-500 mt-1 max-w-sm text-center px-4">Attend events and complete check-in/out to earn certificates.</p>
+        <p class="text-xs text-zinc-500 mt-1 max-w-sm text-center px-4">Attend events and complete the required attendance and evaluation flow to earn certificates.</p>
         <a href="/events.php" class="inline-block mt-4 px-4 py-2 rounded-xl bg-emerald-600/10 text-emerald-400 font-bold text-xs hover:bg-emerald-600/20 transition-all pointer-events-auto">Browse events &rarr;</a>
     </div>
   <?php endif; ?>
 
   <?php foreach ($certs as $c): ?>
     <?php
-      $event = isset($c['events']) && is_array($c['events']) ? $c['events'] : [];
-      
       // Format date
       $issuedRaw = (string)($c['issued_at'] ?? '');
       $dateFormatted = 'TBA';
@@ -69,11 +110,14 @@ render_header('My Certificates', $user);
            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
          </div>
          <div class="flex-1 min-w-0 pr-4">
-            <h3 class="text-base font-black text-white leading-tight truncate"><?= htmlspecialchars((string)($event['title'] ?? 'Event')) ?></h3>
+            <h3 class="text-base font-black text-white leading-tight truncate"><?= htmlspecialchars((string)($c['event_title'] ?? 'Event')) ?></h3>
             <p class="text-xs font-semibold text-zinc-400 mt-1.5 truncate flex items-center gap-1.5">
                <svg class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-               <span class="truncate">Verified Attendance</span>
+               <span class="truncate"><?= !empty($c['is_session']) ? 'Verified Seminar Attendance' : 'Verified Attendance' ?></span>
             </p>
+            <?php if (!empty($c['session_title'])): ?>
+              <p class="text-[11px] font-semibold text-emerald-300 mt-2 truncate"><?= htmlspecialchars((string) $c['session_title']) ?></p>
+            <?php endif; ?>
          </div>
        </div>
 

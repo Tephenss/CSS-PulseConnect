@@ -41,24 +41,21 @@ $regsRes = supabase_request('GET', $regsUrl, $headers);
 $regs = $regsRes['ok'] ? json_decode((string) $regsRes['body'], true) : [];
 $regs = is_array($regs) ? $regs : [];
 
-$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,status,check_in_at,check_out_at&limit=100000';
+$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,status,check_in_at&limit=100000';
 $attRes = supabase_request('GET', $attUrl, $headers);
 $att = $attRes['ok'] ? json_decode((string) $attRes['body'], true) : [];
 $att = is_array($att) ? $att : [];
 
 $checkedIn = 0;
 $late = 0;
-$checkedOut = 0;
 $early = 0;
 foreach ($att as $a) {
     $checkInAt = $a['check_in_at'] ?? null;
-    $checkOutAt = $a['check_out_at'] ?? null;
     if (!empty($checkInAt)) {
         $checkedIn++;
         if ((string) ($a['status'] ?? '') === 'late') $late++;
         if ((string) ($a['status'] ?? '') === 'early') $early++;
     }
-    if (!empty($checkOutAt)) $checkedOut++;
 }
 
 $certUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates?select=id&limit=100000';
@@ -119,9 +116,9 @@ render_header('Analytics', $user);
         <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
      </div>
      <div class="z-10 min-w-0">
-        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) $checkedOut) ?></div>
-        <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold truncate">Departures</div>
-        <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate"><span class="text-orange-800"><?= $certs ?> Certs Created</span></div>
+        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) $certs) ?></div>
+        <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold truncate">Certificates</div>
+        <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate"><span class="text-orange-800">Generated records</span></div>
      </div>
   </div>
 </div>

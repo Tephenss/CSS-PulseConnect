@@ -8,6 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_tabs.php';
 
 $user = require_role(['admin']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -56,6 +58,529 @@ if ($role === 'teacher') {
     }
 }
 
+$sessions = fetch_event_sessions($eventId, $headers);
+$usesSessions = count($sessions) > 0;
+$isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
+$participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_GET['participant_tab'])) : 'participants';
+if (!in_array($participantTab, ['participants', 'absence_reasons'], true)) {
+    $participantTab = 'participants';
+}
+$nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+$attendanceCountsAsPresent = static function (?array $row): bool {
+    if (!is_array($row)) {
+        return false;
+    }
+    $status = strtolower(trim((string) ($row['status'] ?? '')));
+    $checkInAt = trim((string) ($row['check_in_at'] ?? ''));
+    if ($checkInAt !== '') {
+        return true;
+    }
+    return in_array($status, ['present', 'scanned', 'late', 'early'], true);
+};
+
+$absenceReasonRows = [];
+$absenceReasonTableAvailable = true;
+$absenceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons'
+    . '?select=id,student_id,event_id,session_id,reason_text,review_status,admin_note,submitted_at,reviewed_at'
+    . '&event_id=eq.' . rawurlencode($eventId)
+    . '&order=submitted_at.desc';
+$absenceRes = supabase_request('GET', $absenceUrl, $headers);
+if ($absenceRes['ok']) {
+    $decoded = json_decode((string) $absenceRes['body'], true);
+    $absenceReasonRows = is_array($decoded) ? $decoded : [];
+} else {
+    $absenceReasonTableAvailable = !str_contains(strtolower((string) ($absenceRes['body'] ?? '')), 'attendance_absence_reasons');
+}
+
+if ($usesSessions) {
+
+    $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),tickets(id,token)'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&order=registered_at.desc';
+    $pRes = supabase_request('GET', $pUrl, $headers);
+    $participants = $pRes['ok'] ? json_decode((string) $pRes['body'], true) : [];
+    $participants = is_array($participants) ? $participants : [];
+
+    $attendanceMap = [];
+    $ticketToRegistration = [];
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $registrationId = (string) ($participant['id'] ?? '');
+        if ($registrationId === '') {
+            continue;
+        }
+        $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
+        foreach ($tickets as $ticket) {
+            if (!is_array($ticket)) {
+                continue;
+            }
+            $ticketId = (string) ($ticket['id'] ?? '');
+            if ($ticketId !== '') {
+                $ticketToRegistration[$ticketId] = $registrationId;
+            }
+        }
+    }
+
+    if (count($sessions) > 0) {
+        $sessionIds = [];
+        foreach ($sessions as $session) {
+            $sessionId = (string) ($session['id'] ?? '');
+            if ($sessionId !== '') {
+                $sessionIds[] = '"' . $sessionId . '"';
+            }
+        }
+
+        if (count($sessionIds) > 0) {
+            $attachAttendanceRow = static function (array $row) use (&$attendanceMap, $ticketToRegistration): void {
+                $sessionId = (string) ($row['session_id'] ?? '');
+                if ($sessionId === '') {
+                    return;
+                }
+
+                $registrationId = (string) ($row['registration_id'] ?? '');
+                if ($registrationId === '') {
+                    $ticketId = (string) ($row['ticket_id'] ?? '');
+                    if ($ticketId !== '' && isset($ticketToRegistration[$ticketId])) {
+                        $registrationId = (string) $ticketToRegistration[$ticketId];
+                    }
+                }
+
+                if ($registrationId === '') {
+                    return;
+                }
+
+                $existing = $attendanceMap[$registrationId][$sessionId] ?? null;
+                if (!is_array($existing)) {
+                    $attendanceMap[$registrationId][$sessionId] = $row;
+                    return;
+                }
+
+                $existingCheckIn = trim((string) ($existing['check_in_at'] ?? ''));
+                $nextCheckIn = trim((string) ($row['check_in_at'] ?? ''));
+                if ($existingCheckIn === '' && $nextCheckIn !== '') {
+                    $attendanceMap[$registrationId][$sessionId] = $row;
+                    return;
+                }
+
+                $existingLastScan = trim((string) ($existing['last_scanned_at'] ?? ''));
+                $nextLastScan = trim((string) ($row['last_scanned_at'] ?? ''));
+                if ($nextLastScan !== '') {
+                    $nextTs = strtotime($nextLastScan);
+                    $existingTs = $existingLastScan !== '' ? strtotime($existingLastScan) : false;
+                    if ($nextTs !== false && ($existingTs === false || $nextTs > $existingTs)) {
+                        $attendanceMap[$registrationId][$sessionId] = $row;
+                    }
+                }
+            };
+
+            $sessionFilter = implode(',', $sessionIds);
+
+            // Primary storage for seminar attendance.
+            $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                . '?select=session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at'
+                . '&session_id=in.(' . $sessionFilter . ')';
+            $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
+            $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
+            if (is_array($attendanceRows)) {
+                foreach ($attendanceRows as $row) {
+                    if (is_array($row)) {
+                        $attachAttendanceRow($row);
+                    }
+                }
+            }
+
+            // Fallback storage used by older seminar migrations.
+            $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+                . '?select=session_id,ticket_id,status,check_in_at,last_scanned_at'
+                . '&session_id=in.(' . $sessionFilter . ')';
+            $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
+            $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
+            if (is_array($legacyAttendanceRows)) {
+                foreach ($legacyAttendanceRows as $row) {
+                    if (is_array($row)) {
+                        $attachAttendanceRow($row);
+                    }
+                }
+            }
+        }
+    }
+
+    $sessionCounts = [];
+    foreach ($sessions as $session) {
+        $sessionCounts[(string) ($session['id'] ?? '')] = 0;
+    }
+    foreach ($attendanceMap as $rows) {
+        foreach ($rows as $sessionId => $row) {
+            if ($attendanceCountsAsPresent(is_array($row) ? $row : null) && isset($sessionCounts[$sessionId])) {
+                $sessionCounts[$sessionId]++;
+            }
+        }
+    }
+
+    $reasonByStudentSession = [];
+    if ($absenceReasonTableAvailable) {
+        foreach ($absenceReasonRows as $reason) {
+            if (!is_array($reason)) {
+                continue;
+            }
+            $studentId = (string) ($reason['student_id'] ?? '');
+            $sessionId = (string) ($reason['session_id'] ?? '');
+            if ($studentId === '' || $sessionId === '') {
+                continue;
+            }
+            $reasonByStudentSession[$studentId][$sessionId] = $reason;
+        }
+    }
+
+    $sessionWindowMeta = [];
+    foreach ($sessions as $session) {
+        $sessionId = (string) ($session['id'] ?? '');
+        if ($sessionId === '') {
+            continue;
+        }
+        $startAtRaw = (string) ($session['start_at'] ?? '');
+        $startAt = $toLocalDt($startAtRaw);
+        if (!$startAt) {
+            continue;
+        }
+        $windowMinutes = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+        $closesAt = $startAt->modify('+' . $windowMinutes . ' minutes');
+        $sessionWindowMeta[$sessionId] = [
+            'start_at' => $startAt,
+            'closes_at' => $closesAt,
+            'window_minutes' => $windowMinutes,
+            'closed' => $nowUtc > $closesAt->setTimezone(new DateTimeZone('UTC')),
+        ];
+    }
+
+    $absentRows = [];
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $registrationId = (string) ($participant['id'] ?? '');
+        $studentId = (string) ($participant['student_id'] ?? '');
+        if ($registrationId === '' || $studentId === '') {
+            continue;
+        }
+        $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+        $nameParts = [];
+        foreach (['first_name', 'middle_name', 'last_name'] as $key) {
+            $value = trim((string) ($profile[$key] ?? ''));
+            if ($value !== '') {
+                $nameParts[] = $value;
+            }
+        }
+        $name = implode(' ', $nameParts);
+        $suffix = trim((string) ($profile['suffix'] ?? ''));
+        if ($suffix !== '') {
+            $name .= ', ' . $suffix;
+        }
+        $section = isset($profile['sections']) && is_array($profile['sections'])
+            ? (string) ($profile['sections']['name'] ?? '')
+            : '';
+
+        foreach ($sessions as $session) {
+            $sessionId = (string) ($session['id'] ?? '');
+            if ($sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
+                continue;
+            }
+            $meta = $sessionWindowMeta[$sessionId];
+            if (empty($meta['closed'])) {
+                continue;
+            }
+            $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
+            if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
+                continue;
+            }
+
+            $reason = $reasonByStudentSession[$studentId][$sessionId] ?? null;
+            $absentRows[] = [
+                'student_id' => $studentId,
+                'registration_id' => $registrationId,
+                'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
+                'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+                'section' => $section !== '' ? $section : 'N/A',
+                'session_name' => build_session_display_name($session),
+                'session_start_at' => $meta['start_at'],
+                'session_closes_at' => $meta['closes_at'],
+                'session_window_minutes' => (int) ($meta['window_minutes'] ?? 30),
+                'reason' => is_array($reason) ? $reason : null,
+            ];
+        }
+    }
+
+    render_header('Participants', $user);
+    ?>
+    <div class="mb-4">
+      <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
+        <div class="flex items-center gap-3">
+          <a href="/manage_events.php" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
+            <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+          </a>
+          <div>
+            <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
+            <p class="text-sm text-zinc-500 mt-1">Seminar attendance is tracked per session.</p>
+          </div>
+        </div>
+      </div>
+
+      <?php
+      render_event_tabs([
+          'event_id' => $eventId,
+          'current_tab' => $participantTab === 'absence_reasons' ? 'absence_reasons' : 'participants',
+          'role' => $role,
+          'uses_sessions' => $usesSessions,
+          'event_status' => (string) ($event['status'] ?? ''),
+      ]);
+      ?>
+
+      <?php if ($participantTab === 'participants'): ?>
+        <div class="grid grid-cols-1 md:grid-cols-<?= max(1, min(4, count($sessions))) ?> gap-4 mb-6">
+          <?php foreach ($sessions as $session): ?>
+            <?php $sessionId = (string) ($session['id'] ?? ''); ?>
+            <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Seminar</div>
+              <div class="text-sm font-bold text-zinc-900 mt-1"><?= htmlspecialchars(build_session_display_name($session)) ?></div>
+              <div class="text-xs text-zinc-500 mt-2"><?= htmlspecialchars(format_date_local((string) ($session['start_at'] ?? ''), 'M j, Y g:i A')) ?></div>
+              <div class="text-xl font-black text-emerald-700 mt-3"><?= htmlspecialchars((string) ($sessionCounts[$sessionId] ?? 0)) ?></div>
+              <div class="text-xs text-zinc-500">checked in</div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+
+        <div class="overflow-x-auto rounded-2xl border border-zinc-200 bg-white shadow-sm">
+          <table class="min-w-full divide-y divide-zinc-200">
+            <thead class="bg-zinc-50">
+              <tr>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+                <?php foreach ($sessions as $session): ?>
+                  <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
+                <?php endforeach; ?>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-100">
+              <?php foreach ($participants as $participant): ?>
+                <?php
+                  $registrationId = (string) ($participant['id'] ?? '');
+                  $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+                  $section = isset($profile['sections']) && is_array($profile['sections']) ? (string) ($profile['sections']['name'] ?? '') : '';
+                  $nameParts = [];
+                  foreach (['first_name', 'middle_name', 'last_name'] as $key) {
+                      $value = trim((string) ($profile[$key] ?? ''));
+                      if ($value !== '') {
+                          $nameParts[] = $value;
+                      }
+                  }
+                  $name = implode(' ', $nameParts);
+                  $suffix = trim((string) ($profile['suffix'] ?? ''));
+                  if ($suffix !== '') {
+                      $name .= ', ' . $suffix;
+                  }
+                ?>
+                <tr>
+                  <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars($name !== '' ? $name : 'Unnamed Participant') ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) ($profile['student_id'] ?? 'N/A')) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($section !== '' ? $section : 'N/A') ?></td>
+                  <?php foreach ($sessions as $session): ?>
+                    <?php
+                      $sessionId = (string) ($session['id'] ?? '');
+                      $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
+                      $checkInAt = is_array($attendance) ? (string) ($attendance['check_in_at'] ?? '') : '';
+                    ?>
+                    <td class="px-4 py-4 text-sm text-zinc-600">
+                      <?php if (is_array($attendance) && $attendanceCountsAsPresent($attendance)): ?>
+                        <span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Present</span>
+                        <?php if ($checkInAt !== ''): ?>
+                          <div class="mt-2 text-xs text-zinc-500"><?= htmlspecialchars(format_date_local($checkInAt, 'M j, g:i A')) ?></div>
+                        <?php endif; ?>
+                      <?php else: ?>
+                        <span class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-bold text-zinc-500">No record</span>
+                      <?php endif; ?>
+                    </td>
+                  <?php endforeach; ?>
+                  <td class="px-4 py-4">
+                    <button class="btnResetAttendance rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
+                      Reset Attendance
+                    </button>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php else: ?>
+        <?php if (!$absenceReasonTableAvailable): ?>
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 mb-6">
+            Absence reason storage is not available yet. Apply migration <code>008_attendance_absence_reasons.sql</code> first.
+          </div>
+        <?php endif; ?>
+        <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-x-auto">
+          <table class="min-w-full divide-y divide-zinc-200">
+            <thead class="bg-zinc-50">
+              <tr>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Missed Seminar</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Scan Window</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Reason</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Submitted</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-100">
+              <?php if (count($absentRows) === 0): ?>
+                <tr>
+                  <td colspan="7" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+                    No unresolved absences for closed seminar scan windows.
+                  </td>
+                </tr>
+              <?php endif; ?>
+              <?php foreach ($absentRows as $row): ?>
+                <?php
+                  $reason = $row['reason'];
+                  $hasReason = is_array($reason);
+                  $windowLabel = $row['session_start_at']->format('M j, g:i A') . ' - ' . $row['session_closes_at']->format('g:i A');
+                  $submittedLabel = $hasReason && !empty($reason['submitted_at'])
+                      ? format_date_local((string) $reason['submitted_at'], 'M j, g:i A')
+                      : '—';
+                  $reviewStatus = $hasReason ? strtolower(trim((string) ($reason['review_status'] ?? 'pending'))) : '';
+                  $reviewLabel = $reviewStatus === 'approved'
+                      ? 'Approved'
+                      : ($reviewStatus === 'rejected' ? 'Rejected' : 'For Review');
+                  $reviewBadge = $reviewStatus === 'approved'
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                      : ($reviewStatus === 'rejected'
+                          ? 'bg-red-100 text-red-800 border-red-200'
+                          : 'bg-sky-100 text-sky-800 border-sky-200');
+                  $fullReasonText = (string) ($reason['reason_text'] ?? '');
+                  if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+                      $reasonPreview = mb_strlen($fullReasonText) > 72
+                          ? (mb_substr($fullReasonText, 0, 72) . '...')
+                          : $fullReasonText;
+                  } else {
+                      $reasonPreview = strlen($fullReasonText) > 72
+                          ? (substr($fullReasonText, 0, 72) . '...')
+                          : $fullReasonText;
+                  }
+                  $reasonModalId = 'reason-modal-session-' . ($reason['id'] ?? md5((string) $row['participant_name'] . (string) $row['session_name']));
+                ?>
+                <tr>
+                  <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['student_number']) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['section']) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-700"><?= htmlspecialchars((string) $row['session_name']) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($windowLabel) ?></td>
+                  <td class="px-4 py-4 text-sm text-zinc-700">
+                    <?php if ($hasReason): ?>
+                      <div class="space-y-2">
+                        <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $reviewBadge ?>">
+                          <?= htmlspecialchars($reviewLabel) ?>
+                        </span>
+                        <button
+                          type="button"
+                          class="btn-view-reason inline-flex items-center rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                          data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>"
+                        >
+                          View full reason
+                        </button>
+                        <div id="<?= htmlspecialchars((string) $reasonModalId) ?>" class="reason-modal fixed inset-0 z-[100] hidden">
+                          <div class="absolute inset-0 bg-black/50 reason-modal-close" data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>"></div>
+                          <div class="absolute inset-0 flex items-center justify-center p-4">
+                            <div class="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-2xl">
+                              <div class="flex items-center justify-between border-b border-zinc-200 px-5 py-4">
+                                <div>
+                                  <div class="text-sm font-bold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></div>
+                                  <div class="text-xs text-zinc-500"><?= htmlspecialchars((string) $row['session_name']) ?> • <?= htmlspecialchars($submittedLabel) ?></div>
+                                </div>
+                                <button type="button" class="reason-modal-close rounded-lg p-2 text-zinc-500 hover:bg-zinc-100" data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>">✕</button>
+                              </div>
+                              <div class="px-5 py-4">
+                                <div class="mb-3">
+                                  <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $reviewBadge ?>">
+                                    <?= htmlspecialchars($reviewLabel) ?>
+                                  </span>
+                                </div>
+                                <div class="max-h-72 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-zinc-700"><?= nl2br(htmlspecialchars($fullReasonText)) ?></div>
+                                <?php if (!empty($reason['admin_note'])): ?>
+                                  <div class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600">
+                                    <span class="font-semibold">Admin note:</span>
+                                    <div class="mt-1 whitespace-pre-wrap"><?= nl2br(htmlspecialchars((string) $reason['admin_note'])) ?></div>
+                                  </div>
+                                <?php endif; ?>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    <?php else: ?>
+                      <span class="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-red-700">
+                        No reason submitted
+                      </span>
+                    <?php endif; ?>
+                  </td>
+                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($submittedLabel) ?></td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <script>
+      document.querySelectorAll('.btn-view-reason').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.modalId;
+          const modal = id ? document.getElementById(id) : null;
+          if (modal) modal.classList.remove('hidden');
+        });
+      });
+
+      document.querySelectorAll('.reason-modal-close').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.modalId;
+          const modal = id ? document.getElementById(id) : null;
+          if (modal) modal.classList.add('hidden');
+        });
+      });
+
+      document.querySelectorAll('.btnResetAttendance').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const ok = confirm('Reset this participant attendance? This clears all seminar attendance records for the selected participant.');
+          if (!ok) return;
+
+          btn.disabled = true;
+          try {
+            const res = await fetch('/api/participant_attendance_reset.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                registration_id: btn.dataset.id,
+                csrf_token: window.CSRF_TOKEN
+              })
+            });
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error || 'Failed');
+            window.location.reload();
+          } catch (err) {
+            alert(err.message || 'Failed');
+            btn.disabled = false;
+          }
+        });
+      });
+    </script>
+    <?php
+    render_footer();
+    exit;
+}
+
 $start = isset($event['start_at']) ? $toLocalDt((string) $event['start_at']) : null;
 $end = isset($event['end_at']) ? $toLocalDt((string) $event['end_at']) : null;
 
@@ -74,7 +599,7 @@ if ($start && $end) {
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
-    . 'tickets(token,attendance(check_in_at,check_out_at,status))'
+    . 'tickets(token,attendance(check_in_at,status))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
 
@@ -213,7 +738,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
         echo ' <th class="col-hdr" style="width:80px;">YEAR</th>';
         echo ' <th class="col-hdr" style="width:150px;">SECTION</th>';
         echo ' <th class="col-hdr" style="width:180px;">CHECK IN</th>';
-        echo ' <th class="col-hdr" style="width:180px;">CHECK OUT</th>';
         echo ' <th class="col-hdr" style="width:120px;">STATUS</th>';
         echo '</tr>';
         
@@ -238,18 +762,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
                 }
             }
             $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-            $checkOut = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
             $attStatus = is_array($attendance) ? ($attendance['status'] ?? 'pending') : 'pending';
             
             if ($checkIn) {
                 $checkInLocal = $toLocalDt((string) $checkIn);
                 if ($checkInLocal) $checkIn = $checkInLocal->format('m/d/Y h:i A');
             }
-            if ($checkOut) {
-                $checkOutLocal = $toLocalDt((string) $checkOut);
-                if ($checkOutLocal) $checkOut = $checkOutLocal->format('m/d/Y h:i A');
-            }
-            
             $isComp = (strtolower($attStatus) === 'completed');
             $statusStr = $isComp ? 'COMPLETED' : 'PENDING';
             $statusCls = $isComp ? 'compl' : 'pend';
@@ -260,7 +778,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secData['year']) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secName) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . ($checkIn ? htmlspecialchars($checkIn) : '-') . '</td>';
-            echo ' <td class="data-cell" style="text-align:center;">' . ($checkOut ? htmlspecialchars($checkOut) : '-') . '</td>';
             echo ' <td class="data-cell ' . $statusCls . '">' . $statusStr . '</td>';
             echo '</tr>';
         }
@@ -276,7 +793,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="participants.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Name', 'StudentNumber', 'Email', 'RegisteredAt', 'Token', 'CheckIn', 'CheckOut', 'AttendanceStatus']);
+    fputcsv($out, ['Name', 'StudentNumber', 'Email', 'RegisteredAt', 'Token', 'CheckIn', 'AttendanceStatus']);
     foreach ($participants as $r) {
         $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
         $nameParts = [];
@@ -300,7 +817,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
             }
         }
         $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-        $checkOut = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
         $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
 
         fputcsv($out, [
@@ -310,7 +826,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
             (string) ($r['registered_at'] ?? ''),
             $token,
             is_string($checkIn) ? $checkIn : '',
-            is_string($checkOut) ? $checkOut : '',
             (string) $attStatus,
         ]);
     }
@@ -321,6 +836,74 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 $activeDay = isset($_GET['day']) ? (string) $_GET['day'] : 'all';
 if ($activeDay !== 'all' && !isset($buckets[$activeDay])) $activeDay = 'all';
 $rows = $buckets[$activeDay] ?? [];
+
+$eventWindowStart = $toLocalDt((string) ($event['start_at'] ?? ''));
+$eventWindowClose = $eventWindowStart ? $eventWindowStart->modify('+30 minutes') : null;
+$eventWindowClosed = $eventWindowClose ? ($nowUtc > $eventWindowClose->setTimezone(new DateTimeZone('UTC'))) : false;
+
+$reasonByStudentEvent = [];
+if ($absenceReasonTableAvailable) {
+    foreach ($absenceReasonRows as $reason) {
+        if (!is_array($reason)) {
+            continue;
+        }
+        $studentId = (string) ($reason['student_id'] ?? '');
+        $sessionId = trim((string) ($reason['session_id'] ?? ''));
+        if ($studentId === '' || $sessionId !== '') {
+            continue;
+        }
+        $reasonByStudentEvent[$studentId] = $reason;
+    }
+}
+
+$simpleEventAbsentRows = [];
+if ($eventWindowClosed) {
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $studentId = (string) ($participant['student_id'] ?? '');
+        if ($studentId === '') {
+            continue;
+        }
+        $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+        $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
+        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+        $attendance = null;
+        if (isset($ticket['attendance']) && is_array($ticket['attendance'])) {
+            $atts = $ticket['attendance'];
+            $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : null;
+        }
+        if ($attendanceCountsAsPresent($attendance)) {
+            continue;
+        }
+
+        $nameParts = [];
+        foreach (['first_name', 'middle_name', 'last_name'] as $key) {
+            $value = trim((string) ($profile[$key] ?? ''));
+            if ($value !== '') {
+                $nameParts[] = $value;
+            }
+        }
+        $name = implode(' ', $nameParts);
+        $suffix = trim((string) ($profile['suffix'] ?? ''));
+        if ($suffix !== '') {
+            $name .= ', ' . $suffix;
+        }
+        $section = isset($profile['sections']) && is_array($profile['sections'])
+            ? (string) ($profile['sections']['name'] ?? '')
+            : '';
+        $simpleEventAbsentRows[] = [
+            'student_id' => $studentId,
+            'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
+            'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+            'section' => $section !== '' ? $section : 'N/A',
+            'reason' => isset($reasonByStudentEvent[$studentId]) && is_array($reasonByStudentEvent[$studentId])
+                ? $reasonByStudentEvent[$studentId]
+                : null,
+        ];
+    }
+}
 
 render_header('Participants', $user);
 ?>
@@ -342,38 +925,29 @@ render_header('Participants', $user);
   </div>
 </div>
 
-<!-- TABS NAVIGATION (Cloned from event_view.php) -->
-<div class="border-b border-zinc-200 mb-6">
-    <nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
-        <a href="/event_view.php?id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-            Event Details
-        </a>
-        <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-orange-500 text-orange-600 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-bold">
-            Event Participants
-        </a>
-            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=feedback" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Event Feedback
-            </a>
-            <a href="/evaluation_admin.php?event_id=<?= htmlspecialchars($eventId) ?>&tab=questions" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                Evaluation Questions
-            </a>
-            <a href="/event_teachers.php?event_id=<?= htmlspecialchars($eventId) ?>" class="border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 whitespace-nowrap border-b-2 py-3 px-1 text-sm font-semibold transition">
-                QR Scanner Access
-            </a>
-        </nav>
-    </div>
+<?php
+render_event_tabs([
+    'event_id' => $eventId,
+    'current_tab' => $participantTab === 'absence_reasons' ? 'absence_reasons' : 'participants',
+    'role' => $role,
+    'uses_sessions' => $usesSessions,
+    'event_status' => (string) ($event['status'] ?? ''),
+    'participant_day' => $activeDay,
+]);
+?>
 
-<?php if ($multiDay): ?>
+<?php if ($multiDay && $participantTab === 'participants'): ?>
   <div class="mb-6 flex gap-2 flex-wrap bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200 w-full sm:w-fit">
     <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === 'all' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-       href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&day=all">All Days</a>
+       href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=all">All Days</a>
     <?php foreach ($days as $day): ?>
       <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === $day ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-         href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&day=<?= htmlspecialchars($day) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
+         href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=<?= htmlspecialchars($day) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
     <?php endforeach; ?>
   </div>
 <?php endif; ?>
 
+<?php if ($participantTab === 'participants'): ?>
 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
   <div class="flex flex-wrap items-center gap-3">
     <h3 class="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">
@@ -431,7 +1005,6 @@ render_header('Participants', $user);
         }
         
         $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-        $checkOutRaw = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
         $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
         $registrationId = (string) ($r['id'] ?? '');
 
@@ -448,14 +1021,6 @@ render_header('Participants', $user);
                if ($checkInLocal) $checkInFormat = $checkInLocal->format('M d, g:i A');
            } catch (Throwable $e) {}
         }
-        $checkOutFormat = '—';
-        if ($checkOutRaw) {
-           try {
-               $checkOutLocal = $toLocalDt((string) $checkOutRaw);
-               if ($checkOutLocal) $checkOutFormat = $checkOutLocal->format('M d, g:i A');
-           } catch (Throwable $e) {}
-        }
-
         $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
         $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
         $yearLvl = 'N/A';
@@ -514,12 +1079,6 @@ render_header('Participants', $user);
               </span>
               <span class="text-xs font-semibold text-zinc-900"><?= $checkInFormat ?></span>
            </div>
-           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
-              <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                 <div class="w-2 h-2 rounded-full bg-red-500"></div> Check-Out
-              </span>
-              <span class="text-xs font-semibold text-zinc-900"><?= $checkOutFormat ?></span>
-           </div>
            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 mt-2 border-t border-zinc-100 pt-3">
               <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
                  <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a2.999 2.999 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a2.999 2.999 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg> Token
@@ -542,12 +1101,168 @@ render_header('Participants', $user);
     <?php endforeach; ?>
   </div>
 </div>
+<?php else: ?>
+<?php if (!$absenceReasonTableAvailable): ?>
+  <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 mb-6">
+    Absence reason storage is not available yet. Apply migration <code>008_attendance_absence_reasons.sql</code> first.
+  </div>
+<?php endif; ?>
+<div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+  <div class="rounded-2xl border border-zinc-200 bg-white p-4">
+    <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Event Window</div>
+    <div class="mt-2 text-sm font-semibold text-zinc-900">
+      <?php if ($eventWindowStart && $eventWindowClose): ?>
+        <?= htmlspecialchars($eventWindowStart->format('M j, g:i A')) ?> - <?= htmlspecialchars($eventWindowClose->format('g:i A')) ?>
+      <?php else: ?>
+        No start time
+      <?php endif; ?>
+    </div>
+    <div class="mt-2 text-xs text-zinc-500">Absent is counted only after the scan window closes.</div>
+  </div>
+  <div class="rounded-2xl border border-zinc-200 bg-white p-4">
+    <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Absent Participants</div>
+    <div class="mt-2 text-2xl font-black text-amber-700"><?= count($simpleEventAbsentRows) ?></div>
+  </div>
+  <div class="rounded-2xl border border-zinc-200 bg-white p-4">
+    <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Reasons Submitted</div>
+    <div class="mt-2 text-2xl font-black text-emerald-700"><?= count(array_filter($simpleEventAbsentRows, static fn(array $row): bool => is_array($row['reason'] ?? null))) ?></div>
+  </div>
+</div>
+
+<div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-x-auto">
+  <table class="min-w-full divide-y divide-zinc-200">
+    <thead class="bg-zinc-50">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Reason</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Submitted</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-zinc-100">
+      <?php if (!$eventWindowClosed): ?>
+        <tr>
+          <td colspan="5" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+            Event scan window is still open or not started yet. Absences will appear after it closes.
+          </td>
+        </tr>
+      <?php elseif (count($simpleEventAbsentRows) === 0): ?>
+        <tr>
+          <td colspan="5" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+            No unresolved absences found.
+          </td>
+        </tr>
+      <?php endif; ?>
+      <?php foreach ($simpleEventAbsentRows as $row): ?>
+        <?php
+          $reason = $row['reason'];
+          $hasReason = is_array($reason);
+          $submittedLabel = $hasReason && !empty($reason['submitted_at'])
+              ? format_date_local((string) $reason['submitted_at'], 'M j, g:i A')
+              : '—';
+          $reviewStatus = $hasReason ? strtolower(trim((string) ($reason['review_status'] ?? 'pending'))) : '';
+          $reviewLabel = $reviewStatus === 'approved'
+              ? 'Approved'
+              : ($reviewStatus === 'rejected' ? 'Rejected' : 'For Review');
+          $reviewBadge = $reviewStatus === 'approved'
+              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+              : ($reviewStatus === 'rejected'
+                  ? 'bg-red-100 text-red-800 border-red-200'
+                  : 'bg-sky-100 text-sky-800 border-sky-200');
+          $fullReasonText = (string) ($reason['reason_text'] ?? '');
+          if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+              $reasonPreview = mb_strlen($fullReasonText) > 72
+                  ? (mb_substr($fullReasonText, 0, 72) . '...')
+                  : $fullReasonText;
+          } else {
+              $reasonPreview = strlen($fullReasonText) > 72
+                  ? (substr($fullReasonText, 0, 72) . '...')
+                  : $fullReasonText;
+          }
+          $reasonModalId = 'reason-modal-event-' . ($reason['id'] ?? md5((string) $row['participant_name'] . (string) $row['section']));
+        ?>
+        <tr>
+          <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></td>
+          <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['student_number']) ?></td>
+          <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['section']) ?></td>
+          <td class="px-4 py-4 text-sm text-zinc-700">
+            <?php if ($hasReason): ?>
+              <div class="space-y-2">
+                <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $reviewBadge ?>">
+                  <?= htmlspecialchars($reviewLabel) ?>
+                </span>
+                <button
+                  type="button"
+                  class="btn-view-reason inline-flex items-center rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                  data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>"
+                >
+                  View full reason
+                </button>
+                <div id="<?= htmlspecialchars((string) $reasonModalId) ?>" class="reason-modal fixed inset-0 z-[100] hidden">
+                  <div class="absolute inset-0 bg-black/50 reason-modal-close" data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>"></div>
+                  <div class="absolute inset-0 flex items-center justify-center p-4">
+                    <div class="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-2xl">
+                      <div class="flex items-center justify-between border-b border-zinc-200 px-5 py-4">
+                        <div>
+                          <div class="text-sm font-bold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></div>
+                          <div class="text-xs text-zinc-500"><?= htmlspecialchars((string) $row['section']) ?> • <?= htmlspecialchars($submittedLabel) ?></div>
+                        </div>
+                        <button type="button" class="reason-modal-close rounded-lg p-2 text-zinc-500 hover:bg-zinc-100" data-modal-id="<?= htmlspecialchars((string) $reasonModalId) ?>">✕</button>
+                      </div>
+                      <div class="px-5 py-4">
+                        <div class="mb-3">
+                          <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $reviewBadge ?>">
+                            <?= htmlspecialchars($reviewLabel) ?>
+                          </span>
+                        </div>
+                        <div class="max-h-72 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-zinc-700"><?= nl2br(htmlspecialchars($fullReasonText)) ?></div>
+                        <?php if (!empty($reason['admin_note'])): ?>
+                          <div class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600">
+                            <span class="font-semibold">Admin note:</span>
+                            <div class="mt-1 whitespace-pre-wrap"><?= nl2br(htmlspecialchars((string) $reason['admin_note'])) ?></div>
+                          </div>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            <?php else: ?>
+              <span class="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-red-700">
+                No reason submitted
+              </span>
+            <?php endif; ?>
+          </td>
+          <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($submittedLabel) ?></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+</div>
+<?php endif; ?>
 
 <?php if ($role === 'admin'): ?>
 <script>
+  document.querySelectorAll('.btn-view-reason').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.modalId;
+      const modal = id ? document.getElementById(id) : null;
+      if (modal) modal.classList.remove('hidden');
+    });
+  });
+
+  document.querySelectorAll('.reason-modal-close').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.modalId;
+      const modal = id ? document.getElementById(id) : null;
+      if (modal) modal.classList.add('hidden');
+    });
+  });
+
   document.querySelectorAll('.btnResetAttendance').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const ok = confirm('Reset this participant attendance? This will clear status, check-in, and check-out.');
+      const ok = confirm('Reset this participant attendance? This will clear status and check-in.');
       if (!ok) return;
       btn.disabled = true;
       try {
