@@ -369,6 +369,7 @@ if ($usesSessions) {
               <?php foreach ($participants as $participant): ?>
                 <?php
                   $registrationId = (string) ($participant['id'] ?? '');
+                  $studentId = (string) ($participant['student_id'] ?? '');
                   $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
                   $section = isset($profile['sections']) && is_array($profile['sections']) ? (string) ($profile['sections']['name'] ?? '') : '';
                   $nameParts = [];
@@ -393,12 +394,31 @@ if ($usesSessions) {
                       $sessionId = (string) ($session['id'] ?? '');
                       $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
                       $checkInAt = is_array($attendance) ? (string) ($attendance['check_in_at'] ?? '') : '';
+                      $sessionMeta = $sessionWindowMeta[$sessionId] ?? null;
+                      $sessionClosed = is_array($sessionMeta) && !empty($sessionMeta['closed']);
+                      $reason = ($studentId !== '' && isset($reasonByStudentSession[$studentId][$sessionId]) && is_array($reasonByStudentSession[$studentId][$sessionId]))
+                          ? $reasonByStudentSession[$studentId][$sessionId]
+                          : null;
+                      $reviewStatus = strtolower(trim((string) (($reason['review_status'] ?? ''))));
                     ?>
                     <td class="px-4 py-4 text-sm text-zinc-600">
                       <?php if (is_array($attendance) && $attendanceCountsAsPresent($attendance)): ?>
                         <span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Present</span>
                         <?php if ($checkInAt !== ''): ?>
                           <div class="mt-2 text-xs text-zinc-500"><?= htmlspecialchars(format_date_local($checkInAt, 'M j, g:i A')) ?></div>
+                        <?php endif; ?>
+                      <?php elseif ($sessionClosed): ?>
+                        <span class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">Absent</span>
+                        <?php if (is_array($reason)): ?>
+                          <?php if ($reviewStatus === 'approved'): ?>
+                            <div class="mt-2 text-[11px] font-semibold text-emerald-700">Reason approved</div>
+                          <?php elseif ($reviewStatus === 'rejected'): ?>
+                            <div class="mt-2 text-[11px] font-semibold text-rose-700">Reason rejected</div>
+                          <?php else: ?>
+                            <div class="mt-2 text-[11px] font-semibold text-sky-700">Reason for review</div>
+                          <?php endif; ?>
+                        <?php else: ?>
+                          <div class="mt-2 text-[11px] font-semibold text-rose-700">No reason submitted</div>
                         <?php endif; ?>
                       <?php else: ?>
                         <span class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-bold text-zinc-500">No record</span>

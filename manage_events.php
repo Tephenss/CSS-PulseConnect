@@ -540,7 +540,7 @@ render_header('Manage Events', $user);
                 <div class="text-xs font-bold uppercase tracking-wide text-orange-700">Seminar Sessions</div>
                 <p class="mt-1 text-[11px] leading-snug text-orange-700/80">Each seminar keeps its own attendance and evaluation flow. The parent event window will auto-sync from these schedules.</p>
               </div>
-              <span id="seminarSummaryBadge" class="rounded-full border border-orange-300 bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wide text-orange-700">1 Seminar</span>
+              <span id="seminarSummaryBadge" class="inline-flex items-center whitespace-nowrap rounded-full border border-orange-300 bg-white px-3 py-1 text-[11px] leading-none font-black uppercase tracking-wide text-orange-700">1 Seminar</span>
             </div>
 
             <div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">

@@ -443,14 +443,18 @@ render_header('QR Scanner Assignment', $user);
                                             </div>
                                             <div class="text-[11px] font-bold text-zinc-400 mb-2"><?= htmlspecialchars($email) ?></div>
                                             <div class="flex flex-wrap gap-2">
-                                                <span class="qr-badge qr-badge-sky flex items-center gap-1">
-                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75H6A2.25 2.25 0 003.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0120.25 6v1.5m0 9V18A2.25 2.25 0 0118 20.25h-1.5m-9 0H6A2.25 2.25 0 013.75 18v-1.5M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                                                    Scanner
-                                                </span>
-                                                <span class="qr-badge qr-badge-violet flex items-center gap-1">
-                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a5.971 5.971 0 00-.94 3.197m0 0l.001.031c0 .225.012.447.037.666A11.944 11.944 0 0112 21c2.17 0 4.207-.576 5.963-1.584A6.062 6.062 0 0118 18.722m-12 0a5.971 5.971 0 00.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 005.058 2.772m0 0a5.971 5.971 0 00.94 3.197M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zm.45-1.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM19.35 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0zM6.75 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0z"/></svg>
-                                                    Assistant Manager
-                                                </span>
+                                                <?php if($isQrEnabled): ?>
+                                                    <span class="qr-badge qr-badge-sky flex items-center gap-1">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75H6A2.25 2.25 0 003.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0120.25 6v1.5m0 9V18A2.25 2.25 0 0118 20.25h-1.5m-9 0H6A2.25 2.25 0 013.75 18v-1.5M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                                        Scanner
+                                                    </span>
+                                                    <span class="qr-badge qr-badge-violet flex items-center gap-1">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a5.971 5.971 0 00-.94 3.197m0 0l.001.031c0 .225.012.447.037.666A11.944 11.944 0 0112 21c2.17 0 4.207-.576 5.963-1.584A6.062 6.062 0 0118 18.722m-12 0a5.971 5.971 0 00.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 005.058 2.772m0 0a5.971 5.971 0 00.94 3.197M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zm.45-1.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM19.35 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0zM6.75 15.45a2.1 2.1 0 11-4.2 0 2.1 2.1 0 014.2 0z"/></svg>
+                                                        Assistant Manager
+                                                    </span>
+                                                <?php else: ?>
+                                                    <span class="qr-badge qr-badge-zinc">No scanner access</span>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                     </label>

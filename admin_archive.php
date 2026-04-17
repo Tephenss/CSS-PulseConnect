@@ -80,6 +80,17 @@ render_header('Archived Events', $user);
     </button>
 </div>
 
+<div class="mb-4 flex items-center justify-end">
+  <button
+    id="btnDeleteAllCurrentTab"
+    type="button"
+    class="inline-flex items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs font-black uppercase tracking-wide text-red-700 hover:bg-red-100 transition-colors"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+    <span id="deleteAllLabel">Delete All Events</span>
+  </button>
+</div>
+
 <!-- ARCHIVED EVENTS LIST -->
 <div id="panelEvents" class="flex flex-col gap-3 pb-10">
   <?php foreach ($regularArchived as $e): ?>
@@ -333,6 +344,23 @@ render_header('Archived Events', $user);
   const panT = document.getElementById('panelTeachers');
   const panS = document.getElementById('panelStudents');
   const panSec = document.getElementById('panelSections');
+  const btnDeleteAllCurrentTab = document.getElementById('btnDeleteAllCurrentTab');
+  const deleteAllLabel = document.getElementById('deleteAllLabel');
+  let activeArchiveScope = 'events';
+
+  const scopeMeta = {
+    events: { label: 'Delete All Events', noun: 'archived events' },
+    rejected: { label: 'Delete All Rejected', noun: 'rejected archived events' },
+    teachers: { label: 'Delete All Teachers', noun: 'archived teachers' },
+    students: { label: 'Delete All Students', noun: 'archived students' },
+    sections: { label: 'Delete All Sections', noun: 'archived sections' },
+  };
+
+  function updateDeleteAllButton() {
+    if (!btnDeleteAllCurrentTab || !deleteAllLabel) return;
+    const meta = scopeMeta[activeArchiveScope] || scopeMeta.events;
+    deleteAllLabel.textContent = meta.label;
+  }
   
   function resetTabs() {
       [btnE, btnRejected, btnT, btnS, btnSec].forEach(b => {
@@ -353,6 +381,8 @@ render_header('Archived Events', $user);
       spanE.classList.replace('bg-zinc-100', 'bg-orange-100');
       spanE.classList.replace('text-zinc-600', 'text-orange-700');
       panE.classList.remove('hidden');
+      activeArchiveScope = 'events';
+      updateDeleteAllButton();
   });
 
   btnRejected.addEventListener('click', () => {
@@ -362,6 +392,8 @@ render_header('Archived Events', $user);
       spanRejected.classList.replace('bg-zinc-100', 'bg-orange-100');
       spanRejected.classList.replace('text-zinc-600', 'text-orange-700');
       panRejected.classList.remove('hidden');
+      activeArchiveScope = 'rejected';
+      updateDeleteAllButton();
   });
   
   btnT.addEventListener('click', () => {
@@ -371,6 +403,8 @@ render_header('Archived Events', $user);
       spanT.classList.replace('bg-zinc-100', 'bg-orange-100');
       spanT.classList.replace('text-zinc-600', 'text-orange-700');
       panT.classList.remove('hidden');
+      activeArchiveScope = 'teachers';
+      updateDeleteAllButton();
   });
   
   btnS.addEventListener('click', () => {
@@ -380,6 +414,8 @@ render_header('Archived Events', $user);
       spanS.classList.replace('bg-zinc-100', 'bg-orange-100');
       spanS.classList.replace('text-zinc-600', 'text-orange-700');
       panS.classList.remove('hidden');
+      activeArchiveScope = 'students';
+      updateDeleteAllButton();
   });
   
   btnSec.addEventListener('click', () => {
@@ -389,7 +425,39 @@ render_header('Archived Events', $user);
       spanSec.classList.replace('bg-zinc-100', 'bg-orange-100');
       spanSec.classList.replace('text-zinc-600', 'text-orange-700');
       panSec.classList.remove('hidden');
+      activeArchiveScope = 'sections';
+      updateDeleteAllButton();
   });
+
+  btnDeleteAllCurrentTab?.addEventListener('click', async () => {
+    const meta = scopeMeta[activeArchiveScope] || scopeMeta.events;
+    if (!confirm(`Permanently delete all ${meta.noun}? This cannot be undone.`)) return;
+
+    const originalHtml = btnDeleteAllCurrentTab.innerHTML;
+    btnDeleteAllCurrentTab.disabled = true;
+    btnDeleteAllCurrentTab.innerHTML = '<span class="inline-flex items-center gap-2"><svg class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>Deleting...</span>';
+    try {
+      const res = await fetch('/api/archive_bulk_delete.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: activeArchiveScope,
+          csrf_token: window.CSRF_TOKEN
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Bulk delete failed');
+      alert(`Deleted ${Number(data.deleted_count || 0)} item(s).`);
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || 'Bulk delete failed');
+      btnDeleteAllCurrentTab.innerHTML = originalHtml;
+      btnDeleteAllCurrentTab.disabled = false;
+      updateDeleteAllButton();
+    }
+  });
+
+  updateDeleteAllButton();
 
   // Events Restore Script
   document.querySelectorAll('.btnRestore').forEach(btn => {
