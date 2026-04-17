@@ -65,6 +65,9 @@ $participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_G
 if (!in_array($participantTab, ['participants', 'absence_reasons'], true)) {
     $participantTab = 'participants';
 }
+$backHref = '/events.php';
+$returnTo = '/events.php';
+$returnToQuery = '&return_to=' . rawurlencode($returnTo);
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 $attendanceCountsAsPresent = static function (?array $row): bool {
     if (!is_array($row)) {
@@ -318,7 +321,7 @@ if ($usesSessions) {
     <div class="mb-4">
       <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
         <div class="flex items-center gap-3">
-          <a href="/manage_events.php" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
+          <a href="<?= htmlspecialchars($backHref) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
             <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
           </a>
           <div>
@@ -335,6 +338,7 @@ if ($usesSessions) {
           'role' => $role,
           'uses_sessions' => $usesSessions,
           'event_status' => (string) ($event['status'] ?? ''),
+          'return_to' => $returnTo,
       ]);
       ?>
 
@@ -396,10 +400,6 @@ if ($usesSessions) {
                       $checkInAt = is_array($attendance) ? (string) ($attendance['check_in_at'] ?? '') : '';
                       $sessionMeta = $sessionWindowMeta[$sessionId] ?? null;
                       $sessionClosed = is_array($sessionMeta) && !empty($sessionMeta['closed']);
-                      $reason = ($studentId !== '' && isset($reasonByStudentSession[$studentId][$sessionId]) && is_array($reasonByStudentSession[$studentId][$sessionId]))
-                          ? $reasonByStudentSession[$studentId][$sessionId]
-                          : null;
-                      $reviewStatus = strtolower(trim((string) (($reason['review_status'] ?? ''))));
                     ?>
                     <td class="px-4 py-4 text-sm text-zinc-600">
                       <?php if (is_array($attendance) && $attendanceCountsAsPresent($attendance)): ?>
@@ -409,17 +409,6 @@ if ($usesSessions) {
                         <?php endif; ?>
                       <?php elseif ($sessionClosed): ?>
                         <span class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">Absent</span>
-                        <?php if (is_array($reason)): ?>
-                          <?php if ($reviewStatus === 'approved'): ?>
-                            <div class="mt-2 text-[11px] font-semibold text-emerald-700">Reason approved</div>
-                          <?php elseif ($reviewStatus === 'rejected'): ?>
-                            <div class="mt-2 text-[11px] font-semibold text-rose-700">Reason rejected</div>
-                          <?php else: ?>
-                            <div class="mt-2 text-[11px] font-semibold text-sky-700">Reason for review</div>
-                          <?php endif; ?>
-                        <?php else: ?>
-                          <div class="mt-2 text-[11px] font-semibold text-rose-700">No reason submitted</div>
-                        <?php endif; ?>
                       <?php else: ?>
                         <span class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-bold text-zinc-500">No record</span>
                       <?php endif; ?>
@@ -934,11 +923,11 @@ render_header('Participants', $user);
     <p class="text-zinc-600 text-sm">Participant directory and real-time attendance tracking.</p>
   </div>
   <div class="flex flex-wrap items-center gap-2.5">
-    <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=excel" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
+    <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=excel<?= htmlspecialchars($returnToQuery) ?>" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
       <svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
       Export Excel
     </a>
-    <a href="/manage_events.php" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-800 hover:bg-zinc-50 transition font-medium flex items-center gap-1.5 shadow-sm">
+    <a href="<?= htmlspecialchars($backHref) ?>" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-800 hover:bg-zinc-50 transition font-medium flex items-center gap-1.5 shadow-sm">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
       Back
     </a>
@@ -953,16 +942,17 @@ render_event_tabs([
     'uses_sessions' => $usesSessions,
     'event_status' => (string) ($event['status'] ?? ''),
     'participant_day' => $activeDay,
+    'return_to' => $returnTo,
 ]);
 ?>
 
 <?php if ($multiDay && $participantTab === 'participants'): ?>
   <div class="mb-6 flex gap-2 flex-wrap bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200 w-full sm:w-fit">
     <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === 'all' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-       href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=all">All Days</a>
+       href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=all<?= htmlspecialchars($returnToQuery) ?>">All Days</a>
     <?php foreach ($days as $day): ?>
       <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === $day ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-         href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=<?= htmlspecialchars($day) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
+         href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=<?= htmlspecialchars($day) ?><?= htmlspecialchars($returnToQuery) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
     <?php endforeach; ?>
   </div>
 <?php endif; ?>

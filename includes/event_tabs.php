@@ -40,14 +40,16 @@ if (!function_exists('render_event_tabs')) {
         $isFinished = $status === 'finished';
 
         $participantDay = trim((string) ($options['participant_day'] ?? ''));
+        $returnTo = trim((string) ($options['return_to'] ?? ''));
+        $returnQuery = $returnTo !== '' ? '&return_to=' . rawurlencode($returnTo) : '';
 
         $eventQuery = 'event_id=' . rawurlencode($eventId);
-        $participantsHref = '/participants.php?' . $eventQuery . '&participant_tab=participants';
+        $participantsHref = '/participants.php?' . $eventQuery . '&participant_tab=participants' . $returnQuery;
         if ($participantDay !== '' && strtolower($participantDay) !== 'all') {
             $participantsHref .= '&day=' . rawurlencode($participantDay);
         }
 
-        $absenceHref = '/participants.php?' . $eventQuery . '&participant_tab=absence_reasons';
+        $absenceHref = '/participants.php?' . $eventQuery . '&participant_tab=absence_reasons' . $returnQuery;
         $feedbackHref = '/evaluation_admin.php?' . $eventQuery . '&tab=feedback';
         $questionsHref = '/evaluation_admin.php?' . $eventQuery . '&tab=questions';
         $qrHref = '/event_teachers.php?' . $eventQuery;
@@ -58,11 +60,13 @@ if (!function_exists('render_event_tabs')) {
         echo event_tab_link_html($detailsHref, 'Event Details', $currentTab === 'details');
         echo event_tab_link_html($participantsHref, 'Event Participants', $currentTab === 'participants');
 
-        if ($role === 'admin') {
+        if ($role === 'admin' && $isFinished) {
             echo event_tab_link_html($absenceHref, 'Absence Reasons', $currentTab === 'absence_reasons');
         }
 
-        echo event_tab_link_html($feedbackHref, 'Event Feedback', $currentTab === 'feedback');
+        if ($isFinished) {
+            echo event_tab_link_html($feedbackHref, 'Event Feedback', $currentTab === 'feedback');
+        }
 
         if (!$isFinished) {
             echo event_tab_link_html($questionsHref, 'Evaluation Questions', $currentTab === 'questions');
