@@ -87,6 +87,17 @@ function load_teacher_profiles(array $teacherIds, array $headers): array
     return $map;
 }
 
+function load_all_teachers(array $headers): array
+{
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+        . '?select=id,first_name,middle_name,last_name,suffix,email'
+        . '&role=eq.teacher'
+        . '&order=last_name.asc,first_name.asc';
+    $res = supabase_request('GET', $url, $headers);
+    $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
+    return is_array($rows) ? $rows : [];
+}
+
 function send_qr_assignment_notification(array $teacherIds, string $eventId, string $eventTitle): void
 {
     if (empty($teacherIds)) {
@@ -128,6 +139,47 @@ function send_qr_assignment_notification(array $teacherIds, string $eventId, str
     ]);
 }
 
+function send_teacher_event_assignment_notification(array $teacherIds, string $eventId, string $eventTitle): void
+{
+    if (empty($teacherIds)) {
+        return;
+    }
+
+    require_once __DIR__ . '/includes/fcm.php';
+
+    $inList = '(' . implode(',', array_map('rawurlencode', $teacherIds)) . ')';
+    $tokensRes = supabase_request('GET',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
+        ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
+    );
+
+    if (!$tokensRes['ok']) {
+        return;
+    }
+
+    $tokenRows = json_decode((string) $tokensRes['body'], true);
+    $tokens = [];
+    if (is_array($tokenRows)) {
+        foreach ($tokenRows as $row) {
+            $token = trim((string) ($row['token'] ?? ''));
+            if ($token !== '') {
+                $tokens[$token] = true;
+            }
+        }
+    }
+
+    if (empty($tokens)) {
+        return;
+    }
+
+    $title = 'Event Assignment';
+    $body = 'You were assigned to "' . $eventTitle . '". Check your event list for details.';
+    send_fcm_notification(array_keys($tokens), $title, $body, [
+        'event_id' => $eventId,
+        'type' => 'teacher_event_assigned',
+    ]);
+}
+
 $event = load_qr_event($eventId, $headers);
 if (!is_array($event)) {
     http_response_code(404);
@@ -149,6 +201,15 @@ foreach ($assignments as $row) {
 }
 
 $teacherProfiles = load_teacher_profiles(array_keys($assignmentMap), $headers);
+$allTeachers = load_all_teachers($headers);
+$availableTeachers = [];
+foreach ($allTeachers as $teacher) {
+    $teacherId = trim((string) ($teacher['id'] ?? ''));
+    if ($teacherId === '' || isset($assignmentMap[$teacherId])) {
+        continue;
+    }
+    $availableTeachers[] = is_array($teacher) ? $teacher : [];
+}
 $teacherRows = [];
 foreach ($assignmentMap as $teacherId => $assignment) {
     $teacherRows[] = [
@@ -160,6 +221,58 @@ foreach ($assignmentMap as $teacherId => $assignment) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_validate(isset($_POST['csrf_token']) ? (string) $_POST['csrf_token'] : null);
+    $action = trim((string) ($_POST['action'] ?? ''));
+
+    if ($action === 'add_teacher') {
+        $teacherId = trim((string) ($_POST['add_teacher_id'] ?? ''));
+        if ($teacherId === '') {
+            $_SESSION['flash_error'] = 'Please select a teacher to add.';
+            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            exit;
+        }
+
+        $exists = false;
+        foreach ($allTeachers as $teacher) {
+            if (($teacher['id'] ?? '') === $teacherId) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $_SESSION['flash_error'] = 'Selected teacher is invalid.';
+            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            exit;
+        }
+
+        $payload = json_encode([[
+            'event_id' => $eventId,
+            'teacher_id' => $teacherId,
+            'can_scan' => false,
+            'can_manage_assistants' => false,
+            'assigned_by' => (string) ($user['id'] ?? ''),
+            'assigned_at' => gmdate('c'),
+        ]], JSON_UNESCAPED_SLASHES);
+
+        if (!is_string($payload)) {
+            $_SESSION['flash_error'] = 'Failed to prepare teacher assignment payload.';
+            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            exit;
+        }
+
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+            . '?on_conflict=event_id,teacher_id';
+        $res = supabase_request('POST', $url, $writeHeaders, $payload);
+        if (!$res['ok']) {
+            $_SESSION['flash_error'] = build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to add teacher assignment');
+            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            exit;
+        }
+
+        send_teacher_event_assignment_notification([$teacherId], $eventId, (string) ($event['title'] ?? 'Event'));
+        $_SESSION['flash_success'] = 'Teacher added to event assignment list.';
+        header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+        exit;
+    }
 
     $validTeacherIds = [];
     $currentlyEnabled = [];
@@ -381,6 +494,7 @@ render_header('QR Scanner Assignment', $user);
             <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
                 <form method="post">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action" value="save_assignments">
                     
                     <div class="px-6 py-5 border-b border-zinc-100 bg-zinc-50/50 flex flex-wrap items-center justify-between gap-4">
                         <div>
@@ -388,6 +502,10 @@ render_header('QR Scanner Assignment', $user);
                             <p class="text-xs text-zinc-500 font-medium mt-1">Select teachers allowed to scan tickets</p>
                         </div>
                         <div class="flex items-center gap-2">
+                            <button type="button" id="btnOpenAddTeacherModal" class="text-xs font-bold text-white px-3 py-1.5 rounded-lg border border-orange-500 bg-orange-500 hover:bg-orange-600 transition flex items-center gap-1">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                                Add Teacher
+                            </button>
                             <button type="button" id="btnEnableAllQr" class="text-xs font-bold text-zinc-600 px-3 py-1.5 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 transition">Enable All</button>
                             <button type="button" id="btnDisableAllQr" class="text-xs font-bold text-zinc-600 px-3 py-1.5 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 transition">Disable All</button>
                             <div class="w-px h-6 bg-zinc-200 mx-1"></div>
@@ -521,6 +639,48 @@ render_header('QR Scanner Assignment', $user);
     </div>
 </div>
 
+<div id="addTeacherModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+  <div class="w-full max-w-md rounded-2xl border border-orange-100 bg-white p-5 shadow-xl">
+    <div class="flex items-center justify-between mb-3">
+      <h4 class="text-base font-black text-zinc-900 flex items-center gap-2">
+        <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-orange-100 text-orange-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a5.971 5.971 0 00-.94 3.197m0 0l.001.031c0 .225.012.447.037.666A11.944 11.944 0 0112 21c2.17 0 4.207-.576 5.963-1.584A6.062 6.062 0 0118 18.722m-12 0a5.971 5.971 0 00.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 005.058 2.772m0 0a5.971 5.971 0 00.94 3.197M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/></svg>
+        </span>
+        Add Teacher to Event
+      </h4>
+      <button type="button" id="btnCloseAddTeacherModal" class="text-zinc-500 hover:text-zinc-700">✕</button>
+    </div>
+    <p class="text-xs text-zinc-500 mb-4">Selected teacher will appear in this list and receive assignment notification.</p>
+
+    <form method="post" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+      <input type="hidden" name="action" value="add_teacher">
+      <select
+        name="add_teacher_id"
+        required
+        class="w-full rounded-xl border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-800 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400"
+      >
+        <option value="">Select teacher...</option>
+        <?php foreach ($availableTeachers as $teacher): ?>
+          <?php
+          $tid = trim((string) ($teacher['id'] ?? ''));
+          if ($tid === '') continue;
+          $label = trim((string) (($teacher['first_name'] ?? '') . ' ' . ($teacher['last_name'] ?? '') . ' ' . ($teacher['suffix'] ?? '')));
+          $mail = trim((string) ($teacher['email'] ?? ''));
+          ?>
+          <option value="<?= htmlspecialchars($tid) ?>">
+            <?= htmlspecialchars($label !== '' ? $label : 'Teacher') ?><?= $mail !== '' ? ' - ' . htmlspecialchars($mail) : '' ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+      <div class="flex items-center justify-end gap-2">
+        <button type="button" id="btnCancelAddTeacherModal" class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-bold text-zinc-600 hover:bg-zinc-50">Cancel</button>
+        <button type="submit" class="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-orange-600">Add Teacher</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
   (function () {
     const checkboxes = Array.from(document.querySelectorAll('.qr-teacher-checkbox'));
@@ -528,6 +688,10 @@ render_header('QR Scanner Assignment', $user);
     const countEl = document.getElementById('qrEnabledCount');
     const btnEnableAll = document.getElementById('btnEnableAllQr');
     const btnDisableAll = document.getElementById('btnDisableAllQr');
+    const addTeacherModal = document.getElementById('addTeacherModal');
+    const btnOpenAddTeacherModal = document.getElementById('btnOpenAddTeacherModal');
+    const btnCloseAddTeacherModal = document.getElementById('btnCloseAddTeacherModal');
+    const btnCancelAddTeacherModal = document.getElementById('btnCancelAddTeacherModal');
 
     function refreshState() {
       let total = 0;
@@ -569,6 +733,22 @@ render_header('QR Scanner Assignment', $user);
     btnDisableAll?.addEventListener('click', () => {
       checkboxes.forEach((checkbox) => checkbox.checked = false);
       refreshState();
+    });
+
+    function closeAddTeacherModal() {
+      addTeacherModal?.classList.add('hidden');
+      addTeacherModal?.classList.remove('flex');
+    }
+    function openAddTeacherModal() {
+      addTeacherModal?.classList.remove('hidden');
+      addTeacherModal?.classList.add('flex');
+    }
+
+    btnOpenAddTeacherModal?.addEventListener('click', openAddTeacherModal);
+    btnCloseAddTeacherModal?.addEventListener('click', closeAddTeacherModal);
+    btnCancelAddTeacherModal?.addEventListener('click', closeAddTeacherModal);
+    addTeacherModal?.addEventListener('click', (e) => {
+      if (e.target === addTeacherModal) closeAddTeacherModal();
     });
 
     // Initial Refresh

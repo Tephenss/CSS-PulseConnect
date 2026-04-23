@@ -24,6 +24,7 @@ $old = [
     'middle_name' => '',
     'last_name' => '',
     'suffix' => '',
+    'course' => '',
     'email' => '',
     'section_id' => '',
 ];
@@ -54,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $middleName = isset($_POST['middle_name']) ? clean_string((string) $_POST['middle_name']) : '';
         $lastName = isset($_POST['last_name']) ? clean_string((string) $_POST['last_name']) : '';
         $suffix = isset($_POST['suffix']) ? clean_string((string) $_POST['suffix']) : '';
+        $course = isset($_POST['course']) ? strtoupper(clean_string((string) $_POST['course'])) : '';
         $email = isset($_POST['email']) ? strtolower(clean_string((string) $_POST['email'])) : '';
         $sectionId = isset($_POST['section_id']) ? (string) $_POST['section_id'] : '';
         $password = isset($_POST['password']) ? (string) $_POST['password'] : '';
@@ -62,6 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $old['middle_name'] = $middleName;
         $old['last_name'] = $lastName;
         $old['suffix'] = $suffix;
+        $old['course'] = $course;
         $old['email'] = $email;
         $old['section_id'] = $sectionId;
 
@@ -76,6 +79,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Suffix is too long.';
         } elseif ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $error = 'Please enter a valid email address.';
+        } elseif (!in_array($course, ['IT', 'CS'], true)) {
+            $error = 'Please select your course (IT or CS).';
         } elseif ($sectionId === '') {
             $error = 'Please select your section.';
         } elseif (mb_strlen($password) < 8) {
@@ -88,6 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'middle_name' => $middleName !== '' ? $middleName : null,
                 'last_name' => $lastName,
                 'suffix' => $suffix !== '' ? $suffix : null,
+                'course' => $course,
                 'email' => $email,
                 'password' => $passwordHash,
                 'section_id' => $sectionId !== '' ? $sectionId : null,
@@ -232,6 +238,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             required
                             class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
                             placeholder="name@email.com" autocomplete="email" />
+
+                        <div class="h-4"></div>
+
+                        <label class="block text-xs text-zinc-400 mb-1" for="course">Course</label>
+                        <select id="course" name="course" required
+                            class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700 text-zinc-100">
+                            <option value="" class="text-zinc-500">Select Course</option>
+                            <option value="IT" <?= $old['course'] === 'IT' ? 'selected' : '' ?>>BSIT (IT)</option>
+                            <option value="CS" <?= $old['course'] === 'CS' ? 'selected' : '' ?>>BSCS (CS)</option>
+                        </select>
 
                         <div class="h-4"></div>
 

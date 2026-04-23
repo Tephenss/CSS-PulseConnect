@@ -9,6 +9,9 @@ require_once __DIR__ . '/includes/event_sessions.php';
 
 $user = require_role(['admin', 'teacher']);
 $eventId = isset($_GET['event_id']) ? (string) $_GET['event_id'] : '';
+if ($eventId === '' && isset($_GET['id'])) {
+    $eventId = (string) $_GET['id'];
+}
 $templateId = isset($_GET['template_id']) ? (string) $_GET['template_id'] : '';
 $sessionId = isset($_GET['session_id']) ? trim((string) $_GET['session_id']) : '';
 
@@ -19,6 +22,7 @@ $headers = [
 
 $eventName = 'Sample Event One';
 $sessions = [];
+$isSeminarBasedForCertificates = false;
 if ($eventId !== '') {
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=title&id=eq.' . rawurlencode($eventId);
     $res = supabase_request('GET', $url, $headers);
@@ -30,30 +34,38 @@ if ($eventId !== '') {
     }
 
     $sessions = fetch_event_sessions($eventId, $headers);
+    $isSeminarBasedForCertificates = count($sessions) > 0;
     $knownSessionIds = array_map(static fn (array $session): string => (string) ($session['id'] ?? ''), $sessions);
     if ($sessionId !== '' && !in_array($sessionId, $knownSessionIds, true)) {
         $sessionId = '';
+    }
+    if ($sessionId === '' && $isSeminarBasedForCertificates) {
+        $sessionId = (string) ($sessions[0]['id'] ?? '');
     }
 }
 
 // Fetch saved templates for this workspace
 $customTemplates = [];
 if ($eventId !== '') {
-    $eventTplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
-    $eventTplRes = supabase_request('GET', $eventTplUrl, $headers);
-    if ($eventTplRes['ok']) {
-        $arrTpl = json_decode((string) $eventTplRes['body'], true);
-        if (is_array($arrTpl)) {
-            foreach ($arrTpl as $tpl) {
-                if (!is_array($tpl)) {
-                    continue;
+    // For seminar-based certificate flow, templates are per-session only.
+    // Whole-event templates remain for simple events.
+    if (!$isSeminarBasedForCertificates) {
+        $eventTplUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates?select=id,title,canvas_state,thumbnail_url&event_id=eq.' . rawurlencode($eventId) . '&order=created_at.desc';
+        $eventTplRes = supabase_request('GET', $eventTplUrl, $headers);
+        if ($eventTplRes['ok']) {
+            $arrTpl = json_decode((string) $eventTplRes['body'], true);
+            if (is_array($arrTpl)) {
+                foreach ($arrTpl as $tpl) {
+                    if (!is_array($tpl)) {
+                        continue;
+                    }
+                    $customTemplates[] = [
+                        ...$tpl,
+                        'template_scope' => 'event',
+                        'scope_session_id' => '',
+                        'scope_label' => 'Whole Event',
+                    ];
                 }
-                $customTemplates[] = [
-                    ...$tpl,
-                    'template_scope' => 'event',
-                    'scope_session_id' => '',
-                    'scope_label' => 'Whole Event',
-                ];
             }
         }
     }
@@ -116,7 +128,7 @@ if ($templateId !== '' && count($customTemplates) > 0) {
     }
 }
 
-$initialTemplateScope = $sessionId !== '' ? 'session' : 'event';
+$initialTemplateScope = $isSeminarBasedForCertificates ? 'session' : ($sessionId !== '' ? 'session' : 'event');
 ?>
 <!doctype html>
 <html lang="en">
@@ -361,7 +373,9 @@ $initialTemplateScope = $sessionId !== '' ? 'session' : 'event';
                     <div class="rounded-lg border border-zinc-800 bg-[#18181b] p-3 shadow-sm">
                         <div class="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Template Scope</div>
                         <select id="templateScopeSelect" class="select-clean w-full text-sm font-semibold">
+                            <?php if (!$isSeminarBasedForCertificates): ?>
                             <option value="event" <?= $initialTemplateScope === 'event' ? 'selected' : '' ?>>Whole Event</option>
+                            <?php endif; ?>
                             <?php foreach ($sessions as $session): ?>
                                 <?php
                                     $scopeValue = 'session:' . (string) ($session['id'] ?? '');
@@ -1213,7 +1227,8 @@ const templateScopeHint = document.getElementById('templateScopeHint');
 const savedTemplatesEmpty = document.getElementById('savedTemplatesEmpty');
 
 function getTemplateScopeMeta() {
-    const scopeValue = templateScopeSelect?.value || 'event';
+    const defaultScope = templateScopeSelect?.options?.[0]?.value || 'event';
+    const scopeValue = templateScopeSelect?.value || defaultScope;
     if (scopeValue.startsWith('session:')) {
         const sessionId = scopeValue.split(':')[1] || '';
         const sessionLabel = templateScopeSelect?.selectedOptions?.[0]?.textContent?.trim() || 'Seminar';

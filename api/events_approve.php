@@ -305,10 +305,8 @@ if ($event && $initialPublishFlow && !empty($validTeacherIds)) {
 if ($event && in_array($status, ['published', 'draft'], true)) {
     $eventFor = (string) ($event['event_for'] ?? 'All');
 
-    $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id&role=eq.student';
-    if ($eventFor !== 'All' && $eventFor !== '' && strtolower($eventFor) !== 'all') {
-        $usersUrl .= '&section_id=eq.' . rawurlencode($eventFor);
-    }
+    // Fetch all students with their section name and course
+    $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id,course,sections(name)&role=eq.student';
 
     $usersRes = supabase_request('GET', $usersUrl, [
         'apikey: ' . SUPABASE_KEY,
@@ -319,9 +317,56 @@ if ($event && in_array($status, ['published', 'draft'], true)) {
     if ($usersRes['ok']) {
         $userRows = json_decode((string) $usersRes['body'], true);
         if (is_array($userRows)) {
+            $isAll = ($eventFor === 'All' || $eventFor === '' || strtolower($eventFor) === 'all');
+            
+            $targetCourse = '';
+            $targetYear = '';
+            
+            if (!$isAll) {
+                $parts = explode('-', $eventFor);
+                $targetCourse = strtoupper($parts[0]);
+                $targetYear = isset($parts[1]) ? $parts[1] : '';
+            }
+
             foreach ($userRows as $row) {
                 $id = trim((string) ($row['id'] ?? ''));
-                if ($id !== '') {
+                if ($id === '') continue;
+
+                if ($isAll) {
+                    $targetUserIds[$id] = true;
+                    continue;
+                }
+
+                $studentCourse = strtoupper(trim((string)($row['course'] ?? '')));
+                $sectionName = trim((string)($row['sections']['name'] ?? ''));
+                
+                // Extract year from section name
+                $studentYear = '';
+                if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*([1-4])\s*([A-Z])$/i', $sectionName, $m)) {
+                    $studentYear = $m[2];
+                } elseif (strpos($sectionName, '-') !== false) {
+                    $p = explode('-', $sectionName, 2);
+                    $studentYear = trim($p[0]);
+                } elseif (preg_match('/\b([1-4])\b/', $sectionName, $m)) {
+                    $studentYear = $m[1];
+                }
+
+                $courseMatch = true;
+                $yearMatch = true;
+
+                if ($targetCourse === 'BSIT' || $targetCourse === 'BSCS') {
+                    if ($studentCourse !== '') {
+                        $courseMatch = ($targetCourse === 'BS' . $studentCourse);
+                    }
+                } elseif (in_array($targetCourse, ['1', '2', '3', '4'])) {
+                    $yearMatch = ($targetCourse === $studentYear);
+                }
+                
+                if ($targetYear !== '') {
+                    $yearMatch = ($targetYear === $studentYear);
+                }
+
+                if ($courseMatch && $yearMatch) {
                     $targetUserIds[$id] = true;
                 }
             }

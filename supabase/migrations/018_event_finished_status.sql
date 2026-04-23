@@ -1,4 +1,4 @@
--- CCS PulseConnect migration 009
+-- CCS PulseConnect migration 018
 -- Add explicit finished event status and move CCS Summit 2026 out of archive.
 
 do $$
@@ -36,3 +36,4 @@ exception
   when others then
     null;
 end $$;
+

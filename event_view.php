@@ -74,6 +74,31 @@ $eventFinishedForCertificates = $effectiveEndAt instanceof DateTimeImmutable
     ? $effectiveEndAt <= new DateTimeImmutable('now')
     : false;
 
+// Keep detail badge aligned with list behavior:
+// if this published event has already ended, mark it finished.
+if (strtolower(trim((string) ($event['status'] ?? ''))) === 'published'
+    && $eventFinishedForCertificates) {
+    try {
+        $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+            . '?id=eq.' . rawurlencode($id)
+            . '&status=eq.published';
+        $finishHeaders = [
+            'Accept: application/json',
+            'Content-Type: application/json',
+            'Prefer: return=minimal',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+        ];
+        $finishPayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
+        if (is_string($finishPayload)) {
+            supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
+            $event['status'] = 'finished';
+        }
+    } catch (Throwable $e) {
+        // Keep rendering if status sync fails.
+    }
+}
+
 // 2. Fetch Participants to compute statistics
 $childSelect = 'select=id,student_id,tickets(attendance(status))';
 $partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?' . $childSelect . '&event_id=eq.' . rawurlencode($id);
@@ -345,12 +370,7 @@ render_header('Event Details', $user);
                            <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
                            <?php
                                $for = $event['event_for'] ?? 'all';
-                               $targetLabel = 'All Year Levels';
-                               if (strtolower($for) === 'none') $targetLabel = 'No Target';
-                               elseif ((string)$for === '1') $targetLabel = '1st Year Students';
-                               elseif ((string)$for === '2') $targetLabel = '2nd Year Students';
-                               elseif ((string)$for === '3') $targetLabel = '3rd Year Students';
-                               elseif ((string)$for === '4') $targetLabel = '4th Year Students';
+                               $targetLabel = format_target_participant((string)$for);
                                echo htmlspecialchars($targetLabel);
                            ?>
                         </div>

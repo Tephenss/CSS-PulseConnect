@@ -126,6 +126,14 @@ $fetchUsersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
     . '?select=id&status=eq.archived&role=eq.' . rawurlencode($targetRole);
 $fetchUsersRes = supabase_request('GET', $fetchUsersUrl, $authHeaders);
 if (!$fetchUsersRes['ok']) {
+    $fetchErrorText = (string) ($fetchUsersRes['body'] ?? '');
+    $statusColumnMissing = str_contains($fetchErrorText, 'users.status') ||
+        str_contains($fetchErrorText, 'status does not exist') ||
+        str_contains($fetchErrorText, "Could not find the 'status' column");
+    if ($statusColumnMissing) {
+        // Current schema has no users.status archive marker; treat as no archived users.
+        json_response(['ok' => true, 'deleted_count' => 0]);
+    }
     json_response(['ok' => false, 'error' => build_error_from_response($fetchUsersRes, 'Failed to fetch archived users')], 500);
 }
 

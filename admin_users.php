@@ -17,7 +17,7 @@ $headers = [
 ];
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-    . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,contact_number,created_at,student_id'
+    . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,contact_number,created_at,student_id,course'
     . '&order=created_at.desc'
     . '&limit=500';
 
@@ -252,6 +252,7 @@ render_header('Users & Roles', $user);
             <th scope="col" class="px-6 py-4 font-bold text-zinc-900 w-1/4">Name</th>
             <th scope="col" class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
             <th scope="col" class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
+            <th scope="col" class="px-4 py-4 font-bold text-zinc-900">Course</th>
             <th scope="col" class="px-4 py-4 font-bold text-zinc-900">Section</th>
             <th scope="col" class="px-4 py-4 font-bold text-zinc-900 text-center">Student Number</th>
             <th scope="col" class="px-6 py-4 font-bold text-zinc-900 text-right">Action</th>
@@ -271,6 +272,10 @@ render_header('Users & Roles', $user);
               
               // Student Number from database
               $studentNumber = htmlspecialchars((string) ($u['student_id'] ?? 'N/A'));
+              $course = strtoupper(trim((string) ($u['course'] ?? '')));
+              if (!in_array($course, ['IT', 'CS'], true)) {
+                  $course = 'N/A';
+              }
               
               $secId = (string)($u['section_id'] ?? ''); 
               $secNameRaw = $sectionMap[$secId] ?? 'No Section';
@@ -296,6 +301,7 @@ render_header('Users & Roles', $user);
                   <div class="truncate" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></div>
               </td>
               <td class="px-4 py-4 font-bold text-zinc-800"><?= htmlspecialchars($gradeLvl) ?></td>
+              <td class="px-4 py-4 font-bold text-zinc-800"><?= htmlspecialchars($course) ?></td>
               <td class="px-4 py-4 font-bold text-zinc-800"><?= htmlspecialchars($parsedSec) ?></td>
               <td class="px-4 py-4 font-bold text-emerald-600 text-center tracking-wider font-mono text-xs"><?= htmlspecialchars($studentNumber) ?></td>
               <td class="px-6 py-4 text-right">
@@ -311,7 +317,7 @@ render_header('Users & Roles', $user);
             </tr>
           <?php endforeach; ?>
           <?php if ($studentCount === 0 || count($users) === 0): ?>
-            <tr><td colspan="6" class="px-6 py-16 text-center text-zinc-500">No students found.</td></tr>
+            <tr><td colspan="7" class="px-6 py-16 text-center text-zinc-500">No students found.</td></tr>
           <?php endif; ?>
         </tbody>
       </table>

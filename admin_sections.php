@@ -24,6 +24,33 @@ if ($res['ok']) {
     $sections = is_array($decoded) ? $decoded : [];
 }
 
+$extractProgram = static function (string $rawName): string {
+    if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\b/i', trim($rawName), $m)) {
+        $program = strtoupper(trim((string) $m[1]));
+        return $program === 'BSIT' ? 'BSIT SD' : $program;
+    }
+    if (str_contains($rawName, '-')) {
+        $parts = explode('-', $rawName, 2);
+        $tail = trim((string) ($parts[1] ?? ''));
+        if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\b/i', $tail, $m2)) {
+            $program = strtoupper(trim((string) $m2[1]));
+            return $program === 'BSIT' ? 'BSIT SD' : $program;
+        }
+    }
+    return 'OTHER';
+};
+
+$courseOrder = ['BSIT SD', 'BSIT BA', 'BSCS'];
+$courseSeen = [];
+foreach ($sections as $secRow) {
+    $program = $extractProgram(trim((string) ($secRow['name'] ?? '')));
+    $courseSeen[$program] = true;
+}
+$courseTabs = $courseOrder;
+if (isset($courseSeen['OTHER'])) {
+    $courseTabs[] = 'OTHER';
+}
+
 render_header('Manage Sections', $user);
 ?>
 
@@ -45,38 +72,68 @@ render_header('Manage Sections', $user);
   </div>
 </div>
 
+<!-- Course Tabs (same interaction style as events tabs) -->
+<div class="border-b border-zinc-200 mb-6 pt-1">
+  <nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Course Tabs">
+    <?php foreach ($courseTabs as $idx => $courseCode): ?>
+      <?php
+        $activeTab = $idx === 0;
+        $tabClass = $activeTab
+          ? 'course-tab border-orange-500 text-orange-600 font-bold'
+          : 'course-tab border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 font-semibold';
+        $tabLabel = $courseCode === 'OTHER' ? 'Other Courses' : $courseCode;
+      ?>
+      <button
+        type="button"
+        class="<?= htmlspecialchars($tabClass) ?> whitespace-nowrap border-b-2 py-3 px-1 text-sm transition"
+        data-course-tab="<?= htmlspecialchars($courseCode) ?>"
+      >
+        <?= htmlspecialchars($tabLabel) ?>
+      </button>
+    <?php endforeach; ?>
+  </nav>
+</div>
+
 <!-- Sections Grid Layout -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 mb-10">
   <?php foreach ($sections as $s): ?>
     <?php 
       $sid = (string) ($s['id'] ?? ''); 
       $rawName = trim((string) ($s['name'] ?? ''));
+      $programLabel = $extractProgram($rawName);
       $yearLevel = 'N/A';
       $sectionName = $rawName;
 
-      // Handle old legacy formats with split or parse standard string like "BSIT SD 1A"
-      if (strpos($rawName, '-') !== false) {
+      // Parse standardized format: "<PROGRAM> <YEAR><BLOCK>" (e.g., BSIT SD 1A)
+      if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*([1-4])\s*([A-Z])$/i', $rawName, $m)) {
+          $programLabel = strtoupper(trim((string) $m[1]));
+          $lvl = (string) $m[2];
+          $block = strtoupper((string) $m[3]);
+          $suffix = ($lvl === '1') ? 'st' : (($lvl === '2') ? 'nd' : (($lvl === '3') ? 'rd' : 'th'));
+          $yearLevel = $lvl . $suffix . ' Year';
+          $sectionName = $programLabel . ' ' . $lvl . $block;
+      } elseif (strpos($rawName, '-') !== false) {
+          // Legacy format fallback: "<YEAR LABEL>-<SECTION NAME>"
           $parts = explode('-', $rawName, 2);
           $yearLevel = trim($parts[0]);
           $sectionName = trim($parts[1]);
-      } else {
-          // If it is just 'BSIT SD 1C', we can regex the year
-          if (preg_match('/(?:BSIT SD|BSIT BA|BSCS|BSIT)\s*(\d)/i', $rawName, $m)) {
-              $lvl = $m[1];
-              $suffix = ($lvl == '1') ? 'st' : (($lvl == '2') ? 'nd' : (($lvl == '3') ? 'rd' : 'th'));
+          if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\b/i', $sectionName, $m2)) {
+              $programLabel = strtoupper(trim((string) $m2[1]));
+          }
+      } elseif (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\b/i', $rawName, $m3)) {
+          $programLabel = strtoupper(trim((string) $m3[1]));
+          if (preg_match('/\b([1-4])\b/', $rawName, $m4)) {
+              $lvl = (string) $m4[1];
+              $suffix = ($lvl === '1') ? 'st' : (($lvl === '2') ? 'nd' : (($lvl === '3') ? 'rd' : 'th'));
               $yearLevel = $lvl . $suffix . ' Year';
           }
       }
     ?>
-    <div class="relative group">
+    <div class="relative group section-card" data-course="<?= htmlspecialchars($programLabel) ?>">
       <a href="admin_section_students.php?id=<?= urlencode($sid) ?>&name=<?= urlencode($sectionName) ?>" class="block bg-white rounded-2xl shadow-sm border border-zinc-200 p-5 hover:-translate-y-1 hover:shadow-md hover:border-orange-500/40 transition-all duration-300 flex flex-col h-full">
       
-      <!-- Top Row: Badge & Actions -->
-      <div class="flex items-start justify-between mb-4">
-        <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black tracking-widest uppercase bg-orange-50 text-orange-700 border border-orange-200/50 shadow-sm">
-            <?= htmlspecialchars($yearLevel) ?>
-        </span>
-        
+      <!-- Top Row: Actions only -->
+      <div class="flex items-start justify-end mb-4">
         <div class="flex items-center gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-200 bg-white/50 backdrop-blur-sm rounded-lg p-0.5">
           <button class="btnEdit p-1.5 rounded-lg text-sky-600 hover:text-sky-700 hover:bg-sky-50 transition-colors" data-id="<?= htmlspecialchars($sid) ?>" data-raw-name="<?= htmlspecialchars($rawName) ?>" title="Edit Section">
              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
@@ -202,6 +259,35 @@ render_header('Manage Sections', $user);
   
   const sectionIdInput = document.getElementById('sectionId');
   const modalTitle = document.getElementById('modalTitle');
+  const sectionCards = Array.from(document.querySelectorAll('.section-card'));
+  const courseTabButtons = Array.from(document.querySelectorAll('.course-tab'));
+
+  function applyCourseFilter(selectedCourse) {
+    sectionCards.forEach((card) => {
+      const cardCourse = (card.dataset.course || '').toUpperCase();
+      card.classList.toggle('hidden', cardCourse !== selectedCourse);
+    });
+    courseTabButtons.forEach((btn) => {
+      const isActive = (btn.dataset.courseTab || '').toUpperCase() === selectedCourse;
+      btn.classList.toggle('border-orange-500', isActive);
+      btn.classList.toggle('text-orange-600', isActive);
+      btn.classList.toggle('font-bold', isActive);
+      btn.classList.toggle('border-transparent', !isActive);
+      btn.classList.toggle('text-zinc-500', !isActive);
+      btn.classList.toggle('font-semibold', !isActive);
+    });
+  }
+
+  if (courseTabButtons.length > 0) {
+    courseTabButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const selected = (btn.dataset.courseTab || '').toUpperCase();
+        if (selected) applyCourseFilter(selected);
+      });
+    });
+    const initialCourse = (courseTabButtons[0].dataset.courseTab || '').toUpperCase();
+    if (initialCourse) applyCourseFilter(initialCourse);
+  }
 
   // Multi-select toggle helper 
   function toggleBlock(btn, forceSelect = false) {

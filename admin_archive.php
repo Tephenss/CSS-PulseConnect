@@ -46,6 +46,11 @@ if ($resSec['ok']) {
     $sections = is_array($decodedSec) ? $decodedSec : [];
 }
 
+// Archived users are not yet wired to a dedicated archive marker in the schema.
+// Keep counts explicit to avoid showing misleading hardcoded values.
+$archivedTeachers = [];
+$archivedStudents = [];
+
 render_header('Archived Events', $user);
 ?>
 
@@ -68,11 +73,11 @@ render_header('Archived Events', $user);
     </button>
     <button id="btnTabTeachers" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
         Teachers
-        <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors">1</span>
+        <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= count($archivedTeachers) ?></span>
     </button>
     <button id="btnTabStudents" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
         Students
-        <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors">2</span>
+        <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= count($archivedStudents) ?></span>
     </button>
     <button id="btnTabSections" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
         Sections
@@ -216,16 +221,8 @@ render_header('Archived Events', $user);
             </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
-            <tr class="hover:bg-zinc-50 transition-colors">
-                <td class="px-6 py-4 font-bold text-zinc-900">Maria Reyes</td>
-                <td class="px-6 py-4">maria.reyes@gmail.com</td>
-                <td class="px-4 py-4 text-zinc-500 font-mono text-xs">09171234567</td>
-                <td class="px-4 py-4 font-semibold text-zinc-800">Grade 7</td>
-                <td class="px-4 py-4 text-zinc-500">Pythagoras</td>
-                <td class="px-6 py-4 text-right">
-                    <button class="mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" onclick="alert('MOCK: Restore Teacher Clicked')">Restore Teacher</button>
-                    <button class="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" onclick="alert('MOCK: Permanent Delete Clicked')"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </td>
+            <tr>
+                <td colspan="6" class="px-6 py-8 text-center text-zinc-500">No archived teachers available.</td>
             </tr>
         </tbody>
     </table>
@@ -247,27 +244,8 @@ render_header('Archived Events', $user);
             </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
-            <tr class="hover:bg-zinc-50 transition-colors">
-                <td class="px-6 py-4 font-bold text-zinc-900">Dela Cruz, Juan M.</td>
-                <td class="px-6 py-4">N/A</td>
-                <td class="px-4 py-4 font-semibold text-zinc-800">1</td>
-                <td class="px-4 py-4 text-zinc-500">Einstein</td>
-                <td class="px-4 py-4 font-mono text-xs text-emerald-600">231-1023</td>
-                <td class="px-6 py-4 text-right flex items-center justify-end">
-                    <button class="mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" onclick="alert('MOCK: Restore Student Clicked')">Restore Student</button>
-                    <button class="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" onclick="alert('MOCK: Permanent Delete Clicked')"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </td>
-            </tr>
-            <tr class="hover:bg-zinc-50 transition-colors">
-                <td class="px-6 py-4 font-bold text-zinc-900">Santos, Mark K.</td>
-                <td class="px-6 py-4">N/A</td>
-                <td class="px-4 py-4 font-semibold text-zinc-800">1</td>
-                <td class="px-4 py-4 text-zinc-500">Euclid</td>
-                <td class="px-4 py-4 font-mono text-xs text-emerald-600">222-4567</td>
-                <td class="px-6 py-4 text-right flex items-center justify-end">
-                    <button class="mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" onclick="alert('MOCK: Restore Student Clicked')">Restore Student</button>
-                    <button class="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" onclick="alert('MOCK: Permanent Delete Clicked')"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </td>
+            <tr>
+                <td colspan="6" class="px-6 py-8 text-center text-zinc-500">No archived students available.</td>
             </tr>
         </tbody>
     </table>
@@ -280,10 +258,9 @@ render_header('Archived Events', $user);
     <table class="w-full text-left text-sm text-zinc-600">
         <thead class="bg-zinc-50 border-b border-zinc-200/80">
             <tr>
-                <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Program</th>
-                <th class="px-4 py-4 font-bold text-zinc-900 w-1/4">Block</th>
-                <th class="px-4 py-4 font-bold text-zinc-900 w-1/4">Year Level</th>
-                <th class="px-6 py-4 font-bold text-zinc-900 text-right w-1/4">Actions</th>
+                <th class="px-6 py-4 font-bold text-zinc-900 w-1/3">Program</th>
+                <th class="px-4 py-4 font-bold text-zinc-900 w-1/3">Year Level</th>
+                <th class="px-6 py-4 font-bold text-zinc-900 text-right w-1/3">Actions</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
@@ -293,21 +270,18 @@ render_header('Archived Events', $user);
                 $rawName = trim((string)($s['name'] ?? ''));
                 $yearLevel = 'N/A';
                 $program = 'N/A';
-                $block = 'N/A';
 
                 if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*(\d)([A-Z])$/i', $rawName, $m)) {
                     $program = strtoupper($m[1]);
                     $lvl = $m[2];
                     $suffix = ($lvl == '1') ? 'st' : (($lvl == '2') ? 'nd' : (($lvl == '3') ? 'rd' : 'th'));
                     $yearLevel = $lvl . $suffix . ' Year';
-                    $block = 'Block ' . strtoupper($m[3]);
                 } else {
                     $program = $rawName;
                 }
                 ?>
                 <tr class="hover:bg-zinc-50 transition-colors" id="archSec-<?= htmlspecialchars($sid) ?>">
                     <td class="px-6 py-4 font-bold text-zinc-900"><?= htmlspecialchars($program) ?></td>
-                    <td class="px-4 py-4 font-semibold text-zinc-800"><?= htmlspecialchars($block) ?></td>
                     <td class="px-4 py-4 text-zinc-500"><?= htmlspecialchars($yearLevel) ?></td>
                     <td class="px-6 py-4 text-right flex items-center justify-end">
                         <button class="btnRestoreSection mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" data-id="<?= htmlspecialchars($sid) ?>">Restore Section</button>
@@ -317,7 +291,7 @@ render_header('Archived Events', $user);
             <?php endforeach; ?>
             <?php if (count($sections) === 0): ?>
             <tr>
-                <td colspan="4" class="px-6 py-8 text-center text-zinc-500">No archived sections available.</td>
+                <td colspan="3" class="px-6 py-8 text-center text-zinc-500">No archived sections available.</td>
             </tr>
             <?php endif; ?>
         </tbody>

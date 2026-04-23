@@ -183,7 +183,7 @@ if ($usesSessions) {
 
             // Primary storage for seminar attendance.
             $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-                . '?select=session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at'
+                . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
             $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
@@ -197,7 +197,7 @@ if ($usesSessions) {
 
             // Fallback storage used by older seminar migrations.
             $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-                . '?select=session_id,ticket_id,status,check_in_at,last_scanned_at'
+                . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
             $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
@@ -211,19 +211,8 @@ if ($usesSessions) {
         }
     }
 
-    $sessionCounts = [];
-    foreach ($sessions as $session) {
-        $sessionCounts[(string) ($session['id'] ?? '')] = 0;
-    }
-    foreach ($attendanceMap as $rows) {
-        foreach ($rows as $sessionId => $row) {
-            if ($attendanceCountsAsPresent(is_array($row) ? $row : null) && isset($sessionCounts[$sessionId])) {
-                $sessionCounts[$sessionId]++;
-            }
-        }
-    }
-
     $reasonByStudentSession = [];
+    $reasonByStudentEvent = [];
     if ($absenceReasonTableAvailable) {
         foreach ($absenceReasonRows as $reason) {
             if (!is_array($reason)) {
@@ -231,7 +220,11 @@ if ($usesSessions) {
             }
             $studentId = (string) ($reason['student_id'] ?? '');
             $sessionId = (string) ($reason['session_id'] ?? '');
-            if ($studentId === '' || $sessionId === '') {
+            if ($studentId === '') {
+                continue;
+            }
+            if ($sessionId === '') {
+                $reasonByStudentEvent[$studentId] = $reason;
                 continue;
             }
             $reasonByStudentSession[$studentId][$sessionId] = $reason;
@@ -257,6 +250,158 @@ if ($usesSessions) {
             'window_minutes' => $windowMinutes,
             'closed' => $nowUtc > $closesAt->setTimezone(new DateTimeZone('UTC')),
         ];
+    }
+
+    $syncNowIso = $nowUtc->format('c');
+    $jsonHeaders = [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: return=representation',
+    ];
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $registrationId = (string) ($participant['id'] ?? '');
+        if ($registrationId === '') {
+            continue;
+        }
+        $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
+        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+        $ticketId = (string) ($ticket['id'] ?? '');
+        if ($ticketId === '') {
+            continue;
+        }
+        foreach ($sessions as $session) {
+            $sessionId = (string) ($session['id'] ?? '');
+            if ($sessionId === '') {
+                continue;
+            }
+            $meta = $sessionWindowMeta[$sessionId] ?? null;
+            if (!is_array($meta) || empty($meta['closed'])) {
+                continue;
+            }
+            $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
+            if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
+                continue;
+            }
+
+            $statusRaw = strtolower(trim((string) (is_array($attendance) ? ($attendance['status'] ?? '') : '')));
+            if ($statusRaw === 'absent') {
+                continue;
+            }
+
+            $updatedRow = null;
+            $attendanceId = (string) (is_array($attendance) ? ($attendance['id'] ?? '') : '');
+            if ($attendanceId !== '') {
+                $patchByIdUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                    . '?id=eq.' . rawurlencode($attendanceId)
+                    . '&check_in_at=is.null'
+                    . '&select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at';
+                $patchByIdRes = supabase_request(
+                    'PATCH',
+                    $patchByIdUrl,
+                    $jsonHeaders,
+                    json_encode([
+                        'status' => 'absent',
+                        'last_scanned_at' => $syncNowIso,
+                    ], JSON_UNESCAPED_SLASHES)
+                );
+                if ($patchByIdRes['ok']) {
+                    $patchedRows = json_decode((string) $patchByIdRes['body'], true);
+                    if (is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0])) {
+                        $updatedRow = $patchedRows[0];
+                    }
+                }
+            }
+
+            if (!is_array($updatedRow)) {
+                $patchByRegUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                    . '?session_id=eq.' . rawurlencode($sessionId)
+                    . '&registration_id=eq.' . rawurlencode($registrationId)
+                    . '&check_in_at=is.null'
+                    . '&select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at';
+                $patchByRegRes = supabase_request(
+                    'PATCH',
+                    $patchByRegUrl,
+                    $jsonHeaders,
+                    json_encode([
+                        'status' => 'absent',
+                        'last_scanned_at' => $syncNowIso,
+                    ], JSON_UNESCAPED_SLASHES)
+                );
+                if ($patchByRegRes['ok']) {
+                    $patchedRows = json_decode((string) $patchByRegRes['body'], true);
+                    if (is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0])) {
+                        $updatedRow = $patchedRows[0];
+                    }
+                }
+            }
+
+            if (!is_array($updatedRow)) {
+                $patchByTicketUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                    . '?session_id=eq.' . rawurlencode($sessionId)
+                    . '&ticket_id=eq.' . rawurlencode($ticketId)
+                    . '&check_in_at=is.null'
+                    . '&select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at';
+                $patchByTicketRes = supabase_request(
+                    'PATCH',
+                    $patchByTicketUrl,
+                    $jsonHeaders,
+                    json_encode([
+                        'status' => 'absent',
+                        'last_scanned_at' => $syncNowIso,
+                    ], JSON_UNESCAPED_SLASHES)
+                );
+                if ($patchByTicketRes['ok']) {
+                    $patchedRows = json_decode((string) $patchByTicketRes['body'], true);
+                    if (is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0])) {
+                        $updatedRow = $patchedRows[0];
+                    }
+                }
+            }
+
+            if (!is_array($updatedRow)) {
+                $insertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                    . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at';
+                $insertRes = supabase_request(
+                    'POST',
+                    $insertUrl,
+                    $jsonHeaders,
+                    json_encode([[
+                        'session_id' => $sessionId,
+                        'registration_id' => $registrationId,
+                        'ticket_id' => $ticketId,
+                        'status' => 'absent',
+                        'last_scanned_at' => $syncNowIso,
+                    ]], JSON_UNESCAPED_SLASHES)
+                );
+                if ($insertRes['ok']) {
+                    $insertedRows = json_decode((string) $insertRes['body'], true);
+                    if (is_array($insertedRows) && isset($insertedRows[0]) && is_array($insertedRows[0])) {
+                        $updatedRow = $insertedRows[0];
+                    }
+                }
+            }
+
+            if (is_array($updatedRow)) {
+                $attendanceMap[$registrationId][$sessionId] = $updatedRow;
+            }
+        }
+    }
+
+    $sessionCounts = [];
+    foreach ($sessions as $session) {
+        $sessionCounts[(string) ($session['id'] ?? '')] = 0;
+    }
+    foreach ($attendanceMap as $rows) {
+        foreach ($rows as $sessionId => $row) {
+            if ($attendanceCountsAsPresent(is_array($row) ? $row : null) && isset($sessionCounts[$sessionId])) {
+                $sessionCounts[$sessionId]++;
+            }
+        }
     }
 
     $absentRows = [];
@@ -286,6 +431,8 @@ if ($usesSessions) {
             ? (string) ($profile['sections']['name'] ?? '')
             : '';
 
+        $missedClosedSessions = [];
+        $hasAnyPresent = false;
         foreach ($sessions as $session) {
             $sessionId = (string) ($session['id'] ?? '');
             if ($sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
@@ -297,9 +444,64 @@ if ($usesSessions) {
             }
             $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
             if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
+                $hasAnyPresent = true;
+                continue;
+            }
+            $missedClosedSessions[] = [
+                'session' => $session,
+                'meta' => $meta,
+            ];
+        }
+
+        if (count($missedClosedSessions) === 0) {
+            continue;
+        }
+
+        // If participant has no present attendance across seminars, treat as one
+        // whole-event absence row (non-redundant).
+        if (!$hasAnyPresent) {
+            $firstStart = null;
+            $lastClose = null;
+            foreach ($missedClosedSessions as $entry) {
+                $meta = $entry['meta'];
+                $startAt = isset($meta['start_at']) && $meta['start_at'] instanceof DateTimeImmutable ? $meta['start_at'] : null;
+                $closesAt = isset($meta['closes_at']) && $meta['closes_at'] instanceof DateTimeImmutable ? $meta['closes_at'] : null;
+                if ($startAt && ($firstStart === null || $startAt < $firstStart)) {
+                    $firstStart = $startAt;
+                }
+                if ($closesAt && ($lastClose === null || $closesAt > $lastClose)) {
+                    $lastClose = $closesAt;
+                }
+            }
+            if (!$firstStart || !$lastClose) {
                 continue;
             }
 
+            $reason = $reasonByStudentEvent[$studentId] ?? null;
+            $absentRows[] = [
+                'student_id' => $studentId,
+                'registration_id' => $registrationId,
+                'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
+                'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+                'section' => $section !== '' ? $section : 'N/A',
+                'session_name' => 'Whole event',
+                'session_start_at' => $firstStart,
+                'session_closes_at' => $lastClose,
+                'session_window_minutes' => 30,
+                'reason' => is_array($reason) ? $reason : null,
+            ];
+            continue;
+        }
+
+        // If participant attended at least one seminar, keep session-specific rows
+        // only for the seminars they missed.
+        foreach ($missedClosedSessions as $entry) {
+            $session = $entry['session'];
+            $meta = $entry['meta'];
+            $sessionId = (string) ($session['id'] ?? '');
+            if ($sessionId === '') {
+                continue;
+            }
             $reason = $reasonByStudentSession[$studentId][$sessionId] ?? null;
             $absentRows[] = [
                 'student_id' => $studentId,
@@ -608,7 +810,7 @@ if ($start && $end) {
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
-    . 'tickets(token,attendance(check_in_at,status))'
+    . 'tickets(id,token,attendance(id,check_in_at,status,last_scanned_at))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
 
@@ -850,6 +1052,137 @@ $eventWindowStart = $toLocalDt((string) ($event['start_at'] ?? ''));
 $eventWindowClose = $eventWindowStart ? $eventWindowStart->modify('+30 minutes') : null;
 $eventWindowClosed = $eventWindowClose ? ($nowUtc > $eventWindowClose->setTimezone(new DateTimeZone('UTC'))) : false;
 
+if ($eventWindowClosed) {
+    $syncNowIso = $nowUtc->format('c');
+    foreach ($participants as $participantIndex => $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+
+        $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
+        if (!isset($tickets[0]) || !is_array($tickets[0])) {
+            continue;
+        }
+
+        $ticket = $tickets[0];
+        $ticketId = (string) ($ticket['id'] ?? '');
+        if ($ticketId === '') {
+            continue;
+        }
+
+        $attendance = null;
+        if (isset($ticket['attendance']) && is_array($ticket['attendance'])) {
+            $atts = $ticket['attendance'];
+            $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : (is_array($atts) ? $atts : null);
+        }
+
+        if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
+            continue;
+        }
+
+        $statusRaw = strtolower(trim((string) (is_array($attendance) ? ($attendance['status'] ?? '') : '')));
+        if ($statusRaw === 'absent') {
+            continue;
+        }
+
+        $updatedRow = null;
+        $attendanceId = (string) (is_array($attendance) ? ($attendance['id'] ?? '') : '');
+        if ($attendanceId !== '') {
+            $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+                . '?id=eq.' . rawurlencode($attendanceId)
+                . '&check_in_at=is.null'
+                . '&select=id,check_in_at,status,last_scanned_at';
+            $patchRes = supabase_request(
+                'PATCH',
+                $patchUrl,
+                [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'apikey: ' . SUPABASE_KEY,
+                    'Authorization: Bearer ' . SUPABASE_KEY,
+                    'Prefer: return=representation',
+                ],
+                json_encode([
+                    'status' => 'absent',
+                    'last_scanned_at' => $syncNowIso,
+                ], JSON_UNESCAPED_SLASHES)
+            );
+            if ($patchRes['ok']) {
+                $patchedRows = json_decode((string) $patchRes['body'], true);
+                if (is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0])) {
+                    $updatedRow = $patchedRows[0];
+                }
+            }
+        }
+
+        if (!is_array($updatedRow)) {
+            $patchByTicketUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+                . '?ticket_id=eq.' . rawurlencode($ticketId)
+                . '&check_in_at=is.null'
+                . '&select=id,check_in_at,status,last_scanned_at';
+            $patchByTicketRes = supabase_request(
+                'PATCH',
+                $patchByTicketUrl,
+                [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'apikey: ' . SUPABASE_KEY,
+                    'Authorization: Bearer ' . SUPABASE_KEY,
+                    'Prefer: return=representation',
+                ],
+                json_encode([
+                    'status' => 'absent',
+                    'last_scanned_at' => $syncNowIso,
+                ], JSON_UNESCAPED_SLASHES)
+            );
+            if ($patchByTicketRes['ok']) {
+                $patchedRows = json_decode((string) $patchByTicketRes['body'], true);
+                if (is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0])) {
+                    $updatedRow = $patchedRows[0];
+                }
+            }
+        }
+
+        if (!is_array($updatedRow)) {
+            $insertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,check_in_at,status,last_scanned_at';
+            $insertRes = supabase_request(
+                'POST',
+                $insertUrl,
+                [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'apikey: ' . SUPABASE_KEY,
+                    'Authorization: Bearer ' . SUPABASE_KEY,
+                    'Prefer: return=representation',
+                ],
+                json_encode([[
+                    'ticket_id' => $ticketId,
+                    'status' => 'absent',
+                    'last_scanned_at' => $syncNowIso,
+                ]], JSON_UNESCAPED_SLASHES)
+            );
+            if ($insertRes['ok']) {
+                $insertedRows = json_decode((string) $insertRes['body'], true);
+                if (is_array($insertedRows) && isset($insertedRows[0]) && is_array($insertedRows[0])) {
+                    $updatedRow = $insertedRows[0];
+                }
+            }
+        }
+
+        if (!is_array($updatedRow)) {
+            $updatedRow = [
+                'id' => $attendanceId !== '' ? $attendanceId : null,
+                'check_in_at' => null,
+                'status' => 'absent',
+                'last_scanned_at' => $syncNowIso,
+            ];
+        }
+
+        $tickets[0]['attendance'] = [$updatedRow];
+        $participants[$participantIndex]['tickets'] = $tickets;
+    }
+}
+
 $reasonByStudentEvent = [];
 if ($absenceReasonTableAvailable) {
     foreach ($absenceReasonRows as $reason) {
@@ -1016,6 +1349,9 @@ render_event_tabs([
         
         $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
         $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
+        if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
+            $attStatus = 'absent';
+        }
         $registrationId = (string) ($r['id'] ?? '');
 
         // Generate Initials
@@ -1042,6 +1378,7 @@ render_event_tabs([
 
         $attStatusColor = match((string)$attStatus) {
             'present' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
+            'absent' => 'bg-rose-100 text-rose-900 border-rose-200',
             'late' => 'bg-amber-100 text-amber-900 border-amber-200',
             'early' => 'bg-sky-100 text-sky-900 border-sky-200',
             default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
