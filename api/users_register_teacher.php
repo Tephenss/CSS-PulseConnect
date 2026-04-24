@@ -55,6 +55,8 @@ $payload = [
     'email' => $email,
     'password' => $passwordHash,
     'role' => 'teacher',
+    'account_status' => 'approved',
+    'registration_source' => 'admin',
     'section_id' => null,
 ];
 

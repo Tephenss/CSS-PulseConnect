@@ -807,6 +807,12 @@ if ($start && $end) {
     $multiDay = count($days) > 1;
 }
 
+// Simple events are treated as single-view participant lists.
+if (!$usesSessions) {
+    $days = [];
+    $multiDay = false;
+}
+
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
@@ -1044,7 +1050,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     exit;
 }
 
-$activeDay = isset($_GET['day']) ? (string) $_GET['day'] : 'all';
+$activeDay = !$usesSessions ? 'all' : (isset($_GET['day']) ? (string) $_GET['day'] : 'all');
 if ($activeDay !== 'all' && !isset($buckets[$activeDay])) $activeDay = 'all';
 $rows = $buckets[$activeDay] ?? [];
 

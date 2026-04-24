@@ -6,6 +6,26 @@ require_once __DIR__ . '/csrf.php';
 function render_header(string $title, ?array $user): void
 {
     $role = $user && isset($user['role']) ? (string) $user['role'] : null;
+    $pendingAppCount = 0;
+    if ($role === 'admin' && function_exists('supabase_request') && defined('SUPABASE_URL') && defined('SUPABASE_KEY') && defined('SUPABASE_TABLE_USERS')) {
+        $countUrl = rtrim((string) SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+            . '?select=id'
+            . '&role=eq.student'
+            . '&registration_source=eq.app'
+            . '&account_status=eq.pending';
+        $countHeaders = [
+            'Accept: application/json',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+        ];
+        $countRes = supabase_request('GET', $countUrl, $countHeaders);
+        if (is_array($countRes) && !empty($countRes['ok'])) {
+            $countRows = json_decode((string) ($countRes['body'] ?? '[]'), true);
+            if (is_array($countRows)) {
+                $pendingAppCount = count($countRows);
+            }
+        }
+    }
     $csrf = csrf_ensure_token();
     $fullName = htmlspecialchars((string) ($user['full_name'] ?? 'User'));
     $initials = '';
@@ -96,9 +116,20 @@ function render_header(string $title, ?array $user): void
     if ($role === 'teacher' || $role === 'admin') {
         echo '<div class="sidebar-section">Management</div>';
 
-        echo '<a href="/manage_events.php" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage') ? 'active' : '') . '">';
+        echo '<a href="/manage_events.php" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage Events') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75"/></svg>';
         echo '<span class="sidebar-label">Manage Events</span></a>';
+
+        if ($role === 'admin') {
+            echo '<a href="/manage_applications.php" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
+            echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m3.75 9v6m3-3H9m-3.75 6.75h13.5A2.25 2.25 0 0021 18.75V8.25A2.25 2.25 0 0018.75 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21z"/></svg>';
+            echo '<span class="sidebar-label">Manage Application</span>';
+            if ($pendingAppCount > 0) {
+                $badge = $pendingAppCount > 99 ? '99+' : (string) $pendingAppCount;
+                echo '<span class="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-amber-500 text-white border border-amber-300 shadow-sm">' . htmlspecialchars($badge) . '</span>';
+            }
+            echo '</a>';
+        }
 
         echo '<a href="/scan.php" data-tooltip="QR Scanner" class="sidebar-link ' . (str_contains($title, 'Scan') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z"/></svg>';
