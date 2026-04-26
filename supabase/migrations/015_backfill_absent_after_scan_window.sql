@@ -17,7 +17,7 @@ begin
       where a.ticket_id = t.id
         and a.session_id is null
         and lower(coalesce(e.status, '')) in ('published', 'finished')
-        and now() > (e.start_at + interval '30 minutes')
+        and now() > (e.start_at + make_interval(mins => greatest(coalesce(e.grace_time, 30), 1)))
         and coalesce(a.check_in_at::text, '') = ''
         and lower(coalesce(a.status, '')) not in ('present', 'scanned', 'late', 'early', 'absent')
     $sql$;
@@ -41,7 +41,7 @@ begin
       join public.event_registrations r on r.id = t.registration_id
       join public.events e on e.id = r.event_id
       where lower(coalesce(e.status, '')) in ('published', 'finished')
-        and now() > (e.start_at + interval '30 minutes')
+        and now() > (e.start_at + make_interval(mins => greatest(coalesce(e.grace_time, 30), 1)))
         and not exists (
           select 1
           from public.attendance a0

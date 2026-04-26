@@ -1819,6 +1819,7 @@ foreach ($events as $ev) {
   const seminar1EndInput = document.getElementById('seminar1_end_local');
   const seminar2StartInput = document.getElementById('seminar2_start_local');
   const seminar2EndInput = document.getElementById('seminar2_end_local');
+  let isApplyingSimpleEndDefault = false;
 
   const flatpickrConfig = {
     enableTime: true,
@@ -1922,6 +1923,19 @@ foreach ($events as $ev) {
     }
   }
 
+  function setPickerMax(input, maxDate) {
+    if (!input) return;
+    if (input._flatpickr) {
+      input._flatpickr.set('maxDate', maxDate || null);
+    }
+    if (maxDate) {
+      const maxDateObj = maxDate instanceof Date ? maxDate : parseLocalDate(maxDate);
+      input.max = maxDateObj ? formatLocalForPicker(maxDateObj) : String(maxDate);
+    } else {
+      input.removeAttribute('max');
+    }
+  }
+
   function setPickerValue(input, value) {
     if (!input) return;
     const normalized = (value || '').toString().trim();
@@ -1958,10 +1972,10 @@ foreach ($events as $ev) {
     }
   }
 
-  function setEndLocked(endInput, locked) {
+  function setEndLocked(endInput, locked, clearOnLock = true) {
     if (!endInput) return;
     setPickerDisabled(endInput, locked);
-    if (locked) {
+    if (locked && clearOnLock) {
       if (endInput._flatpickr) endInput._flatpickr.clear();
       endInput.value = '';
     }
@@ -1975,6 +1989,7 @@ foreach ($events as $ev) {
     if (startDate) {
       setEndLocked(endInput, false);
       setPickerMin(endInput, startDate);
+      setPickerMax(endInput, null);
 
       const endDate = parseLocalDate(endInput.value);
       if (endDate && endDate < startDate) {
@@ -1987,6 +2002,40 @@ foreach ($events as $ev) {
     } else {
       setEndLocked(endInput, true);
       setPickerMin(endInput, null);
+      setPickerMax(endInput, null);
+    }
+  }
+
+  function enforceSimpleEndDefaults() {
+    if (isApplyingSimpleEndDefault) return;
+    if (!startAtInput || !endAtInput) return;
+    isApplyingSimpleEndDefault = true;
+    try {
+      const startRaw = (startAtInput.value || '').trim();
+      const startDate = parseLocalDate(startRaw);
+      if (!startDate) {
+        setEndLocked(endAtInput, true);
+        setPickerMin(endAtInput, null);
+        setPickerMax(endAtInput, null);
+        return;
+      }
+
+      const fixedEnd = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth(),
+        startDate.getDate(),
+        17,
+        0,
+        0,
+        0
+      );
+
+      setPickerValue(endAtInput, formatLocalForPicker(fixedEnd));
+      setPickerMin(endAtInput, fixedEnd);
+      setPickerMax(endAtInput, fixedEnd);
+      setEndLocked(endAtInput, false, false);
+    } finally {
+      isApplyingSimpleEndDefault = false;
     }
   }
 
@@ -2055,6 +2104,14 @@ foreach ($events as $ev) {
       seminarSummaryBadge.textContent = isSeminar
         ? (normalizedCount === 2 ? '2 Seminars' : '1 Seminar')
         : 'Simple Event';
+    }
+
+    if (isSeminar) {
+      setEndLocked(endAtInput, false, false);
+      setPickerMax(endAtInput, null);
+      updateEndMin(startAtInput, endAtInput);
+    } else {
+      enforceSimpleEndDefaults();
     }
 
     updateStructureOptionUI();
@@ -2158,11 +2215,33 @@ foreach ($events as $ev) {
     });
   });
 
-  startAtInput?.addEventListener('change', () => updateEndMin(startAtInput, endAtInput));
+  startAtInput?.addEventListener('change', () => {
+    if ((eventModeInput?.value || 'simple') === 'seminar_based') {
+      updateEndMin(startAtInput, endAtInput);
+    } else {
+      enforceSimpleEndDefaults();
+    }
+  });
   seminar1StartInput?.addEventListener('change', () => updateEndMin(seminar1StartInput, seminar1EndInput));
   seminar2StartInput?.addEventListener('change', () => updateEndMin(seminar2StartInput, seminar2EndInput));
 
-  startAtInput?.addEventListener('input', () => updateEndMin(startAtInput, endAtInput));
+  startAtInput?.addEventListener('input', () => {
+    if ((eventModeInput?.value || 'simple') === 'seminar_based') {
+      updateEndMin(startAtInput, endAtInput);
+    } else {
+      enforceSimpleEndDefaults();
+    }
+  });
+  endAtInput?.addEventListener('change', () => {
+    if ((eventModeInput?.value || 'simple') !== 'seminar_based') {
+      enforceSimpleEndDefaults();
+    }
+  });
+  endAtInput?.addEventListener('input', () => {
+    if ((eventModeInput?.value || 'simple') !== 'seminar_based') {
+      enforceSimpleEndDefaults();
+    }
+  });
   seminar1StartInput?.addEventListener('input', () => updateEndMin(seminar1StartInput, seminar1EndInput));
   seminar2StartInput?.addEventListener('input', () => updateEndMin(seminar2StartInput, seminar2EndInput));
 
@@ -2430,6 +2509,19 @@ foreach ($events as $ev) {
         }
         if (mode === 'create' && startDate < earliestAllowedCreateDateTime()) {
           throw new Error('Start date/time must be tomorrow or later (starting 7:00 AM).');
+        }
+        endDate = new Date(
+          startDate.getFullYear(),
+          startDate.getMonth(),
+          startDate.getDate(),
+          17,
+          0,
+          0,
+          0
+        );
+        setPickerValue(endAtInput, formatLocalForPicker(endDate));
+        if (startDate >= endDate) {
+          throw new Error('For simple events, start time must be earlier than 5:00 PM.');
         }
         if (endDate <= startDate) {
           throw new Error('End time must be after start time.');

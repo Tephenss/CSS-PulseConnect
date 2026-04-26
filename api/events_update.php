@@ -118,6 +118,20 @@ if ($eventMode === 'seminar_based') {
     $fields['end_at'] = (string) ($window['end_at'] ?? '');
 }
 
+if ($eventMode !== 'seminar_based' && isset($fields['start_at'])) {
+    try {
+        $simpleStart = new DateTimeImmutable((string) $fields['start_at']);
+    } catch (Throwable $e) {
+        json_response(['ok' => false, 'error' => 'Invalid simple event start date/time'], 400);
+    }
+    $simpleEnd = $simpleStart->setTime(17, 0, 0);
+    if ($simpleStart >= $simpleEnd) {
+        json_response(['ok' => false, 'error' => 'For simple events, start time must be earlier than 5:00 PM.'], 400);
+    }
+    $fields['start_at'] = $simpleStart->format('c');
+    $fields['end_at'] = $simpleEnd->format('c');
+}
+
 
 if (count($fields) === 0) {
     json_response(['ok' => false, 'error' => 'No fields to update'], 400);

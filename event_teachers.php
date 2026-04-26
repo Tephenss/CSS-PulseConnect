@@ -180,6 +180,41 @@ function send_teacher_event_assignment_notification(array $teacherIds, string $e
     ]);
 }
 
+function sync_teacher_assignment_state(
+    string $eventId,
+    string $teacherId,
+    bool $enableQr,
+    string $assignedBy,
+    array $writeHeaders
+): ?string {
+    $payload = json_encode([
+        'can_scan' => $enableQr,
+        'can_manage_assistants' => $enableQr,
+        'assigned_by' => $assignedBy,
+        'assigned_at' => gmdate('c'),
+    ], JSON_UNESCAPED_SLASHES);
+
+    if (!is_string($payload)) {
+        return 'Failed to prepare teacher assignment sync payload.';
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+        . '?event_id=eq.' . rawurlencode($eventId)
+        . '&teacher_id=eq.' . rawurlencode($teacherId);
+
+    $res = supabase_request('PATCH', $url, $writeHeaders, $payload);
+    if (!$res['ok']) {
+        return build_error(
+            $res['body'] ?? null,
+            (int) ($res['status'] ?? 0),
+            $res['error'] ?? null,
+            'Failed to sync QR assignment state'
+        );
+    }
+
+    return null;
+}
+
 $event = load_qr_event($eventId, $headers);
 if (!is_array($event)) {
     http_response_code(404);
@@ -268,6 +303,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
+        $syncError = sync_teacher_assignment_state(
+            $eventId,
+            $teacherId,
+            false,
+            (string) ($user['id'] ?? ''),
+            $writeHeaders
+        );
+        if ($syncError !== null) {
+            $_SESSION['flash_error'] = $syncError;
+            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            exit;
+        }
+
         send_teacher_event_assignment_notification([$teacherId], $eventId, (string) ($event['title'] ?? 'Event'));
         $_SESSION['flash_success'] = 'Teacher added to event assignment list.';
         header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
@@ -324,6 +372,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$res['ok']) {
                 $errors[] = build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to update QR assignment');
             }
+        }
+    }
+
+    foreach (array_keys($validTeacherIds) as $teacherId) {
+        $syncError = sync_teacher_assignment_state(
+            $eventId,
+            $teacherId,
+            isset($selected[$teacherId]),
+            (string) ($user['id'] ?? ''),
+            $writeHeaders
+        );
+        if ($syncError !== null) {
+            $errors[] = $syncError;
         }
     }
 

@@ -6,6 +6,7 @@ session_start();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
+require_once __DIR__ . '/includes/attendance_backfill.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
@@ -32,7 +33,7 @@ if ($eventId === '') {
 }
 
 // Load event details (for day tabs + teacher ownership check)
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,created_by,status&'
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,created_by,status,grace_time&'
     . 'id=eq.' . rawurlencode($eventId) . '&limit=1';
 $headers = [
     'Accept: application/json',
@@ -59,6 +60,8 @@ if ($role === 'teacher') {
 }
 
 $sessions = fetch_event_sessions($eventId, $headers);
+$eventUsesSessions = count($sessions) > 0;
+attendance_backfill_for_event($event, $headers, $eventUsesSessions ? $sessions : []);
 $usesSessions = count($sessions) > 0;
 $isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
 $participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_GET['participant_tab'])) : 'participants';
@@ -1055,7 +1058,9 @@ if ($activeDay !== 'all' && !isset($buckets[$activeDay])) $activeDay = 'all';
 $rows = $buckets[$activeDay] ?? [];
 
 $eventWindowStart = $toLocalDt((string) ($event['start_at'] ?? ''));
-$eventWindowClose = $eventWindowStart ? $eventWindowStart->modify('+30 minutes') : null;
+$eventWindowClose = $eventWindowStart
+    ? $eventWindowStart->modify('+' . max(1, (int) ($event['grace_time'] ?? 30)) . ' minutes')
+    : null;
 $eventWindowClosed = $eventWindowClose ? ($nowUtc > $eventWindowClose->setTimezone(new DateTimeZone('UTC'))) : false;
 
 if ($eventWindowClosed) {

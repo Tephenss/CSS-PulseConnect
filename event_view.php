@@ -6,6 +6,7 @@ session_start();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
+require_once __DIR__ . '/includes/attendance_backfill.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
@@ -22,7 +23,7 @@ if ($id === '') {
 }
 
 // 1. Fetch Event Document
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,description,location,start_at,end_at,status,event_for,event_type&'
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,description,location,start_at,end_at,status,event_for,event_type,grace_time&'
     . 'id=eq.' . rawurlencode($id) . '&limit=1';
 $headers = [
     'Accept: application/json',
@@ -46,6 +47,7 @@ if ($role === 'student' && (string) ($event['status'] ?? '') !== 'published') {
 }
 
 $sessions = fetch_event_sessions($id, $headers);
+attendance_backfill_for_event($event, $headers, $sessions);
 $sessionsJsonForAttr = htmlspecialchars(
     (string) (json_encode($sessions, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'),
     ENT_QUOTES

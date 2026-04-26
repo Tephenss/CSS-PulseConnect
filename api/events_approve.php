@@ -70,6 +70,85 @@ function validate_teacher_ids(array $teacherIds, array $headers): array
     return array_keys($valid);
 }
 
+function extract_section_name(mixed $rawSections): string
+{
+    if (is_array($rawSections)) {
+        if (isset($rawSections['name'])) {
+            return trim((string) $rawSections['name']);
+        }
+
+        if (isset($rawSections[0]) && is_array($rawSections[0])) {
+            return trim((string) ($rawSections[0]['name'] ?? ''));
+        }
+    }
+
+    return '';
+}
+
+function normalize_student_course_code(array $row): string
+{
+    $rawCourse = strtoupper(trim((string) ($row['course'] ?? '')));
+    if (in_array($rawCourse, ['IT', 'BSIT'], true)) {
+        return 'BSIT';
+    }
+    if (in_array($rawCourse, ['CS', 'BSCS'], true)) {
+        return 'BSCS';
+    }
+
+    $sectionName = strtoupper(extract_section_name($row['sections'] ?? null));
+    if (str_starts_with($sectionName, 'BSIT')) {
+        return 'BSIT';
+    }
+    if (str_starts_with($sectionName, 'BSCS')) {
+        return 'BSCS';
+    }
+
+    return '';
+}
+
+function extract_student_year_level(array $row): string
+{
+    $sectionName = trim(extract_section_name($row['sections'] ?? null));
+    if ($sectionName === '') {
+        return '';
+    }
+
+    if (preg_match('/\b([1-4])\b/', $sectionName, $matches)) {
+        return (string) $matches[1];
+    }
+
+    if (preg_match('/-([1-4])[A-Z]?$/i', $sectionName, $matches)) {
+        return (string) $matches[1];
+    }
+
+    return '';
+}
+
+function student_matches_event_target(array $row, string $eventFor): bool
+{
+    $normalizedTarget = strtoupper(trim($eventFor));
+    if ($normalizedTarget === '' || $normalizedTarget === 'ALL') {
+        return true;
+    }
+
+    $studentCourse = normalize_student_course_code($row);
+    $studentYear = extract_student_year_level($row);
+
+    if (preg_match('/^(BSIT|BSCS)\s*-\s*([1-4])$/', $normalizedTarget, $matches)) {
+        return $studentCourse === $matches[1] && $studentYear === $matches[2];
+    }
+
+    if (in_array($normalizedTarget, ['BSIT', 'BSCS'], true)) {
+        return $studentCourse === $normalizedTarget;
+    }
+
+    if (in_array($normalizedTarget, ['1', '2', '3', '4'], true)) {
+        return $studentYear === $normalizedTarget;
+    }
+
+    return false;
+}
+
 function sync_event_teacher_membership(string $eventId, array $teacherIds, string $adminId, array $headers): array
 {
     $readUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
@@ -317,56 +396,17 @@ if ($event && in_array($status, ['published', 'draft'], true)) {
     if ($usersRes['ok']) {
         $userRows = json_decode((string) $usersRes['body'], true);
         if (is_array($userRows)) {
-            $isAll = ($eventFor === 'All' || $eventFor === '' || strtolower($eventFor) === 'all');
-            
-            $targetCourse = '';
-            $targetYear = '';
-            
-            if (!$isAll) {
-                $parts = explode('-', $eventFor);
-                $targetCourse = strtoupper($parts[0]);
-                $targetYear = isset($parts[1]) ? $parts[1] : '';
-            }
-
             foreach ($userRows as $row) {
-                $id = trim((string) ($row['id'] ?? ''));
-                if ($id === '') continue;
-
-                if ($isAll) {
-                    $targetUserIds[$id] = true;
+                if (!is_array($row)) {
                     continue;
                 }
 
-                $studentCourse = strtoupper(trim((string)($row['course'] ?? '')));
-                $sectionName = trim((string)($row['sections']['name'] ?? ''));
-                
-                // Extract year from section name
-                $studentYear = '';
-                if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*([1-4])\s*([A-Z])$/i', $sectionName, $m)) {
-                    $studentYear = $m[2];
-                } elseif (strpos($sectionName, '-') !== false) {
-                    $p = explode('-', $sectionName, 2);
-                    $studentYear = trim($p[0]);
-                } elseif (preg_match('/\b([1-4])\b/', $sectionName, $m)) {
-                    $studentYear = $m[1];
+                $id = trim((string) ($row['id'] ?? ''));
+                if ($id === '') {
+                    continue;
                 }
 
-                $courseMatch = true;
-                $yearMatch = true;
-
-                if ($targetCourse === 'BSIT' || $targetCourse === 'BSCS') {
-                    if ($studentCourse !== '') {
-                        $courseMatch = ($targetCourse === 'BS' . $studentCourse);
-                    }
-                } elseif (in_array($targetCourse, ['1', '2', '3', '4'])) {
-                    $yearMatch = ($targetCourse === $studentYear);
-                }
-                
-                if ($targetYear !== '') {
-                    $yearMatch = ($targetYear === $studentYear);
-                }
-
-                if ($courseMatch && $yearMatch) {
+                if (student_matches_event_target($row, $eventFor)) {
                     $targetUserIds[$id] = true;
                 }
             }
