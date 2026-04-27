@@ -982,19 +982,27 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
                 }
             }
             $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-            $attStatus = is_array($attendance) ? ($attendance['status'] ?? 'pending') : 'pending';
+            $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
             
             if ($checkIn) {
                 $checkInLocal = $toLocalDt((string) $checkIn);
                 if ($checkInLocal) $checkIn = $checkInLocal->format('m/d/Y h:i A');
             }
-            $isComp = (strtolower($attStatus) === 'completed');
+            $normalizedStatus = strtolower(trim((string) $attStatus));
+            $isComp = $checkIn !== '' || in_array($normalizedStatus, ['completed', 'present', 'late', 'early', 'scanned'], true);
             $statusStr = $isComp ? 'COMPLETED' : 'PENDING';
             $statusCls = $isComp ? 'compl' : 'pend';
+            $studentNumber = trim((string) ($u['student_id'] ?? ''));
+            if ($studentNumber === '') {
+                $studentNumber = trim((string) ($r['student_number'] ?? ''));
+            }
+            if ($studentNumber === '') {
+                $studentNumber = 'N/A';
+            }
             
             echo '<tr>';
             echo ' <td class="data-cell" style="padding-left: 5px;">' . htmlspecialchars($name) . '</td>';
-            echo ' <td class="data-cell" style="text-align:center; font-family: monospace;">' . htmlspecialchars((string)($u['student_id'] ?? 'N/A')) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center; font-family: monospace;">' . htmlspecialchars($studentNumber) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secData['year']) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secName) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . ($checkIn ? htmlspecialchars($checkIn) : '-') . '</td>';
@@ -1038,10 +1046,17 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         }
         $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
         $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
+        $studentNumber = trim((string) ($u['student_id'] ?? ''));
+        if ($studentNumber === '') {
+            $studentNumber = trim((string) ($r['student_number'] ?? ''));
+        }
+        if ($studentNumber === '') {
+            $studentNumber = 'N/A';
+        }
 
         fputcsv($out, [
             $name,
-            (string) ($u['student_id'] ?? 'N/A'),
+            $studentNumber,
             (string) ($u['email'] ?? ''),
             (string) ($r['registered_at'] ?? ''),
             $token,

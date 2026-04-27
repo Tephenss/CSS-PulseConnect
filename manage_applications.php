@@ -38,6 +38,16 @@ foreach ($students as $student) {
     }
 }
 
+function format_course_label($courseValue): string
+{
+    $course = strtoupper(trim((string) $courseValue));
+    return match ($course) {
+        'CS', 'BSCS' => 'BSCS',
+        'IT', 'BSIT' => 'BSIT',
+        default => ($course !== '' ? $course : 'N/A'),
+    };
+}
+
 render_header('Manage Application', $user);
 ?>
 
@@ -81,7 +91,7 @@ render_header('Manage Application', $user);
               $suffix = trim((string) ($s['suffix'] ?? ''));
               if ($suffix !== '') $displayName .= ', ' . $suffix;
               $studentId = trim((string) ($s['student_id'] ?? ''));
-              $course = strtoupper(trim((string) ($s['course'] ?? 'N/A')));
+              $course = format_course_label($s['course'] ?? '');
               $isEmailVerified = ($s['email_verified'] ?? false) ? 'Yes' : 'No';
             ?>
             <tr class="hover:bg-zinc-50/80 transition-colors">
@@ -206,7 +216,13 @@ render_header('Manage Application', $user);
         reason: reason
       }),
     });
-    const data = await res.json();
+    const raw = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error('Server returned an invalid response. Please try again.');
+    }
     if (!data.ok) throw new Error(data.error || 'Request failed');
     return data;
   }
@@ -219,8 +235,13 @@ render_header('Manage Application', $user);
       btn.disabled = true;
       btn.textContent = '...';
       try {
-        await reviewApplication(uid, 'approve', '');
-        toast('Application approved. Student notified via email.');
+        const data = await reviewApplication(uid, 'approve', '');
+        toast(
+          data.email_sent === false
+            ? 'Application approved, but the status email could not be sent.'
+            : 'Application approved. Student notified via email.',
+          false
+        );
         setTimeout(() => location.reload(), 350);
       } catch (e) {
         toast(e.message || 'Failed to approve.', true);
@@ -268,8 +289,13 @@ render_header('Manage Application', $user);
     btnSubmitReject.disabled = true;
     btnSubmitReject.textContent = '...';
     try {
-      await reviewApplication(rejectUserId, 'reject', reason);
-      toast('Application rejected. Student notified via email.');
+      const data = await reviewApplication(rejectUserId, 'reject', reason);
+      toast(
+        data.email_sent === false
+          ? 'Application rejected, but the status email could not be sent.'
+          : 'Application rejected. Student notified via email.',
+        false
+      );
       closeRejectModal();
       setTimeout(() => location.reload(), 350);
     } catch (e) {

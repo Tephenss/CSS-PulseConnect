@@ -47,13 +47,11 @@ $att = $attRes['ok'] ? json_decode((string) $attRes['body'], true) : [];
 $att = is_array($att) ? $att : [];
 
 $checkedIn = 0;
-$late = 0;
 $early = 0;
 foreach ($att as $a) {
     $checkInAt = $a['check_in_at'] ?? null;
     if (!empty($checkInAt)) {
         $checkedIn++;
-        if ((string) ($a['status'] ?? '') === 'late') $late++;
         if ((string) ($a['status'] ?? '') === 'early') $early++;
     }
 }
@@ -106,7 +104,7 @@ render_header('Analytics', $user);
      <div class="z-10 min-w-0">
         <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) $checkedIn) ?></div>
         <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold truncate">Arrivals</div>
-        <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate"><span class="text-sky-800"><?= $early ?> Early</span> · <span class="text-amber-800"><?= $late ?> Late</span></div>
+        <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate"><span class="text-sky-800"><?= $early ?> Early</span> · <span class="text-emerald-800"><?= $checkedIn ?> Checked-in</span></div>
      </div>
   </div>
 
@@ -145,6 +143,10 @@ render_header('Analytics', $user);
       $counts = [];
       foreach ($att as $a) {
           $s = (string) ($a['status'] ?? 'unscanned');
+          if ($s === 'late') {
+              // Legacy late logs are folded into present since late is no longer an active status.
+              $s = 'present';
+          }
           if (!isset($counts[$s])) $counts[$s] = 0;
           $counts[$s]++;
       }
@@ -153,26 +155,23 @@ render_header('Analytics', $user);
       $statusGradients = [
           'early' => 'from-sky-500 to-blue-600',
           'present' => 'from-emerald-500 to-emerald-700',
-          'late' => 'from-amber-500 to-orange-600',
           'invalid' => 'from-red-500 to-red-700',
           'unscanned' => 'from-zinc-400 to-zinc-600',
       ];
       $statusColors = [
           'early' => 'text-sky-800',
           'present' => 'text-emerald-800',
-          'late' => 'text-amber-900',
           'invalid' => 'text-red-800',
           'unscanned' => 'text-zinc-700',
       ];
       $statusDots = [
           'early' => 'bg-sky-500',
           'present' => 'bg-emerald-500',
-          'late' => 'bg-amber-500',
           'invalid' => 'bg-red-500',
           'unscanned' => 'bg-zinc-500',
       ];
       
-      $order = ['present','early','late','unscanned','invalid'];
+      $order = ['present','early','unscanned','invalid'];
       foreach ($order as $s) {
           if (!isset($counts[$s]) && $s !== 'present') continue; 
           $c = $counts[$s] ?? 0;

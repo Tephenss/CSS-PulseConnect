@@ -124,10 +124,9 @@ function render_header(string $title, ?array $user): void
             echo '<a href="/manage_applications.php" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
             echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m3.75 9v6m3-3H9m-3.75 6.75h13.5A2.25 2.25 0 0021 18.75V8.25A2.25 2.25 0 0018.75 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21z"/></svg>';
             echo '<span class="sidebar-label">Manage Application</span>';
-            if ($pendingAppCount > 0) {
-                $badge = $pendingAppCount > 99 ? '99+' : (string) $pendingAppCount;
-                echo '<span class="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-amber-500 text-white border border-amber-300 shadow-sm">' . htmlspecialchars($badge) . '</span>';
-            }
+            $badge = $pendingAppCount > 99 ? '99+' : (string) $pendingAppCount;
+            $badgeHiddenClass = $pendingAppCount > 0 ? '' : ' hidden';
+            echo '<span id="manage-applications-badge" class="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-amber-500 text-white border border-amber-300 shadow-sm' . $badgeHiddenClass . '">' . htmlspecialchars($badge) . '</span>';
             echo '</a>';
         }
 
@@ -422,6 +421,44 @@ function render_footer(): void
                 closeMobileSidebar();
             }
         });
+
+        // Keep Manage Application pending badge updated without refresh.
+        var applicationsBadgeEl = document.getElementById("manage-applications-badge");
+        var applicationsBadgePolling = null;
+        async function refreshManageApplicationsBadge() {
+            if (!applicationsBadgeEl) return;
+            try {
+                var resp = await fetch("/api/manage_applications_pending_count.php", { cache: "no-store" });
+                if (!resp.ok) return;
+                var data = await resp.json();
+                if (!data || data.ok !== true) return;
+                var count = Number(data.count || 0);
+                if (!Number.isFinite(count) || count < 0) count = 0;
+                if (count <= 0) {
+                    applicationsBadgeEl.classList.add("hidden");
+                    return;
+                }
+                applicationsBadgeEl.classList.remove("hidden");
+                applicationsBadgeEl.textContent = count > 99 ? "99+" : String(count);
+            } catch (e) {
+                // Keep current badge state on transient network failures.
+            }
+        }
+        if (applicationsBadgeEl) {
+            refreshManageApplicationsBadge();
+            applicationsBadgePolling = window.setInterval(refreshManageApplicationsBadge, 10000);
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    refreshManageApplicationsBadge();
+                }
+            });
+            window.addEventListener("beforeunload", function () {
+                if (applicationsBadgePolling) {
+                    window.clearInterval(applicationsBadgePolling);
+                    applicationsBadgePolling = null;
+                }
+            });
+        }
 
         // ── Password Modal Logic ──
         window.openPasswordModal = function() {

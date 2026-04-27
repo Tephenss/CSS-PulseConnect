@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+// Keep API responses JSON-only even if warnings/notices occur.
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+
 session_start();
 
 require_once __DIR__ . '/../config.php';
@@ -64,6 +68,14 @@ $payload = [
     'updated_at' => gmdate('c'),
 ];
 
+if ($action === 'approve') {
+    // Force a fresh verification code on the first login after approval.
+    // The student may have verified earlier during registration, but approval
+    // should still require a new verification step before app access.
+    $payload['email_verified'] = false;
+    $payload['email_verified_at'] = null;
+}
+
 $updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?id=eq.' . rawurlencode($userId)
     . '&select=id,first_name,last_name,email,account_status,approval_note';
@@ -93,27 +105,18 @@ $updated = is_array($updatedRows) && isset($updatedRows[0]) ? $updatedRows[0] : 
 $email = trim((string) ($target['email'] ?? ''));
 $fullName = trim(((string) ($target['first_name'] ?? '')) . ' ' . ((string) ($target['last_name'] ?? '')));
 $emailSent = send_student_application_status_email($email, $fullName, $newStatus, $reason);
+$smtpDebug = '';
+$emailWarning = null;
 if (!$emailSent) {
-    // Revert status if we cannot notify the student.
-    $revertPayload = [
-        'account_status' => $oldStatus,
-        'updated_at' => gmdate('c'),
-    ];
-    supabase_request(
-        'PATCH',
-        $updateUrl,
-        $updateHeaders,
-        json_encode($revertPayload, JSON_UNESCAPED_SLASHES)
-    );
-    json_response([
-        'ok' => false,
-        'error' => 'Status email failed to send. Application status was not changed.',
-    ], 500);
+    $smtpDebug = function_exists('smtp_get_last_error') ? smtp_get_last_error() : '';
+    $emailWarning = 'Application status was updated, but the status email failed to send.';
 }
 
 json_response([
     'ok' => true,
     'user' => $updated,
     'email_sent' => $emailSent,
+    'email_warning' => $emailWarning,
+    'debug' => $smtpDebug !== '' ? $smtpDebug : null,
 ], 200);
 

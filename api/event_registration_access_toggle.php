@@ -102,22 +102,8 @@ if ($previousAllowRegistration !== $allowRegistration) {
     )));
 
     if ($targetIds !== []) {
-        $eventTitle = (string) ($updatedEvent['title'] ?? 'Event');
-        if ($allowRegistration) {
-            notify_users_for_registration_access(
-                $targetIds,
-                'Registration Open!',
-                'You can now register for "' . $eventTitle . '".',
-                ['event_id' => $eventId, 'type' => 'reg_open']
-            );
-        } else {
-            notify_users_for_registration_access(
-                $targetIds,
-                'Registration Requires Approval',
-                'Registration for "' . $eventTitle . '" now requires payment approval.',
-                ['event_id' => $eventId, 'type' => 'reg_restricted']
-            );
-        }
+        // Intentionally keep registration-access toggles silent.
+        // Publishing notifications are handled by events_approve.php.
     }
 }
 

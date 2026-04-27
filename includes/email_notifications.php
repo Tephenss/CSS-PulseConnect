@@ -3,6 +3,17 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../config.php';
 
+function smtp_set_last_error(string $message): void
+{
+    $GLOBALS['SMTP_LAST_ERROR'] = $message;
+}
+
+function smtp_get_last_error(): string
+{
+    $msg = $GLOBALS['SMTP_LAST_ERROR'] ?? '';
+    return is_string($msg) ? $msg : '';
+}
+
 function send_student_application_status_email(
     string $recipientEmail,
     string $fullName,
@@ -83,6 +94,12 @@ function send_student_application_status_email(
         if ($smtpResult) {
             return true;
         }
+        $smtpError = smtp_get_last_error();
+        if ($smtpError !== '') {
+            error_log('[SMTP] send_student_application_status_email failed: ' . $smtpError);
+        } else {
+            error_log('[SMTP] send_student_application_status_email failed: unknown error');
+        }
     }
 
     return @mail(
@@ -106,66 +123,119 @@ function smtp_send_mail(
     string $subject,
     string $rawBody
 ): bool {
+    smtp_set_last_error('');
+    // Gmail App Passwords are often displayed with spaces (e.g. "xxxx xxxx xxxx xxxx").
+    // Normalize credentials to avoid SMTP AUTH failures caused by whitespace.
+    $username = trim($username);
+    $password = preg_replace('/\s+/', '', (string) $password);
+
     $transport = $encryption === 'ssl' ? 'ssl://' : '';
+    $streamContext = null;
+    if (defined('SMTP_DEV_SKIP_SSL_VERIFY') && SMTP_DEV_SKIP_SSL_VERIFY) {
+        $streamContext = stream_context_create([
+            'ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+                'SNI_enabled' => true,
+                'peer_name' => $host,
+            ],
+        ]);
+    }
     $socket = @stream_socket_client(
         $transport . $host . ':' . $port,
         $errno,
         $errstr,
         12,
-        STREAM_CLIENT_CONNECT
+        STREAM_CLIENT_CONNECT,
+        $streamContext
     );
     if (!$socket) {
+        smtp_set_last_error("Connect failed ({$errno}): {$errstr}");
         return false;
     }
 
     stream_set_timeout($socket, 12);
     if (!smtp_expect($socket, [220])) {
+        smtp_set_last_error('No SMTP 220 greeting');
         fclose($socket);
         return false;
     }
 
     if (!smtp_command($socket, 'EHLO pulseconnect.local', [250])) {
+        smtp_set_last_error('EHLO rejected');
         fclose($socket);
         return false;
     }
 
     if ($encryption === 'tls') {
         if (!smtp_command($socket, 'STARTTLS', [220])) {
+            smtp_set_last_error('STARTTLS rejected');
             fclose($socket);
             return false;
         }
-        if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+        $cryptoMethod = 0;
+        // Prefer modern TLS on Windows/PHP builds where available.
+        if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
+            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+        }
+        if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
+            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+        }
+        if (defined('STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT')) {
+            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT;
+        }
+        if (defined('STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT')) {
+            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT;
+        }
+        if ($cryptoMethod === 0) {
+            $cryptoMethod = STREAM_CRYPTO_METHOD_TLS_CLIENT;
+        }
+        if (!@stream_socket_enable_crypto($socket, true, $cryptoMethod)) {
+            $opensslError = smtp_collect_openssl_errors();
+            smtp_set_last_error(
+                $opensslError !== ''
+                    ? 'TLS negotiation failed: ' . $opensslError
+                    : 'TLS negotiation failed'
+            );
             fclose($socket);
             return false;
         }
         if (!smtp_command($socket, 'EHLO pulseconnect.local', [250])) {
+            smtp_set_last_error('EHLO after STARTTLS rejected');
             fclose($socket);
             return false;
         }
     }
 
     if (!smtp_command($socket, 'AUTH LOGIN', [334])) {
+        smtp_set_last_error('AUTH LOGIN rejected');
         fclose($socket);
         return false;
     }
     if (!smtp_command($socket, base64_encode($username), [334])) {
+        smtp_set_last_error('SMTP username rejected');
         fclose($socket);
         return false;
     }
     if (!smtp_command($socket, base64_encode($password), [235])) {
+        smtp_set_last_error('SMTP password rejected');
         fclose($socket);
         return false;
     }
 
     if (!smtp_command($socket, 'MAIL FROM:<' . $fromAddress . '>', [250])) {
+        smtp_set_last_error('MAIL FROM rejected');
         fclose($socket);
         return false;
     }
     if (!smtp_command($socket, 'RCPT TO:<' . $toAddress . '>', [250, 251])) {
+        smtp_set_last_error('RCPT TO rejected');
         fclose($socket);
         return false;
     }
     if (!smtp_command($socket, 'DATA', [354])) {
+        smtp_set_last_error('DATA rejected');
         fclose($socket);
         return false;
     }
@@ -185,6 +255,7 @@ function smtp_send_mail(
     $data = preg_replace('/^\./m', '..', $data);
     fwrite($socket, $data . "\r\n.\r\n");
     if (!smtp_expect($socket, [250])) {
+        smtp_set_last_error('Message body rejected');
         fclose($socket);
         return false;
     }
@@ -192,6 +263,16 @@ function smtp_send_mail(
     smtp_command($socket, 'QUIT', [221]);
     fclose($socket);
     return true;
+}
+
+function smtp_collect_openssl_errors(): string
+{
+    $errors = [];
+    while (($error = openssl_error_string()) !== false) {
+        $errors[] = $error;
+    }
+
+    return implode(' | ', $errors);
 }
 
 function smtp_command($socket, string $command, array $expectedCodes): bool
@@ -294,6 +375,71 @@ function build_status_email_html(
         . '</table>'
         . '</td></tr></table>'
         . '</body></html>';
+}
+
+function send_admin_login_verification_email(
+    string $recipientEmail,
+    string $fullName,
+    string $code
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($fullName) !== '' ? trim($fullName) : 'Administrator';
+    $subject = 'CCS PulseConnect Admin Login Verification Code';
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Use this verification code to complete your admin login: {$code}\n\n"
+        . "This code expires in 5 minutes.\n"
+        . "If you did not attempt to log in, please ignore this email.";
+
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:0;background:#F4F4F5;font-family:Arial,sans-serif;color:#111827;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">'
+        . '<tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
+        . '<tr><td style="background:#111827;padding:20px 24px;">'
+        . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">CCS PulseConnect</h1>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Admin Login Verification</p>'
+        . '</td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . '<p style="margin:0 0 10px 0;font-size:15px;line-height:1.6;color:#18181B;">Use the code below to complete your admin login:</p>'
+        . '<div style="display:inline-block;padding:10px 16px;border-radius:10px;background:#111827;color:#FFFFFF;font-weight:700;font-size:24px;letter-spacing:4px;">' . htmlspecialchars($code, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<p style="margin:14px 0 0 0;font-size:13px;color:#52525B;">This code expires in <strong>5 minutes</strong>.</p>'
+        . '<p style="margin:8px 0 0 0;font-size:12px;color:#71717A;">If you did not attempt to log in, please ignore this email.</p>'
+        . '</td></tr></table>'
+        . '</td></tr></table>'
+        . '</body></html>';
+
+    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
+    $body = build_multipart_body($textMessage, $htmlMessage);
+
+    $smtpHost = trim((string) SMTP_HOST);
+    $smtpUser = trim((string) SMTP_USERNAME);
+    $smtpPass = (string) SMTP_PASSWORD;
+    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
+        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
+        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
+        $smtpFromName = trim((string) SMTP_FROM_NAME);
+        $smtpResult = smtp_send_mail(
+            $smtpHost,
+            $smtpPort,
+            $smtpEncryption,
+            $smtpUser,
+            $smtpPass,
+            EMAIL_SENDER_ADDRESS,
+            $smtpFromName,
+            $to,
+            $subject,
+            $body
+        );
+        if ($smtpResult) {
+            return true;
+        }
+    }
+
+    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
 }
 
 function send_password_reset_code_email(

@@ -2520,9 +2520,6 @@ foreach ($events as $ev) {
           0
         );
         setPickerValue(endAtInput, formatLocalForPicker(endDate));
-        if (startDate >= endDate) {
-          throw new Error('For simple events, start time must be earlier than 5:00 PM.');
-        }
         if (endDate <= startDate) {
           throw new Error('End time must be after start time.');
         }

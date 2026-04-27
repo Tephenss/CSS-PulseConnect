@@ -119,7 +119,33 @@ render_header('Event Calendar', $user);
 <script>
   const eventsData = <?= json_encode($events) ?>;
   const tooltip = document.getElementById('eventTooltip');
+  const APP_TIMEZONE = 'Asia/Manila';
   const now = new Date();
+
+  function getTzParts(date) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: APP_TIMEZONE,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(date);
+    const read = (type) => Number(parts.find((p) => p.type === type)?.value || 0);
+    return {
+      year: read('year'),
+      month: read('month'),
+      day: read('day'),
+      hour: read('hour'),
+      minute: read('minute'),
+    };
+  }
+
+  function monthAnchorFromCurrentDate() {
+    const p = getTzParts(currentDate);
+    return new Date(Date.UTC(p.year, p.month - 1, 1, 12, 0, 0));
+  }
   
   function getEventStyle(evt) {
     const start = new Date(evt.start_at);
@@ -132,13 +158,15 @@ render_header('Event Calendar', $user);
   function formatDateRange(startISO, endISO) {
     if (!startISO) return '';
     const d1 = new Date(startISO);
-    let str = d1.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' · ' + d1.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    const p1 = getTzParts(d1);
+    let str = d1.toLocaleDateString('en-US', { timeZone: APP_TIMEZONE, month:'short', day:'numeric'}) + ' · ' + d1.toLocaleTimeString('en-US',{ timeZone: APP_TIMEZONE, hour:'numeric',minute:'2-digit'});
     if (endISO) {
        const d2 = new Date(endISO);
-       if (d1.getDate() === d2.getDate() && d1.getMonth() === d2.getMonth()) {
-          str += ' - ' + d2.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+       const p2 = getTzParts(d2);
+       if (p1.day === p2.day && p1.month === p2.month && p1.year === p2.year) {
+          str += ' - ' + d2.toLocaleTimeString('en-US',{ timeZone: APP_TIMEZONE, hour:'numeric',minute:'2-digit'});
        } else {
-          str += ' to ' + d2.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' ' + d2.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+          str += ' to ' + d2.toLocaleDateString('en-US', { timeZone: APP_TIMEZONE, month:'short', day:'numeric'}) + ' ' + d2.toLocaleTimeString('en-US',{ timeZone: APP_TIMEZONE, hour:'numeric',minute:'2-digit'});
        }
     }
     return str;
@@ -148,14 +176,16 @@ render_header('Event Calendar', $user);
   
   function renderCalendar() {
     const now = new Date();
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
+    const anchor = monthAnchorFromCurrentDate();
+    const year = anchor.getUTCFullYear();
+    const month = anchor.getUTCMonth();
+    const todayParts = getTzParts(now);
     
-    document.getElementById('currentMonthYear').textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(currentDate);
+    document.getElementById('currentMonthYear').textContent = new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZONE, month: 'long', year: 'numeric' }).format(anchor);
     
-    const firstDay = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const firstDay = new Date(Date.UTC(year, month, 1)).getUTCDay();
+    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const daysInPrevMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
     
     const grid = document.getElementById('calendarGrid');
     grid.innerHTML = '';
@@ -171,7 +201,7 @@ render_header('Event Calendar', $user);
     // Current Month Days
     for (let i = 1; i <= daysInMonth; i++) {
       const cell = document.createElement('div');
-      const isToday = i === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
+      const isToday = i === todayParts.day && (month + 1) === todayParts.month && year === todayParts.year;
       
       cell.className = 'min-h-[120px] bg-white hover:bg-zinc-50 p-1.5 flex flex-col gap-1.5 transition-colors relative group';
       
@@ -187,7 +217,8 @@ render_header('Event Calendar', $user);
       const dayEvents = eventsData.filter(e => {
         if(!e.start_at) return false;
         const eDate = new Date(e.start_at);
-        return eDate.getDate() === i && eDate.getMonth() === month && eDate.getFullYear() === year;
+        const p = getTzParts(eDate);
+        return p.day === i && (p.month - 1) === month && p.year === year;
       });
       
       const eventContainer = document.createElement('div');
@@ -242,8 +273,16 @@ render_header('Event Calendar', $user);
     }
   }
 
-  document.getElementById('prevMonth').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); });
-  document.getElementById('nextMonth').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCalendar(); });
+  document.getElementById('prevMonth').addEventListener('click', () => {
+    const p = getTzParts(currentDate);
+    currentDate = new Date(Date.UTC(p.year, p.month - 2, 1, 12, 0, 0));
+    renderCalendar();
+  });
+  document.getElementById('nextMonth').addEventListener('click', () => {
+    const p = getTzParts(currentDate);
+    currentDate = new Date(Date.UTC(p.year, p.month, 1, 12, 0, 0));
+    renderCalendar();
+  });
   document.getElementById('todayBtn').addEventListener('click', () => { currentDate = new Date(); renderCalendar(); });
 
   renderCalendar();

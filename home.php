@@ -7,6 +7,7 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/helpers.php';
 
 $user = require_role(['admin']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -28,6 +29,8 @@ if ($res['ok']) {
   $decoded = json_decode((string) $res['body'], true);
   $events = is_array($decoded) ? $decoded : [];
 }
+
+$manilaTz = new DateTimeZone('Asia/Manila');
 
 $firstName = explode(' ', trim((string) ($user['full_name'] ?? 'User')))[0];
 
@@ -700,14 +703,14 @@ render_header('Dashboard', $user);
 $upcoming = 0;
 $published = 0;
 $pending = 0;
-$now = new DateTime();
+$now = new DateTime('now', $manilaTz);
 
 foreach ($events as $e) {
   $s = (string) ($e['status'] ?? '');
 
   if (!empty($e['start_at']) && $s === 'published') {
     try {
-      if (new DateTime($e['start_at']) > $now)
+      if ((new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz) > $now)
         $upcoming++;
     } catch (Throwable $ex) {
     }
@@ -733,16 +736,6 @@ foreach ($events as $e) {
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
         New Event
-      </a>
-      <a href="/scan.php"
-        class="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white text-emerald-800 px-3.5 py-2 text-xs font-bold hover:bg-emerald-50 shadow-sm transition-colors">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z" />
-        </svg>
-        Scan QR
       </a>
     </div>
   <?php endif; ?>
@@ -829,7 +822,9 @@ foreach ($events as $e) {
 $upcomingList = [];
 foreach ($events as $e) {
   $s = (string) ($e['status'] ?? '');
-  $sa = !empty($e['start_at']) ? new DateTime($e['start_at']) : null;
+  $sa = !empty($e['start_at'])
+    ? (new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz)
+    : null;
   if ($s === 'published' && $sa && $sa > $now) {
     $upcomingList[] = $e;
   }
@@ -842,8 +837,10 @@ $calEventMap = [];
 foreach ($events as $e) {
   if (!empty($e['start_at']) && ($e['status'] ?? '') === 'published') {
     try {
-      $d = new DateTimeImmutable($e['start_at']);
-      $eEnd = !empty($e['end_at']) ? new DateTimeImmutable($e['end_at']) : null;
+      $d = (new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz);
+      $eEnd = !empty($e['end_at'])
+        ? (new DateTimeImmutable($e['end_at']))->setTimezone($manilaTz)
+        : null;
       $key = $d->format('Y-m-d');
       if (!isset($calEventMap[$key]))
         $calEventMap[$key] = [];
@@ -921,10 +918,12 @@ $eventTypeIcons = [
         'festival' => ['bg' => 'bg-purple-100', 'border' => 'border-purple-200', 'icon' => 'text-purple-700'],
         default => ['bg' => 'bg-orange-100', 'border' => 'border-orange-200', 'icon' => 'text-orange-700'],
       };
-      $eStart = !empty($e['start_at']) ? new DateTimeImmutable($e['start_at']) : null;
+      $eStart = !empty($e['start_at'])
+        ? (new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz)
+        : null;
       $dayName = $eStart ? $eStart->format('D') : '';
-      $dateFull = $eStart ? $eStart->format('D, M d, Y') . ' at ' . $eStart->format('g:i A') : 'TBA';
-      $postedAt = !empty($e['created_at']) ? (new DateTimeImmutable($e['created_at']))->format('F d, Y') : '';
+      $dateFull = $eStart ? format_date_local((string) ($e['start_at'] ?? ''), 'D, M d, Y') . ' at ' . format_date_local((string) ($e['start_at'] ?? ''), 'g:i A') : 'TBA';
+      $postedAt = !empty($e['created_at']) ? format_date_local((string) $e['created_at'], 'F d, Y') : '';
       $eTypePill = ucfirst($eType);
       $pillColor = match ($eType) {
         'seminar' => 'bg-sky-100 text-sky-800 border-sky-200',
@@ -971,12 +970,12 @@ $eventTypeIcons = [
   <!-- RIGHT: Mini Calendar -->
   <div class="lg:col-span-1">
     <?php
-    $calNow = new DateTime();
+    $calNow = new DateTime('now', $manilaTz);
     $calYear = (int) $calNow->format('Y');
     $calMonth = (int) $calNow->format('n');
     $calToday = (int) $calNow->format('j');
-    $firstDay = (int) (new DateTime("$calYear-$calMonth-01"))->format('w'); // 0=Sun
-    $daysInMonth = (int) (new DateTime("$calYear-$calMonth-01"))->format('t');
+    $firstDay = (int) (new DateTime("$calYear-$calMonth-01", $manilaTz))->format('w'); // 0=Sun
+    $daysInMonth = (int) (new DateTime("$calYear-$calMonth-01", $manilaTz))->format('t');
     $monthName = $calNow->format('F');
     ?>
     <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 sticky top-6">

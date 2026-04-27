@@ -70,13 +70,6 @@ try {
 } catch (Throwable $e) {
     json_response(['ok' => false, 'error' => 'Invalid datetime'], 400);
 }
-if ($eventMode !== 'seminar_based') {
-    $end = $start->setTime(17, 0, 0);
-    if ($start >= $end) {
-        json_response(['ok' => false, 'error' => 'For simple events, start time must be earlier than 5:00 PM.'], 400);
-    }
-    $eventSpan = 'single_day';
-}
 if ($end <= $start) {
     json_response(['ok' => false, 'error' => 'End must be after start'], 400);
 }
