@@ -34,11 +34,30 @@ function fetch_event_for_approval(string $eventId, array $headers): ?array
 {
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
         . '?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location'
+        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration'
         . '&limit=1';
     $res = supabase_request('GET', $url, $headers);
+    if (!$res['ok']) {
+        $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        if (str_contains($message, 'allow_registration')
+            && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
+            $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?id=eq.' . rawurlencode($eventId)
+                . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location'
+                . '&limit=1';
+            $res = supabase_request('GET', $fallbackUrl, $headers);
+        }
+    }
     $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
-    return is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+    if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+        return null;
+    }
+
+    $event = $rows[0];
+    if (!array_key_exists('allow_registration', $event)) {
+        $event['allow_registration'] = false;
+    }
+    return $event;
 }
 
 function validate_teacher_ids(array $teacherIds, array $headers): array
@@ -323,6 +342,10 @@ $payload = [
     'updated_at' => gmdate('c'),
 ];
 
+if ($status === 'published' && $previousStatus !== 'published') {
+    $payload['allow_registration'] = false;
+}
+
 if (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
     $cleanDesc = (string) ($existingEvent['description'] ?? '');
     $cleanDesc = preg_replace('/\[REJECT_REASON:.*?\]\s*/s', '', $cleanDesc);
@@ -331,8 +354,18 @@ if (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
 
 $updateHeaders = $headers;
 $updateHeaders[] = 'Prefer: return=representation';
-$updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location';
+$updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration';
 $res = supabase_request('PATCH', $updateUrl, $updateHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
+if (!$res['ok']) {
+    $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+    if (str_contains($message, 'allow_registration')
+        && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
+        $retryPayload = $payload;
+        unset($retryPayload['allow_registration']);
+        $fallbackUpdateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location';
+        $res = supabase_request('PATCH', $fallbackUpdateUrl, $updateHeaders, json_encode($retryPayload, JSON_UNESCAPED_SLASHES));
+    }
+}
 if (!$res['ok']) {
     json_response([
         'ok' => false,
@@ -419,26 +452,10 @@ if ($event && in_array($status, ['published', 'draft'], true)) {
         $notifBody = '';
         $notifType = '';
 
-        if ($status === 'published') {
-            if ($previousStatus === 'draft') {
-                $notifTitle = 'Registration Open!';
-                $notifBody = 'Registration for "' . $eventTitle . '" is now open.';
-                $notifType = 'reg_open';
-            } elseif (in_array($previousStatus, ['approved', 'pending'], true)) {
-                $notifTitle = 'New Event Published';
-                $notifBody = '"' . $eventTitle . '" has been published.';
-                $notifType = 'event_published';
-            }
-        } elseif ($status === 'draft') {
-            if (in_array($previousStatus, ['approved', 'pending'], true)) {
-                $notifTitle = 'New Event Published';
-                $notifBody = '"' . $eventTitle . '" has been published. Registration opens soon.';
-                $notifType = 'event_published';
-            } elseif ($previousStatus === 'published') {
-                $notifTitle = 'Registration Closed';
-                $notifBody = 'Registration for "' . $eventTitle . '" is now closed.';
-                $notifType = 'reg_closed';
-            }
+        if ($status === 'published' && in_array($previousStatus, ['approved', 'pending', 'draft'], true)) {
+            $notifTitle = 'New Event Published';
+            $notifBody = '"' . $eventTitle . '" has been published. Registration opens once the organizer enables it.';
+            $notifType = 'event_published';
         }
 
         if ($notifTitle !== '' && $notifType !== '') {

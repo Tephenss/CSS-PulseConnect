@@ -9,6 +9,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/registration_access.php';
 
 $user = require_role(['student']);
 $data = require_post_json();
@@ -19,13 +20,6 @@ if ($eventId === '') {
     json_response(['ok' => false, 'error' => 'event_id required'], 400);
 }
 
-// Create registration.
-$regPayload = [
-    'event_id' => $eventId,
-    'student_id' => (string) ($user['id'] ?? ''),
-];
-
-$regUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?select=id,event_id,student_id';
 $headers = [
     'Content-Type: application/json',
     'Accept: application/json',
@@ -34,6 +28,60 @@ $headers = [
     'Prefer: return=representation',
 ];
 
+$studentId = (string) ($user['id'] ?? '');
+$event = fetch_event_with_registration_settings($eventId, $headers);
+if (!is_array($event)) {
+    json_response(['ok' => false, 'error' => 'Event not found'], 404);
+}
+
+$studentRow = fetch_student_profile_by_id($studentId, $headers);
+if (!is_array($studentRow)) {
+    json_response(['ok' => false, 'error' => 'Student profile not found'], 404);
+}
+
+$access = resolve_student_registration_access($event, $studentRow, $headers);
+if (!(bool) ($access['allowed'] ?? false)) {
+    json_response(['ok' => false, 'error' => (string) ($access['message'] ?? 'Registration is not allowed for this event.')], 403);
+}
+
+$existingUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+    . '?select=id,event_id,student_id,tickets(id,token,registration_id)'
+    . '&event_id=eq.' . rawurlencode($eventId)
+    . '&student_id=eq.' . rawurlencode($studentId)
+    . '&limit=1';
+$existingRes = supabase_request('GET', $existingUrl, [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+]);
+
+if ($existingRes['ok']) {
+    $existingRows = json_decode((string) $existingRes['body'], true);
+    $existing = is_array($existingRows) && isset($existingRows[0]) && is_array($existingRows[0]) ? $existingRows[0] : null;
+    if (is_array($existing)) {
+        $existingTicket = null;
+        $tickets = $existing['tickets'] ?? null;
+        if (is_array($tickets) && isset($tickets[0]) && is_array($tickets[0])) {
+            $existingTicket = $tickets[0];
+        } elseif (is_array($tickets) && isset($tickets['token'])) {
+            $existingTicket = $tickets;
+        }
+
+        json_response([
+            'ok' => true,
+            'already_registered' => true,
+            'ticket' => $existingTicket,
+        ], 200);
+    }
+}
+
+// Create registration.
+$regPayload = [
+    'event_id' => $eventId,
+    'student_id' => $studentId,
+];
+
+$regUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?select=id,event_id,student_id';
 $regRes = supabase_request('POST', $regUrl, $headers, json_encode([$regPayload], JSON_UNESCAPED_SLASHES));
 if (!$regRes['ok']) {
     json_response(['ok' => false, 'error' => build_error($regRes['body'] ?? null, (int) ($regRes['status'] ?? 0), $regRes['error'] ?? null, 'Registration failed')], 500);

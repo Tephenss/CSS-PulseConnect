@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
+require_once __DIR__ . '/includes/registration_access.php';
 
 $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
@@ -22,17 +23,12 @@ if ($id === '') {
     exit;
 }
 
-// 1. Fetch Event Document
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,description,location,start_at,end_at,status,event_for,event_type,grace_time&'
-    . 'id=eq.' . rawurlencode($id) . '&limit=1';
 $headers = [
     'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
-$res = supabase_request('GET', $url, $headers);
-$rows = $res['ok'] ? json_decode((string) $res['body'], true) : null;
-$event = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
+$event = fetch_event_with_registration_settings($id, $headers);
 
 if (!is_array($event)) {
     http_response_code(404);
@@ -110,6 +106,9 @@ $participants = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : 
 $totalRegistered = count(is_array($participants) ? $participants : []);
 $completedCount = 0;
 $nonCompletedCount = 0;
+$registrationAccessMap = [];
+$approvedRegistrationCount = 0;
+$studentRegistrationAccess = null;
 
 if (is_array($participants)) {
     foreach ($participants as $p) {
@@ -130,6 +129,24 @@ if (is_array($participants)) {
         } else {
             $nonCompletedCount++;
         }
+    }
+}
+
+if (($role === 'admin' || $role === 'teacher') && strtolower(trim((string) ($event['status'] ?? ''))) === 'published') {
+    $registrationAccessMap = build_event_registration_access_map(
+        fetch_event_registration_access_rows($id, $headers)
+    );
+    foreach ($registrationAccessMap as $row) {
+        if (is_array($row) && registration_access_row_allows($row)) {
+            $approvedRegistrationCount++;
+        }
+    }
+}
+
+if ($role === 'student') {
+    $studentProfile = fetch_student_profile_by_id((string) ($user['id'] ?? ''), $headers);
+    if (is_array($studentProfile)) {
+        $studentRegistrationAccess = resolve_student_registration_access($event, $studentProfile, $headers);
     }
 }
 
@@ -234,12 +251,12 @@ if ($role === 'admin') {
     });
 }
 
-// Map the Supabase status to the "Allow Registration" UI Toggle 
-// If published = ON, if pending/draft/archived = OFF.
+// Registration openness is now separate from publish status.
 $status = (string)($event['status'] ?? '');
 $isFinishedEvent = strtolower(trim($status)) === 'finished';
-$isRegistrationAllowed = ($status === 'published');
-$canToggleRegistration = in_array($status, ['draft', 'published'], true);
+$isRegistrationAllowed = event_allows_open_registration($event);
+$canToggleRegistration = $status === 'published';
+$showControlledRegistrationTools = $status === 'published' && !$isFinishedEvent && !$isRegistrationAllowed;
 
 $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
@@ -249,6 +266,27 @@ $statusColor = match($status) {
     'draft' => 'bg-orange-100 text-orange-900 border-orange-200',
     default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
 };
+
+$studentCanRegister = is_array($studentRegistrationAccess)
+    ? (bool) ($studentRegistrationAccess['allowed'] ?? false)
+    : false;
+$studentTargetAllowed = is_array($studentRegistrationAccess)
+    ? (bool) ($studentRegistrationAccess['target_allowed'] ?? false)
+    : false;
+$studentNeedsApproval = is_array($studentRegistrationAccess)
+    ? (bool) ($studentRegistrationAccess['approval_required'] ?? false)
+    : false;
+$studentRegistrationMessage = is_array($studentRegistrationAccess)
+    ? trim((string) ($studentRegistrationAccess['message'] ?? ''))
+    : '';
+$studentButtonLabel = $studentCanRegister
+    ? 'Register & Get Ticket'
+    : (!$studentTargetAllowed
+        ? 'Not Eligible for Registration'
+        : ($studentNeedsApproval ? 'Payment Approval Required' : 'Registration Closed'));
+$studentButtonClasses = $studentCanRegister
+    ? 'rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white px-6 py-3 text-sm font-bold hover:from-orange-500 hover:to-red-500 transition-all shadow-lg shadow-orange-600/20'
+    : 'rounded-xl bg-zinc-200 text-zinc-500 cursor-not-allowed px-6 py-3 text-sm font-bold';
 
 // Start outputting UI
 render_header('Event Details', $user);
@@ -420,19 +458,21 @@ render_header('Event Details', $user);
                  <!-- Student Area -->
                  <?php if ($role === 'student'): ?>
                     <div class="mt-8 pt-6 border-t border-zinc-200 flex flex-wrap gap-3">
-                        <?php if ($isRegistrationAllowed): ?>
-                            <button id="btnRegister" class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white px-6 py-3 text-sm font-bold hover:from-orange-500 hover:to-red-500 transition-all shadow-lg shadow-orange-600/20">
-                            Register & Get Ticket
-                            </button>
-                        <?php else: ?>
-                            <button class="rounded-xl bg-zinc-200 text-zinc-500 cursor-not-allowed px-6 py-3 text-sm font-bold">
-                            Registration Closed
-                            </button>
-                        <?php endif; ?>
+                        <button
+                            id="btnRegister"
+                            class="<?= htmlspecialchars($studentButtonClasses) ?>"
+                            <?= $studentCanRegister ? '' : 'disabled' ?>>
+                            <?= htmlspecialchars($studentButtonLabel) ?>
+                        </button>
                         <a href="/my_tickets.php" class="rounded-xl border border-zinc-300 bg-zinc-50 px-5 py-3 text-sm font-bold text-zinc-800 hover:bg-white transition shadow-sm">
                             My Tickets
                         </a>
                     </div>
+                    <?php if ($studentRegistrationMessage !== ''): ?>
+                    <div class="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm font-semibold text-amber-800">
+                        <?= htmlspecialchars($studentRegistrationMessage) ?>
+                    </div>
+                    <?php endif; ?>
                     <div id="msgStudent" class="mt-4 text-sm font-bold text-emerald-600"></div>
                  <?php endif; ?>
                 </div>
@@ -491,7 +531,40 @@ render_header('Event Details', $user);
                         <span aria-hidden="true" class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out <?= $isRegistrationAllowed ? 'translate-x-5' : 'translate-x-0' ?>"></span>
                     </button>
                 </div>
-                <p class="text-[11px] text-zinc-500 font-medium">Turn ON to let students register and generate tickets instantly.</p>
+                <p class="text-[11px] text-zinc-500 font-medium">
+                    Turn ON to let all targeted students register instantly. Keep this OFF to require payment approval through Excel import first.
+                </p>
+
+                <?php if ($showControlledRegistrationTools): ?>
+                <div class="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-4">
+                    <div class="text-sm font-black text-orange-900">Controlled Registration Mode</div>
+                    <p class="mt-1 text-[12px] leading-relaxed text-orange-800">
+                        Export the target participant list, mark the <span class="font-black">PAID</span> column with <span class="font-black">YES</span>, <span class="font-black">PAID</span>, or a check mark, then import it back so only approved students can register.
+                    </p>
+                    <div class="mt-3 flex flex-wrap items-center gap-3">
+                        <a
+                            href="/api/event_registration_access_export.php?event_id=<?= rawurlencode($id) ?>"
+                            class="inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-bold text-orange-700 hover:bg-orange-100 transition">
+                            Export Excel
+                        </a>
+                        <button
+                            type="button"
+                            id="btnImportRegistrationAccess"
+                            class="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-orange-700 transition">
+                            Import Paid List
+                        </button>
+                        <input
+                            id="inputRegistrationAccessFile"
+                            type="file"
+                            class="hidden"
+                            accept=".xlsx,.csv">
+                    </div>
+                    <div class="mt-3 text-[12px] font-semibold text-orange-700">
+                        <?= $approvedRegistrationCount ?> approved students currently allowed to register.
+                    </div>
+                    <div id="msgRegistrationAccess" class="mt-2 text-[12px] font-bold text-orange-700"></div>
+                </div>
+                <?php endif; ?>
             </div>
             <?php endif; ?>
             
@@ -931,12 +1004,12 @@ render_header('Event Details', $user);
   <div class="w-full max-w-sm rounded-3xl bg-white border border-zinc-200 shadow-xl overflow-hidden">
     <div class="p-6 pb-5 text-center">
         <div class="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-4 text-emerald-500 text-3xl font-black">?</div>
-        <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none mb-2">Publish Event?</h3>
-        <p class="text-sm font-medium text-zinc-500 leading-relaxed">Are you sure you want to allow registration for this event? Students will be able to enroll immediately.</p>
+        <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none mb-2">Open Registration?</h3>
+        <p class="text-sm font-medium text-zinc-500 leading-relaxed">Are you sure you want to let all targeted students register instantly for this event?</p>
     </div>
     <div class="flex border-t border-zinc-200">
         <button id="btnCancelReg" class="flex-1 py-3 text-sm font-bold text-zinc-600 hover:bg-zinc-50 border-r border-zinc-200 transition">Cancel</button>
-        <button id="btnConfirmReg" class="flex-1 py-3 text-sm font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 hover:text-emerald-700 transition">Allow Registration</button>
+        <button id="btnConfirmReg" class="flex-1 py-3 text-sm font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 hover:text-emerald-700 transition">Open Registration</button>
     </div>
   </div>
 </div>
@@ -1209,11 +1282,14 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
     }
 });
 
-// Registration Toggle Logic Map ("Published" status in our schema)
+// Registration Access Toggle Logic
 const btnToggleReg = document.getElementById('btnToggleReg');
 const publishModal = document.getElementById('confirmRegModal');
 const btnConfirmReg = document.getElementById('btnConfirmReg');
 const btnCancelReg = document.getElementById('btnCancelReg');
+const btnImportRegistrationAccess = document.getElementById('btnImportRegistrationAccess');
+const inputRegistrationAccessFile = document.getElementById('inputRegistrationAccessFile');
+const msgRegistrationAccess = document.getElementById('msgRegistrationAccess');
 
 if (btnToggleReg && publishModal) {
     btnToggleReg.addEventListener('click', () => {
@@ -1221,13 +1297,11 @@ if (btnToggleReg && publishModal) {
             alert('Publish the event first before enabling registration.');
             return;
         }
-        // Only show modal if turning ON
         if (btnToggleReg.getAttribute('aria-checked') === 'false') {
             publishModal.classList.remove('hidden');
             publishModal.classList.add('flex');
         } else {
-            // Turning OFF instantly via API sets status to draft
-            triggerStatusUpdate('draft');
+            triggerRegistrationAccessUpdate(false);
         }
     });
 
@@ -1238,21 +1312,105 @@ if (btnToggleReg && publishModal) {
 
     btnConfirmReg.addEventListener('click', () => {
         publishModal.classList.add('hidden');
-        triggerStatusUpdate('published');
+        triggerRegistrationAccessUpdate(true);
     });
 }
 
-async function triggerStatusUpdate(newStatus) {
+async function triggerRegistrationAccessUpdate(allowRegistration) {
     try {
-        const res = await fetch('/api/events_approve.php', {
+        const res = await fetch('/api/event_registration_access_toggle.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event_id: <?= json_encode($id) ?>, status: newStatus, csrf_token: window.CSRF_TOKEN })
+          body: JSON.stringify({
+            event_id: <?= json_encode($id) ?>,
+            allow_registration: allowRegistration,
+            csrf_token: window.CSRF_TOKEN
+          })
         });
         const data = await res.json();
-        if(data.ok) window.location.reload();
-        else alert('Failed to update status.');
+        if (data.ok) {
+          window.location.reload();
+          return;
+        }
+        alert(data.error || 'Failed to update registration access.');
     } catch(err) { alert('Network Error'); }
+}
+
+if (btnImportRegistrationAccess && inputRegistrationAccessFile) {
+  btnImportRegistrationAccess.addEventListener('click', () => {
+    inputRegistrationAccessFile.click();
+  });
+
+  inputRegistrationAccessFile.addEventListener('change', async () => {
+    const file = inputRegistrationAccessFile.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (msgRegistrationAccess) {
+      msgRegistrationAccess.textContent = 'Importing paid list...';
+      msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-orange-700';
+    }
+
+    btnImportRegistrationAccess.disabled = true;
+    btnImportRegistrationAccess.classList.add('opacity-70', 'cursor-not-allowed');
+
+    try {
+      const formData = new FormData();
+      formData.append('event_id', <?= json_encode($id) ?>);
+      formData.append('csrf_token', window.CSRF_TOKEN || '');
+      formData.append('registration_file', file);
+
+      const res = await fetch('/api/event_registration_access_import.php', {
+        method: 'POST',
+        body: formData
+      });
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (_) {
+        const cleaned = raw
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        throw new Error(cleaned || 'Import failed. The server returned an invalid response.');
+      }
+      if (!data.ok) {
+        throw new Error(data.error || 'Import failed.');
+      }
+
+      if (msgRegistrationAccess) {
+        const matched = Number(data.matched ?? 0);
+        const approved = Number(data.approved ?? 0);
+        const skipped = Number(data.skipped ?? 0);
+
+        if (approved <= 0) {
+          msgRegistrationAccess.textContent = `Import finished, but 0 students were approved. Check the Paid? column and make sure the marked student is part of this event target list. Matched: ${matched}, Skipped: ${skipped}.`;
+          msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-red-600';
+        } else {
+          const approvedNames = Array.isArray(data.approved_names) ? data.approved_names.filter(Boolean) : [];
+          const approvedLabel = approvedNames.length > 0
+            ? ` Approved: ${approvedNames.slice(0, 3).join(', ')}${approvedNames.length > 3 ? '...' : ''}.`
+            : '';
+          msgRegistrationAccess.textContent = `Imported ${matched} matched students. ${approved} are now approved to register.${approvedLabel}`;
+          msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-emerald-700';
+        }
+      }
+
+      setTimeout(() => window.location.reload(), 1400);
+    } catch (err) {
+      if (msgRegistrationAccess) {
+        msgRegistrationAccess.textContent = err?.message || 'Import failed.';
+        msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-red-600';
+      }
+    } finally {
+      btnImportRegistrationAccess.disabled = false;
+      btnImportRegistrationAccess.classList.remove('opacity-70', 'cursor-not-allowed');
+      inputRegistrationAccessFile.value = '';
+    }
+  });
 }
 
 // ------------------------------------------------------------------
@@ -2366,7 +2524,14 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error);
-      msg.innerHTML = 'Registered! <a class="underline" href="/ticket.php?token=' + encodeURIComponent(data.ticket.token) + '">View ticket</a>';
+      const ticketToken = data?.ticket?.token || '';
+      if (ticketToken) {
+        msg.innerHTML = 'Registered! <a class="underline" href="/ticket.php?token=' + encodeURIComponent(ticketToken) + '">View ticket</a>';
+      } else if (data.already_registered) {
+        msg.textContent = 'You are already registered for this event. Redirecting to your tickets...';
+      } else {
+        msg.textContent = 'Registered successfully. Refreshing...';
+      }
       btn.style.display = 'none';
       setTimeout(()=>window.location.reload(), 1500);
     } catch (err) { msg.textContent = err.message || 'Failed'; btn.disabled = false; }
