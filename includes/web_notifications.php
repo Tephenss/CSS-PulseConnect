@@ -74,7 +74,7 @@ function web_fetch_admin_notifications(array $headers): array
     $notifications = [];
 
     $eventsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,title,created_at,created_by,status'
+        . '?select=id,title,created_at,created_by,status,proposal_stage,requirements_requested_at,requirements_submitted_at,updated_at'
         . '&status=eq.pending'
         . '&order=created_at.desc'
         . '&limit=25';
@@ -118,6 +118,20 @@ function web_fetch_admin_notifications(array $headers): array
         $creatorId = trim((string) ($event['created_by'] ?? ''));
         $creatorName = $creatorMap[$creatorId] ?? 'A teacher';
         $createdAt = trim((string) ($event['created_at'] ?? gmdate('c')));
+        $proposalStage = strtolower(trim((string) ($event['proposal_stage'] ?? 'pending_requirements')));
+        $requirementsSubmittedAt = trim((string) ($event['requirements_submitted_at'] ?? ''));
+
+        if ($proposalStage === 'under_review') {
+            $notifications[] = [
+                'id' => web_notification_hash_id('admin-proposal-review', $eventId . '|' . ($requirementsSubmittedAt !== '' ? $requirementsSubmittedAt : $createdAt)),
+                'title' => 'Proposal Documents Submitted',
+                'description' => $creatorName . ' completed the requested documents for "' . $title . '". Review the uploads and approve when ready.',
+                'created_at' => $requirementsSubmittedAt !== '' ? $requirementsSubmittedAt : $createdAt,
+                'link' => '/manage_events.php',
+                'kind' => 'proposal-review',
+            ];
+            continue;
+        }
 
         $notifications[] = [
             'id' => web_notification_hash_id('admin-proposal', $eventId . '|' . $createdAt),
@@ -190,9 +204,9 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
     }
 
     $proposalUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,title,status,description,updated_at'
+        . '?select=id,title,status,description,updated_at,proposal_stage,requirements_requested_at,requirements_submitted_at'
         . '&created_by=eq.' . rawurlencode($teacherId)
-        . '&status=in.(approved,published,draft,archived)'
+        . '&status=in.(pending,approved,published,draft,archived)'
         . '&order=updated_at.desc'
         . '&limit=25';
     $proposalRes = supabase_request('GET', $proposalUrl, $headers);
@@ -206,8 +220,33 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         $eventId = trim((string) ($event['id'] ?? ''));
         $title = trim((string) ($event['title'] ?? 'Event'));
         $status = strtolower(trim((string) ($event['status'] ?? '')));
+        $proposalStage = strtolower(trim((string) ($event['proposal_stage'] ?? 'pending_requirements')));
         $updatedAt = trim((string) ($event['updated_at'] ?? gmdate('c')));
         if ($eventId === '' || $updatedAt === '') {
+            continue;
+        }
+
+        if ($status === 'pending' && $proposalStage === 'requirements_requested') {
+            $notifications[] = [
+                'id' => web_notification_hash_id('teacher-proposal-docs', $eventId . '|' . $updatedAt),
+                'title' => 'Documents Requested',
+                'description' => 'The admin requested proposal documents for "' . $title . '". Open the Approval tab to upload the required files.',
+                'created_at' => trim((string) ($event['requirements_requested_at'] ?? $updatedAt)) ?: $updatedAt,
+                'link' => '/manage_events.php',
+                'kind' => 'proposal-documents',
+            ];
+            continue;
+        }
+
+        if ($status === 'pending' && $proposalStage === 'under_review') {
+            $notifications[] = [
+                'id' => web_notification_hash_id('teacher-proposal-under-review', $eventId . '|' . $updatedAt),
+                'title' => 'Proposal Under Review',
+                'description' => 'Your uploaded documents for "' . $title . '" are now waiting for final admin approval.',
+                'created_at' => trim((string) ($event['requirements_submitted_at'] ?? $updatedAt)) ?: $updatedAt,
+                'link' => '/manage_events.php',
+                'kind' => 'proposal-under-review',
+            ];
             continue;
         }
 

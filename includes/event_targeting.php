@@ -82,6 +82,42 @@ function student_matches_event_target(array $row, string $eventFor): bool
         return $studentYear === $normalizedTarget;
     }
 
+    if (preg_match('/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/', $normalizedTarget, $matches)) {
+        $targetCourse = $matches[1];
+        $rawYears = preg_split('/\s*,\s*/', trim($matches[2])) ?: [];
+
+        $targetYears = [];
+        foreach ($rawYears as $rawYear) {
+            $candidate = strtoupper(trim((string) $rawYear));
+            if ($candidate === 'ALL') {
+                $targetYears = ['ALL'];
+                break;
+            }
+            if (in_array($candidate, ['1', '2', '3', '4'], true)) {
+                $targetYears[$candidate] = true;
+            }
+        }
+
+        if (empty($targetYears)) {
+            $targetYears = ['ALL'];
+        } elseif (!array_is_list($targetYears)) {
+            $targetYears = array_keys($targetYears);
+        }
+
+        $courseMatches = $targetCourse === 'ALL'
+            ? true
+            : ($studentCourse !== '' && $studentCourse === $targetCourse);
+        if (!$courseMatches) {
+            return false;
+        }
+
+        if (count($targetYears) === 1 && $targetYears[0] === 'ALL') {
+            return true;
+        }
+
+        return $studentYear !== '' && in_array($studentYear, $targetYears, true);
+    }
+
     return false;
 }
 

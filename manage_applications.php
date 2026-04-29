@@ -32,8 +32,11 @@ $pending = [];
 $reviewed = [];
 foreach ($students as $student) {
     $status = strtolower((string) ($student['account_status'] ?? 'pending'));
+    $isEmailVerified = !empty($student['email_verified']);
     if ($status === 'pending') {
-        $pending[] = $student;
+        if ($isEmailVerified) {
+            $pending[] = $student;
+        }
     } else {
         $reviewed[] = $student;
     }

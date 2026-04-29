@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/proposal_requirements.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -42,6 +43,10 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
 }
 
 $eventSelectVariants = [
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,users:created_by(first_name,last_name,suffix)',
@@ -92,6 +97,29 @@ foreach ($eventSelectVariants as $selectColumns) {
 }
 if (!empty($events)) {
   $events = attach_event_sessions_to_events($events, $headers);
+}
+
+$proposalRequirementMap = [];
+$proposalSubmissionMap = [];
+$proposalVisibleSubmissionMap = [];
+$proposalSummaryMap = [];
+if (!empty($events)) {
+  $eventIds = array_values(array_filter(array_map(
+    static fn(array $event): string => trim((string) ($event['id'] ?? '')),
+    $events
+  )));
+
+  $proposalHeaders = proposal_requirement_headers();
+  $proposalRequirementMap = fetch_proposal_requirements_map($eventIds, $proposalHeaders);
+  $proposalSubmissionMap = fetch_proposal_submissions_map($eventIds, $proposalHeaders);
+  $proposalVisibleSubmissionMap = fetch_proposal_submissions_map($eventIds, $proposalHeaders, true);
+
+  foreach ($eventIds as $eventId) {
+    $proposalSummaryMap[$eventId] = build_proposal_requirement_summary(
+      $proposalRequirementMap[$eventId] ?? [],
+      $proposalSubmissionMap[$eventId] ?? []
+    );
+  }
 }
 
 $teacherAccounts = [];
@@ -568,7 +596,7 @@ render_header('Manage Events', $user);
           </div>
 
           <!-- NEW: Event Type & Target -->
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Type</label>
               <select id="event_type" name="event_type"
@@ -589,16 +617,30 @@ render_header('Manage Events', $user);
                 <option value="BSCS">BSCS</option>
               </select>
             </div>
-            <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Year Level</label>
-              <select id="target_year" name="target_year"
-                class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
-                <option value="ALL" selected>All Levels</option>
-                <option value="1">1st Year</option>
-                <option value="2">2nd Year</option>
-                <option value="3">3rd Year</option>
-                <option value="4">4th Year</option>
-              </select>
+          </div>
+          <div>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Year Level</label>
+            <div id="target_year_group" class="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-2">
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200 bg-zinc-50">
+                <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="ALL" checked />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">All Levels</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="1" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">1st Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="2" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">2nd Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="3" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">3rd Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="4" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">4th Year</span>
+              </label>
             </div>
           </div>
 
@@ -1332,6 +1374,24 @@ foreach ($events as $ev) {
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+
+  .requirements-row input {
+    min-width: 0;
+  }
+
+  .proposal-progress-track {
+    height: 10px;
+    border-radius: 999px;
+    background: #e4e4e7;
+    overflow: hidden;
+  }
+
+  .proposal-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #f97316 0%, #10b981 100%);
+    transition: width 0.25s ease;
+  }
 </style>
 
 <!-- ═══════  EVENTS TABLE  ═══════ -->
@@ -1432,6 +1492,27 @@ foreach ($events as $ev) {
           $eid = (string) ($e['id'] ?? '');
           $createdBy = (string) ($e['created_by'] ?? '');
           $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && ($status === 'pending' || ($status === 'archived' && $isRejected)));
+          $proposalStage = strtolower(trim((string) ($e['proposal_stage'] ?? 'pending_requirements')));
+          if ($status === 'approved' || $status === 'published') {
+            $proposalStage = 'approved';
+          }
+          $proposalRequirements = $proposalRequirementMap[$eid] ?? [];
+          $proposalSubmissions = $proposalSubmissionMap[$eid] ?? [];
+          $proposalVisibleSubmissions = $proposalVisibleSubmissionMap[$eid] ?? [];
+          $proposalSummary = $proposalSummaryMap[$eid] ?? ['total' => 0, 'submitted' => 0, 'complete' => false, 'percent' => 0];
+          $proposalSubmissionsVisible = $proposalVisibleSubmissions;
+          $proposalSummaryVisible = $proposalSummary;
+          $adminWaitingOnFinalSubmit = $role === 'admin'
+            && $status === 'pending'
+            && $proposalRequirements !== []
+            && $proposalStage !== 'under_review'
+            && $proposalStage !== 'approved';
+          $proposalStageConfig = match ($proposalStage) {
+            'requirements_requested' => ['label' => 'Waiting on teacher', 'bg' => 'bg-orange-50', 'text' => 'text-orange-700', 'border' => 'border-orange-200'],
+            'under_review' => ['label' => 'Under review', 'bg' => 'bg-violet-50', 'text' => 'text-violet-700', 'border' => 'border-violet-200'],
+            'approved' => ['label' => 'Ready for publish', 'bg' => 'bg-emerald-50', 'text' => 'text-emerald-700', 'border' => 'border-emerald-200'],
+            default => ['label' => 'Needs requirements', 'bg' => 'bg-amber-50', 'text' => 'text-amber-700', 'border' => 'border-amber-200'],
+          };
 
           $statusConfig = match ($status) {
             'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-l-emerald-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
@@ -1471,6 +1552,12 @@ foreach ($events as $ev) {
                         class="text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
                         <?= ($status === 'archived' && $isRejected) ? 'Rejected' : ucfirst(htmlspecialchars($status)) ?>
                       </span>
+                      <?php if (in_array($status, ['pending', 'approved'], true)): ?>
+                        <span
+                          class="text-[10px] font-bold rounded-full border px-2 py-0.5 <?= $proposalStageConfig['bg'] ?> <?= $proposalStageConfig['text'] ?> <?= $proposalStageConfig['border'] ?> flex-shrink-0">
+                          <?= htmlspecialchars($proposalStageConfig['label']) ?>
+                        </span>
+                      <?php endif; ?>
                       <?php if ($role === 'admin' && !empty($e['users'])): ?>
                         <?php
                         $u = $e['users'];
@@ -1536,6 +1623,45 @@ foreach ($events as $ev) {
                         Submitted: <?= (new DateTimeImmutable((string) $e['created_at']))->format('F d, Y') ?>
                       </p>
                     <?php endif; ?>
+                    <?php if ($status === 'pending'): ?>
+                      <div class="mt-3 rounded-xl border border-zinc-200 bg-white/80 px-3 py-2 shadow-sm">
+                        <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <span class="font-semibold text-zinc-700">
+                            Proposal requirements
+                          </span>
+                          <span class="text-zinc-500">
+                            <?= (int) ($proposalSummaryVisible['submitted'] ?? 0) ?>/<?= (int) ($proposalSummaryVisible['total'] ?? 0) ?> uploaded
+                          </span>
+                        </div>
+                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200">
+                          <div
+                            class="h-full rounded-full bg-gradient-to-r from-orange-500 to-emerald-500 transition-all"
+                            style="width: <?= max(0, min(100, (int) ($proposalSummaryVisible['percent'] ?? 0))) ?>%"></div>
+                        </div>
+                        <div class="mt-2 flex flex-wrap gap-1.5">
+                          <?php if ($proposalRequirements !== []): ?>
+                            <?php foreach ($proposalRequirements as $requirement): ?>
+                              <?php
+                              $requirementId = trim((string) ($requirement['id'] ?? ''));
+                              $isUploaded = $requirementId !== '' && isset($proposalSubmissions[$requirementId]);
+                              ?>
+                              <span
+                                class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold <?= $isUploaded ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-zinc-200 bg-zinc-50 text-zinc-500' ?>">
+                                <?= $isUploaded ? 'Uploaded' : 'Pending' ?>
+                                <?= htmlspecialchars((string) ($requirement['code'] ?? $requirement['label'] ?? 'DOC')) ?>
+                              </span>
+                            <?php endforeach; ?>
+                          <?php else: ?>
+                            <span class="text-[11px] text-zinc-500">Admin has not requested the required documents yet.</span>
+                          <?php endif; ?>
+                        </div>
+                        <?php if ($adminWaitingOnFinalSubmit): ?>
+                          <p class="mt-2 text-[11px] font-medium text-zinc-500">
+                            Draft progress is shown here. Full file review opens after the teacher submits for review.
+                          </p>
+                        <?php endif; ?>
+                      </div>
+                    <?php endif; ?>
                   </div>
                 </div>
               </div>
@@ -1549,8 +1675,22 @@ foreach ($events as $ev) {
                       data-id="<?= htmlspecialchars($eid) ?>"
                       data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Reject</button>
                     <button
-                      class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
-                      data-id="<?= htmlspecialchars($eid) ?>" data-status="approved">Approve</button>
+                      class="btnRequirements rounded-lg border border-orange-200 bg-orange-50 px-4 py-1.5 text-[13px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-sm"
+                      data-id="<?= htmlspecialchars($eid) ?>"
+                      data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+                      data-stage="<?= htmlspecialchars($proposalStage) ?>"
+                      data-requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
+                      data-submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
+                      data-summary="<?= htmlspecialchars((string) json_encode($proposalSummaryVisible, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>">
+                      <?= $proposalRequirements === []
+                        ? 'Send Req'
+                        : ($proposalStage === 'under_review' ? 'Review Docs' : 'Edit Req') ?>
+                    </button>
+                    <?php if ($proposalStage === 'under_review'): ?>
+                      <button
+                        class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
+                        data-id="<?= htmlspecialchars($eid) ?>" data-status="approved">Approve</button>
+                    <?php endif; ?>
                   <?php endif; ?>
 
                   <?php if ($status === 'approved'): ?>
@@ -1729,6 +1869,115 @@ foreach ($events as $ev) {
   </div>
 <?php endif; ?>
 
+<!-- ═══════════  PROPOSAL REQUIREMENTS MODAL  ═══════════ -->
+<div id="proposalRequirementsModal" class="modal-backdrop">
+  <div class="modal-panel max-w-3xl">
+    <div class="flex items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 sm:px-6">
+      <div>
+        <div class="text-xs font-black uppercase tracking-[0.24em] text-orange-600">Proposal requirements</div>
+        <h3 id="proposalRequirementsTitle" class="mt-1 text-xl font-bold text-zinc-900">Request proposal documents</h3>
+        <p class="mt-1 text-sm text-zinc-500">
+          Select the forms the teacher must upload before this proposal can move into final review.
+        </p>
+      </div>
+      <button type="button" id="btnCloseProposalRequirements"
+        class="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body px-5 py-5 sm:px-6">
+      <input type="hidden" id="proposalRequirementsEventId" value="" />
+
+      <div class="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">Requirement progress</div>
+            <div class="text-xs text-zinc-500">Teachers must complete every requested upload before final review.</div>
+          </div>
+          <div id="proposalRequirementsStageBadge"
+            class="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-bold text-orange-700">
+            Needs requirements
+          </div>
+        </div>
+        <div class="mt-4 proposal-progress-track">
+          <div id="proposalRequirementsProgressBar" class="proposal-progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="mt-2 flex items-center justify-between text-xs text-zinc-500">
+          <span id="proposalRequirementsProgressText">0 of 0 uploaded</span>
+          <span id="proposalRequirementsProgressPercent">0%</span>
+        </div>
+      </div>
+
+      <div class="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">Common document presets</div>
+            <div class="text-xs text-zinc-500">Tick the standard forms that usually apply to this proposal.</div>
+          </div>
+        </div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          <label class="flex items-start gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+            <input type="checkbox" id="presetAPP" class="mt-1 h-4 w-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500" />
+            <span>
+              <span class="block text-sm font-bold text-zinc-900">APP</span>
+              <span class="block text-xs text-zinc-500">Annual Project Plan Form</span>
+            </span>
+          </label>
+          <label class="flex items-start gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+            <input type="checkbox" id="presetAPF" class="mt-1 h-4 w-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500" />
+            <span>
+              <span class="block text-sm font-bold text-zinc-900">APF</span>
+              <span class="block text-xs text-zinc-500">Activity Proposal Form</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">Additional requirements</div>
+            <div class="text-xs text-zinc-500">Add any other documents this proposal needs before final approval.</div>
+          </div>
+          <button type="button" id="btnAddProposalRequirement"
+            class="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-700 transition hover:bg-zinc-100">
+            Add requirement
+          </button>
+        </div>
+        <div id="proposalRequirementsList" class="mt-4 space-y-3"></div>
+      </div>
+
+      <div class="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">Uploaded files</div>
+            <div class="text-xs text-zinc-500">Review which requirements already have a teacher upload attached.</div>
+          </div>
+          <div id="proposalRequirementsUploadSummary"
+            class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-[11px] font-bold text-zinc-600">
+            No uploads yet
+          </div>
+        </div>
+        <div id="proposalRequirementsUploads" class="mt-4 space-y-3"></div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-5 py-4 sm:px-6">
+      <button type="button" id="btnCancelProposalRequirements"
+        class="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100">
+        Cancel
+      </button>
+      <button type="button" id="btnSaveProposalRequirements"
+        class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-orange-600/20 transition hover:from-orange-500 hover:to-red-500">
+        Send Requirements
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════  REJECT PROPOSAL MODAL (Matches Page 34) ═══════════ -->
 <div id="rejectModal" class="modal-backdrop">
   <div
@@ -1780,6 +2029,46 @@ foreach ($events as $ev) {
   const archiveModal = document.getElementById('archiveModal');
   const publishTeacherModal = document.getElementById('publishTeacherModal');
   const publishTeacherPanel = document.getElementById('publishTeacherPanel');
+  const proposalRequirementsModal = document.getElementById('proposalRequirementsModal');
+  const proposalRequirementsTitle = document.getElementById('proposalRequirementsTitle');
+  const proposalRequirementsEventId = document.getElementById('proposalRequirementsEventId');
+  const proposalRequirementsStageBadge = document.getElementById('proposalRequirementsStageBadge');
+  const proposalRequirementsProgressBar = document.getElementById('proposalRequirementsProgressBar');
+  const proposalRequirementsProgressText = document.getElementById('proposalRequirementsProgressText');
+  const proposalRequirementsProgressPercent = document.getElementById('proposalRequirementsProgressPercent');
+  const proposalRequirementsUploadSummary = document.getElementById('proposalRequirementsUploadSummary');
+  const proposalRequirementsUploads = document.getElementById('proposalRequirementsUploads');
+  const proposalRequirementsList = document.getElementById('proposalRequirementsList');
+  const btnAddProposalRequirement = document.getElementById('btnAddProposalRequirement');
+  const btnSaveProposalRequirements = document.getElementById('btnSaveProposalRequirements');
+  const presetAPP = document.getElementById('presetAPP');
+  const presetAPF = document.getElementById('presetAPF');
+
+  const proposalStageStyles = {
+    pending_requirements: {
+      label: 'Needs requirements',
+      className: 'rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-bold text-amber-700'
+    },
+    requirements_requested: {
+      label: 'Waiting on teacher',
+      className: 'rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-bold text-orange-700'
+    },
+    under_review: {
+      label: 'Under review',
+      className: 'rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-[11px] font-bold text-violet-700'
+    },
+    approved: {
+      label: 'Ready for publish',
+      className: 'rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-700'
+    }
+  };
+
+  let proposalRequirementState = {
+    stage: 'pending_requirements',
+    requirements: [],
+    submissions: [],
+    summary: { total: 0, submitted: 0, percent: 0 }
+  };
 
   function openModal(el) { el.classList.add('active'); document.body.style.overflow = 'hidden'; }
   function closeModal(el) { el.classList.remove('active'); document.body.style.overflow = ''; }
@@ -1789,16 +2078,240 @@ foreach ($events as $ev) {
     publishTeacherPanel.style.transform = 'translateY(100%)';
     document.body.style.overflow = '';
   }
+  function closeProposalRequirementsModal() {
+    if (!proposalRequirementsModal) return;
+    proposalRequirementsModal.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+
+  function safeJsonParse(raw, fallback) {
+    try {
+      return JSON.parse(raw || '');
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function proposalRequirementCodeFromLabel(label, index) {
+    const parts = String(label || '').trim().split(/\s+/).filter(Boolean);
+    const acronym = parts.map((part) => part[0]?.toUpperCase() || '').join('').slice(0, 6);
+    if (acronym.length >= 2) return acronym;
+    return `DOC${index + 1}`;
+  }
+
+  function createProposalRequirementRow(label = '') {
+    const row = document.createElement('div');
+    row.className = 'requirements-row flex items-center gap-2';
+    row.innerHTML = `
+      <div class="flex-1 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+        <div class="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">Requirement name</div>
+        <input type="text" value="${escapeHtml(label)}"
+          class="proposal-requirement-input mt-1 w-full border-0 bg-transparent px-0 text-sm font-semibold text-zinc-900 outline-none focus:ring-0"
+          placeholder="e.g. Budget Request Form">
+      </div>
+      <button type="button"
+        class="btnRemoveProposalRequirement rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-xs font-bold text-red-700 transition hover:bg-red-100">
+        Remove
+      </button>
+    `;
+    row.querySelector('.btnRemoveProposalRequirement')?.addEventListener('click', () => row.remove());
+    return row;
+  }
+
+  function renderProposalUploads() {
+    if (!proposalRequirementsUploads || !proposalRequirementsUploadSummary) return;
+    proposalRequirementsUploads.innerHTML = '';
+
+    const submissionsByRequirement = {};
+    (proposalRequirementState.submissions || []).forEach((submission) => {
+      const requirementId = String(submission?.requirement_id || '').trim();
+      if (requirementId) submissionsByRequirement[requirementId] = submission;
+    });
+
+    const requirements = proposalRequirementState.requirements || [];
+    if (!requirements.length) {
+      proposalRequirementsUploads.innerHTML = `
+        <div class="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500">
+          No document requirements have been sent yet.
+        </div>
+      `;
+      proposalRequirementsUploadSummary.textContent = 'No uploads yet';
+      return;
+    }
+
+    requirements.forEach((requirement) => {
+      const requirementId = String(requirement?.id || '').trim();
+      const code = String(requirement?.code || 'DOC').trim() || 'DOC';
+      const label = String(requirement?.label || code).trim() || code;
+      const submission = requirementId ? submissionsByRequirement[requirementId] : null;
+      const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
+      const uploadedAt = String(submission?.updated_at || submission?.uploaded_at || '').trim();
+      const uploadedText = uploadedAt ? new Date(uploadedAt).toLocaleString() : '';
+
+      const item = document.createElement('div');
+      item.className = 'rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3';
+      item.innerHTML = `
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-black text-zinc-700">${escapeHtml(code)}</span>
+              <div class="text-sm font-semibold text-zinc-900">${escapeHtml(label)}</div>
+            </div>
+            <div class="mt-1 text-xs text-zinc-500">
+              ${fileUrl ? `Uploaded${uploadedText ? ` • ${escapeHtml(uploadedText)}` : ''}` : 'Still waiting for teacher upload'}
+            </div>
+          </div>
+          ${fileUrl
+            ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
+            : `<span class="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-500">Pending upload</span>`}
+        </div>
+      `;
+      proposalRequirementsUploads.appendChild(item);
+    });
+
+    proposalRequirementsUploadSummary.textContent = `${proposalRequirementState.summary.submitted || 0}/${proposalRequirementState.summary.total || 0} uploaded`;
+  }
+
+  function renderProposalProgress() {
+    const stage = proposalRequirementState.stage || 'pending_requirements';
+    const summary = proposalRequirementState.summary || { total: 0, submitted: 0, percent: 0 };
+    const style = proposalStageStyles[stage] || proposalStageStyles.pending_requirements;
+    proposalRequirementsStageBadge.className = style.className;
+    proposalRequirementsStageBadge.textContent = style.label;
+    proposalRequirementsProgressBar.style.width = `${Math.max(0, Math.min(100, Number(summary.percent || 0)))}%`;
+    proposalRequirementsProgressText.textContent = `${summary.submitted || 0} of ${summary.total || 0} uploaded`;
+    proposalRequirementsProgressPercent.textContent = `${summary.percent || 0}%`;
+
+    if ((proposalRequirementState.requirements || []).length === 0) {
+      btnSaveProposalRequirements.textContent = 'Send Requirements';
+    } else if (stage === 'under_review') {
+      btnSaveProposalRequirements.textContent = 'Update Requirements';
+    } else {
+      btnSaveProposalRequirements.textContent = 'Save Requirements';
+    }
+  }
+
+  function populateProposalRequirementEditor(requirements) {
+    if (!proposalRequirementsList) return;
+    proposalRequirementsList.innerHTML = '';
+
+    const remaining = [];
+    let hasAPP = false;
+    let hasAPF = false;
+    (requirements || []).forEach((requirement) => {
+      const code = String(requirement?.code || '').trim().toUpperCase();
+      const label = String(requirement?.label || '').trim();
+      if (code === 'APP' || /annual project plan/i.test(label)) {
+        hasAPP = true;
+        return;
+      }
+      if (code === 'APF' || /activity proposal/i.test(label)) {
+        hasAPF = true;
+        return;
+      }
+      remaining.push(label || code);
+    });
+
+    if (presetAPP) presetAPP.checked = hasAPP;
+    if (presetAPF) presetAPF.checked = hasAPF;
+
+    remaining.forEach((label) => proposalRequirementsList.appendChild(createProposalRequirementRow(label)));
+    if (!remaining.length) {
+      proposalRequirementsList.appendChild(createProposalRequirementRow(''));
+    }
+  }
+
+  function collectProposalRequirements() {
+    const requirements = [];
+    if (presetAPP?.checked) requirements.push({ code: 'APP', label: 'Annual Project Plan Form' });
+    if (presetAPF?.checked) requirements.push({ code: 'APF', label: 'Activity Proposal Form' });
+
+    const inputs = proposalRequirementsList?.querySelectorAll('.proposal-requirement-input') || [];
+    Array.from(inputs).forEach((input, index) => {
+      const label = String(input.value || '').trim();
+      if (!label) return;
+      requirements.push({ code: proposalRequirementCodeFromLabel(label, index), label });
+    });
+    return requirements;
+  }
+
+  function openProposalRequirementsModal(button) {
+    if (!proposalRequirementsModal) return;
+    proposalRequirementsEventId.value = button.dataset.id || '';
+    proposalRequirementsTitle.textContent = `Proposal documents • ${button.dataset.title || 'Pending proposal'}`;
+    proposalRequirementState = {
+      stage: button.dataset.stage || 'pending_requirements',
+      requirements: safeJsonParse(button.dataset.requirements, []),
+      submissions: safeJsonParse(button.dataset.submissions, []),
+      summary: safeJsonParse(button.dataset.summary, { total: 0, submitted: 0, percent: 0 })
+    };
+    populateProposalRequirementEditor(proposalRequirementState.requirements);
+    renderProposalProgress();
+    renderProposalUploads();
+    proposalRequirementsModal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
 
   eventModal.addEventListener('click', (e) => { if (e.target === eventModal) closeModal(eventModal); });
   archiveModal.addEventListener('click', (e) => { if (e.target === archiveModal) closeModal(archiveModal); });
   publishTeacherModal?.addEventListener('click', (e) => { if (e.target === publishTeacherModal) closePublishTeacherAssignmentModal(); });
+  proposalRequirementsModal?.addEventListener('click', (e) => { if (e.target === proposalRequirementsModal) closeProposalRequirementsModal(); });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal(eventModal);
       closeModal(archiveModal);
       closePublishTeacherAssignmentModal();
+      closeProposalRequirementsModal();
+    }
+  });
+
+  document.getElementById('btnCloseProposalRequirements')?.addEventListener('click', closeProposalRequirementsModal);
+  document.getElementById('btnCancelProposalRequirements')?.addEventListener('click', closeProposalRequirementsModal);
+  btnAddProposalRequirement?.addEventListener('click', () => {
+    proposalRequirementsList?.appendChild(createProposalRequirementRow(''));
+  });
+  document.querySelectorAll('.btnRequirements').forEach((button) => {
+    button.addEventListener('click', () => openProposalRequirementsModal(button));
+  });
+  btnSaveProposalRequirements?.addEventListener('click', async () => {
+    const event_id = proposalRequirementsEventId?.value || '';
+    const requirements = collectProposalRequirements();
+    if (!event_id) {
+      alert('Missing event id.');
+      return;
+    }
+    if (!requirements.length) {
+      alert('Add at least one required document before sending the request.');
+      return;
+    }
+
+    btnSaveProposalRequirements.disabled = true;
+    const originalText = btnSaveProposalRequirements.textContent;
+    btnSaveProposalRequirements.textContent = 'Saving...';
+    try {
+      const res = await fetch('/api/event_proposal_requirements_save.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id, requirements, csrf_token: window.CSRF_TOKEN })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Failed to save proposal requirements.');
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || 'Failed to save proposal requirements.');
+    } finally {
+      btnSaveProposalRequirements.disabled = false;
+      btnSaveProposalRequirements.textContent = originalText;
     }
   });
 
@@ -2254,37 +2767,97 @@ foreach ($events as $ev) {
   function decodeTargetParticipant(eventForValue) {
     const raw = (eventForValue || 'All').toString().trim().toUpperCase();
     if (!raw || raw === 'ALL' || raw === 'ALL LEVELS' || raw === 'NONE') {
-      return { course: 'ALL', year: 'ALL' };
+      return { course: 'ALL', years: ['ALL'] };
+    }
+
+    const multi = raw.match(/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/);
+    if (multi) {
+      const years = (multi[2] || '')
+        .split(',')
+        .map((v) => v.trim().toUpperCase())
+        .filter((v) => ['ALL', '1', '2', '3', '4'].includes(v));
+      const normalizedYears = years.includes('ALL') || years.length === 0
+        ? ['ALL']
+        : [...new Set(years)];
+      return { course: multi[1], years: normalizedYears };
     }
 
     const pair = raw.match(/^(BSIT|BSCS)\s*[-_|]\s*([1-4])$/);
     if (pair) {
-      return { course: pair[1], year: pair[2] };
+      return { course: pair[1], years: [pair[2]] };
     }
 
     if (raw === 'BSIT' || raw === 'BSCS') {
-      return { course: raw, year: 'ALL' };
+      return { course: raw, years: ['ALL'] };
     }
 
     if (['1', '2', '3', '4'].includes(raw)) {
-      return { course: 'ALL', year: raw };
+      return { course: 'ALL', years: [raw] };
     }
 
-    return { course: 'ALL', year: 'ALL' };
+    return { course: 'ALL', years: ['ALL'] };
   }
 
-  function encodeTargetParticipant(courseValue, yearValue) {
+  function normalizeTargetYears(yearValues) {
+    const source = Array.isArray(yearValues) ? yearValues : [yearValues];
+    const cleaned = source
+      .map((v) => (v || '').toString().trim().toUpperCase())
+      .filter((v) => ['ALL', '1', '2', '3', '4'].includes(v));
+    if (cleaned.includes('ALL') || cleaned.length === 0) return ['ALL'];
+    return [...new Set(cleaned)];
+  }
+
+  function getSelectedTargetYears() {
+    const checkboxes = Array.from(document.querySelectorAll('.target-year-checkbox'));
+    if (checkboxes.length === 0) return ['ALL'];
+    const checked = checkboxes.filter((cb) => cb.checked).map((cb) => cb.value);
+    return normalizeTargetYears(checked);
+  }
+
+  function setSelectedTargetYears(years) {
+    const checkboxes = Array.from(document.querySelectorAll('.target-year-checkbox'));
+    if (checkboxes.length === 0) return;
+    const normalized = normalizeTargetYears(years);
+    checkboxes.forEach((cb) => {
+      cb.checked = normalized.includes(cb.value);
+    });
+  }
+
+  function encodeTargetParticipant(courseValue, yearValues) {
     const course = (courseValue || 'ALL').toString().trim().toUpperCase();
-    const year = (yearValue || 'ALL').toString().trim().toUpperCase();
+    const years = normalizeTargetYears(yearValues);
 
     const normalizedCourse = ['ALL', 'BSIT', 'BSCS'].includes(course) ? course : 'ALL';
-    const normalizedYear = ['ALL', '1', '2', '3', '4'].includes(year) ? year : 'ALL';
 
-    if (normalizedCourse === 'ALL' && normalizedYear === 'ALL') return 'All';
-    if (normalizedCourse === 'ALL') return normalizedYear;
-    if (normalizedYear === 'ALL') return normalizedCourse;
-    return `${normalizedCourse}-${normalizedYear}`;
+    if (normalizedCourse === 'ALL' && years.length === 1 && years[0] === 'ALL') return 'All';
+    if (normalizedCourse === 'ALL' && years.length === 1) return years[0];
+    if (years.length === 1 && years[0] === 'ALL') return normalizedCourse;
+    return `COURSE=${normalizedCourse};YEARS=${years.join(',')}`;
   }
+
+  function bindTargetYearCheckboxes() {
+    const checkboxes = Array.from(document.querySelectorAll('.target-year-checkbox'));
+    checkboxes.forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const value = (cb.value || '').toUpperCase();
+        if (value === 'ALL' && cb.checked) {
+          setSelectedTargetYears(['ALL']);
+          return;
+        }
+
+        if (value !== 'ALL' && cb.checked) {
+          const allBox = document.querySelector('.target-year-checkbox[value="ALL"]');
+          if (allBox) allBox.checked = false;
+        }
+
+        const selected = getSelectedTargetYears();
+        if (selected.length === 0) {
+          setSelectedTargetYears(['ALL']);
+        }
+      });
+    });
+  }
+  bindTargetYearCheckboxes();
 
   document.getElementById('btnCreateEvent').addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
@@ -2305,7 +2878,7 @@ foreach ($events as $ev) {
 
     if (document.getElementById('event_type')) document.getElementById('event_type').value = 'Event';
     if (document.getElementById('target_course')) document.getElementById('target_course').value = 'ALL';
-    if (document.getElementById('target_year')) document.getElementById('target_year').value = 'ALL';
+    setSelectedTargetYears(['ALL']);
     if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '15';
 
     const msg = document.getElementById('formMsg');
@@ -2365,7 +2938,7 @@ foreach ($events as $ev) {
       if (document.getElementById('event_type')) document.getElementById('event_type').value = btn.dataset.event_type || 'Event';
       const decodedTarget = decodeTargetParticipant(btn.dataset.event_for || 'All');
       if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
-      if (document.getElementById('target_year')) document.getElementById('target_year').value = decodedTarget.year;
+      setSelectedTargetYears(decodedTarget.years || ['ALL']);
       if (document.getElementById('grace_time')) document.getElementById('grace_time').value = btn.dataset.grace_time || '15';
 
       setPickerValue(startAtInput, btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : '');
@@ -2447,8 +3020,8 @@ foreach ($events as $ev) {
       const description = document.getElementById('description').value.trim();
       const eventType = document.getElementById('event_type') ? document.getElementById('event_type').value : 'Event';
       const targetCourse = document.getElementById('target_course') ? document.getElementById('target_course').value : 'ALL';
-      const targetYear = document.getElementById('target_year') ? document.getElementById('target_year').value : 'ALL';
-      const eventFor = encodeTargetParticipant(targetCourse, targetYear);
+      const targetYears = getSelectedTargetYears();
+      const eventFor = encodeTargetParticipant(targetCourse, targetYears);
       const graceTime = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
 
       const eventMode = (eventModeInput?.value || 'simple').trim();

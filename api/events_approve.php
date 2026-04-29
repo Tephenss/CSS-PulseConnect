@@ -30,17 +30,172 @@ function normalize_id_list(mixed $raw): array
     return array_keys($unique);
 }
 
+function evaluation_seed_event_questions_if_missing(string $eventId, array $headers): void
+{
+    if ($eventId === '') {
+        return;
+    }
+
+    // Prevent duplicates: seed only when there are currently no event-level questions.
+    $checkUrl = rtrim(SUPABASE_URL, '/')
+        . '/rest/v1/evaluation_questions?select=id,event_id'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $checkRes = supabase_request('GET', $checkUrl, $headers);
+    if (!$checkRes['ok']) {
+        return;
+    }
+
+    $rows = json_decode((string) ($checkRes['body'] ?? ''), true);
+    if (is_array($rows) && count($rows) > 0) {
+        return;
+    }
+
+    $commonQuestions = [
+        [
+            'question_text' => 'How would you rate this event overall? (1-5)',
+            'field_type' => 'rating',
+            'required' => true,
+            'sort_order' => 1,
+        ],
+        [
+            'question_text' => 'What did you like most about this event?',
+            'field_type' => 'text',
+            'required' => false,
+            'sort_order' => 2,
+        ],
+        [
+            'question_text' => 'Any suggestions to improve for next time?',
+            'field_type' => 'text',
+            'required' => false,
+            'sort_order' => 3,
+        ],
+    ];
+
+    $payloads = [];
+    foreach ($commonQuestions as $q) {
+        $payloads[] = [
+            'event_id' => $eventId,
+            'question_text' => (string) ($q['question_text'] ?? ''),
+            'field_type' => (string) ($q['field_type'] ?? 'text'),
+            'required' => !empty($q['required']),
+            'sort_order' => isset($q['sort_order']) ? max(0, (int) $q['sort_order']) : 0,
+        ];
+    }
+
+    $insertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions';
+    $insertHeaders = $headers;
+    $insertHeaders[] = 'Prefer: return=minimal';
+
+    // Best-effort: if seed fails (table not ready, RLS, etc), don't block publishing.
+    $insertRes = supabase_request('POST', $insertUrl, $insertHeaders, json_encode($payloads, JSON_UNESCAPED_SLASHES));
+    if (!$insertRes['ok']) {
+        return;
+    }
+}
+
+function evaluation_seed_session_questions_if_missing(string $eventId, array $headers): void
+{
+    if ($eventId === '') {
+        return;
+    }
+
+    // Fetch all sessions for this event.
+    $sessionsUrl = rtrim(SUPABASE_URL, '/')
+        . '/rest/v1/event_sessions?select=id,event_id,title,topic'
+        . '&event_id=eq.' . rawurlencode($eventId);
+    $sessionsRes = supabase_request('GET', $sessionsUrl, $headers);
+    if (!$sessionsRes['ok']) {
+        return;
+    }
+
+    $sessionRows = json_decode((string) ($sessionsRes['body'] ?? ''), true);
+    if (!is_array($sessionRows) || count($sessionRows) === 0) {
+        return;
+    }
+
+    $baseQuestions = [
+        [
+            'question_text' => 'How would you rate this seminar overall? (1-5)',
+            'field_type' => 'rating',
+            'required' => true,
+            'sort_order' => 1,
+        ],
+        [
+            'question_text' => 'What did you learn most from this seminar?',
+            'field_type' => 'text',
+            'required' => false,
+            'sort_order' => 2,
+        ],
+        [
+            'question_text' => 'Any suggestions to improve this seminar?',
+            'field_type' => 'text',
+            'required' => false,
+            'sort_order' => 3,
+        ],
+    ];
+
+    $insertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions';
+    $baseHeaders = $headers;
+    $baseHeaders[] = 'Prefer: return=minimal';
+
+    foreach ($sessionRows as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+
+        $sessionId = trim((string) ($session['id'] ?? ''));
+        if ($sessionId === '') {
+            continue;
+        }
+
+        // Skip if this session already has questions.
+        $checkUrl = rtrim(SUPABASE_URL, '/')
+            . '/rest/v1/event_session_evaluation_questions?select=id,session_id'
+            . '&session_id=eq.' . rawurlencode($sessionId)
+            . '&limit=1';
+        $checkRes = supabase_request('GET', $checkUrl, $headers);
+        if (!$checkRes['ok']) {
+            continue;
+        }
+
+        $existing = json_decode((string) ($checkRes['body'] ?? ''), true);
+        if (is_array($existing) && count($existing) > 0) {
+            continue;
+        }
+
+        $payloads = [];
+        foreach ($baseQuestions as $q) {
+            $payloads[] = [
+                'session_id' => $sessionId,
+                'question_text' => (string) ($q['question_text'] ?? ''),
+                'field_type' => (string) ($q['field_type'] ?? 'text'),
+                'required' => !empty($q['required']),
+                'sort_order' => isset($q['sort_order']) ? max(0, (int) $q['sort_order']) : 0,
+            ];
+        }
+
+        $insertRes = supabase_request('POST', $insertUrl, $baseHeaders, json_encode($payloads, JSON_UNESCAPED_SLASHES));
+        if (!$insertRes['ok']) {
+            // Best-effort; continue seeding other sessions.
+            continue;
+        }
+    }
+}
+
 function fetch_event_for_approval(string $eventId, array $headers): ?array
 {
+    $supportsProposalStage = true;
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
         . '?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration'
+        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration,proposal_stage,requirements_requested_at,requirements_submitted_at'
         . '&limit=1';
     $res = supabase_request('GET', $url, $headers);
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-        if (str_contains($message, 'allow_registration')
+        if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage') || str_contains($message, 'requirements_requested_at') || str_contains($message, 'requirements_submitted_at'))
             && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
+            $supportsProposalStage = false;
             $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
                 . '?id=eq.' . rawurlencode($eventId)
                 . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location'
@@ -57,6 +212,10 @@ function fetch_event_for_approval(string $eventId, array $headers): ?array
     if (!array_key_exists('allow_registration', $event)) {
         $event['allow_registration'] = false;
     }
+    if (!array_key_exists('proposal_stage', $event)) {
+        $event['proposal_stage'] = null;
+    }
+    $event['proposal_stage_supported'] = $supportsProposalStage;
     return $event;
 }
 
@@ -136,6 +295,11 @@ function extract_student_year_level(array $row): string
         return (string) $matches[1];
     }
 
+    // Common section formats like "BSIT SD 1B" / "BSCS-2A".
+    if (preg_match('/([1-4])[A-Z]\b/i', $sectionName, $matches)) {
+        return (string) $matches[1];
+    }
+
     if (preg_match('/-([1-4])[A-Z]?$/i', $sectionName, $matches)) {
         return (string) $matches[1];
     }
@@ -163,6 +327,42 @@ function student_matches_event_target(array $row, string $eventFor): bool
 
     if (in_array($normalizedTarget, ['1', '2', '3', '4'], true)) {
         return $studentYear === $normalizedTarget;
+    }
+
+    if (preg_match('/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/', $normalizedTarget, $matches)) {
+        $targetCourse = $matches[1];
+        $rawYears = preg_split('/\s*,\s*/', trim($matches[2])) ?: [];
+
+        $targetYears = [];
+        foreach ($rawYears as $rawYear) {
+            $candidate = strtoupper(trim((string) $rawYear));
+            if ($candidate === 'ALL') {
+                $targetYears = ['ALL'];
+                break;
+            }
+            if (in_array($candidate, ['1', '2', '3', '4'], true)) {
+                $targetYears[$candidate] = true;
+            }
+        }
+
+        if (empty($targetYears)) {
+            $targetYears = ['ALL'];
+        } elseif (!array_is_list($targetYears)) {
+            $targetYears = array_keys($targetYears);
+        }
+
+        $courseMatches = $targetCourse === 'ALL'
+            ? true
+            : ($studentCourse !== '' && $studentCourse === $targetCourse);
+        if (!$courseMatches) {
+            return false;
+        }
+
+        if (count($targetYears) === 1 && $targetYears[0] === 'ALL') {
+            return true;
+        }
+
+        return $studentYear !== '' && in_array($studentYear, $targetYears, true);
     }
 
     return false;
@@ -308,8 +508,17 @@ if (!is_array($existingEvent)) {
 }
 
 $previousStatus = (string) ($existingEvent['status'] ?? '');
+$proposalStage = strtolower(trim((string) ($existingEvent['proposal_stage'] ?? 'pending_requirements')));
+$supportsProposalStage = !empty($existingEvent['proposal_stage_supported']);
 $initialPublishFlow = $status === 'published' && in_array($previousStatus, ['approved', 'pending'], true);
 $validTeacherIds = [];
+
+if ($status === 'approved' && $supportsProposalStage && $proposalStage !== 'under_review') {
+    json_response([
+        'ok' => false,
+        'error' => 'Request and review the required proposal documents before approving this proposal.',
+    ], 400);
+}
 
 if ($initialPublishFlow) {
     if (empty($teacherIds)) {
@@ -342,6 +551,10 @@ $payload = [
     'updated_at' => gmdate('c'),
 ];
 
+if ($status === 'approved' && $supportsProposalStage) {
+    $payload['proposal_stage'] = 'approved';
+}
+
 if ($status === 'published' && $previousStatus !== 'published') {
     $payload['allow_registration'] = false;
 }
@@ -354,14 +567,15 @@ if (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
 
 $updateHeaders = $headers;
 $updateHeaders[] = 'Prefer: return=representation';
-$updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration';
+$updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration,proposal_stage';
 $res = supabase_request('PATCH', $updateUrl, $updateHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
 if (!$res['ok']) {
     $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-    if (str_contains($message, 'allow_registration')
+    if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage'))
         && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
         $retryPayload = $payload;
         unset($retryPayload['allow_registration']);
+        unset($retryPayload['proposal_stage']);
         $fallbackUpdateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId) . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location';
         $res = supabase_request('PATCH', $fallbackUpdateUrl, $updateHeaders, json_encode($retryPayload, JSON_UNESCAPED_SLASHES));
     }
@@ -465,6 +679,12 @@ if ($event && in_array($status, ['published', 'draft'], true)) {
             ]);
         }
     }
+}
+
+// Seed default "common questions" on initial publish so evaluation isn't blank.
+if ($event && $initialPublishFlow) {
+    evaluation_seed_event_questions_if_missing($eventId, $headers);
+    evaluation_seed_session_questions_if_missing($eventId, $headers);
 }
 
 json_response(['ok' => true, 'event' => $event], 200);

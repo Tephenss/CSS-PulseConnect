@@ -24,7 +24,8 @@ $url = rtrim((string) SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?select=id'
     . '&role=eq.student'
     . '&registration_source=eq.app'
-    . '&account_status=eq.pending';
+    . '&account_status=eq.pending'
+    . '&email_verified=eq.true';
 
 $headers = [
     'Accept: application/json',
