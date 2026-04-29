@@ -226,7 +226,7 @@ function render_header(string $title, ?array $user): void
     echo '</header>';
 
     // ══════ NOTIFICATION SYSTEM (Admin Only) ══════
-    if ($role === 'admin') {
+    if (in_array($role, ['admin', 'teacher'], true)) {
         echo '
         <div id="notif-system" class="fixed bottom-6 right-6 z-[999] flex flex-col items-end pointer-events-none">
             
@@ -242,7 +242,7 @@ function render_header(string $title, ?array $user): void
                 </div>
                 
                 <div class="px-5 py-3 border-t border-zinc-100 bg-zinc-50 rounded-b-2xl">
-                    <a href="/manage_events.php" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
+                    <a href="/notifications.php" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
                 </div>
             </div>
 
@@ -271,6 +271,7 @@ function render_header(string $title, ?array $user): void
             let isPanelOpen = false;
             let loadedNotifications = [];
             let unreadCount = 0;
+            const readStorageKey = "pulse_notifs_read";
             
             function formatTimeAgo(isoString) {
                 const date = new Date(isoString);
@@ -289,7 +290,7 @@ function render_header(string $title, ?array $user): void
                 let html = "";
                 data.forEach(item => {
                     html += `
-                    <a href="${item.link || \'/manage_events.php\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
+                    <a href="${item.link || \'/notifications.php\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
                         <div class="mt-1 w-9 h-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
                             <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" /></svg>
                         </div>
@@ -304,7 +305,7 @@ function render_header(string $title, ?array $user): void
             }
             
             function updateBadge() {
-                const readIds = JSON.parse(localStorage.getItem("pulse_notifs_read") || "[]");
+                const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
                 unreadCount = loadedNotifications.filter(n => !readIds.includes(n.id)).length;
                 
                 if (unreadCount > 0) {
@@ -317,7 +318,7 @@ function render_header(string $title, ?array $user): void
             
             async function fetchNotifications() {
                 try {
-                    const res = await fetch("/api/get_notifications.php");
+                    const res = await fetch("/api/get_notifications.php?limit=10", { cache: "no-store" });
                     const data = await res.json();
                     if (data.ok) {
                         loadedNotifications = data.notifications;
@@ -353,7 +354,7 @@ function render_header(string $title, ?array $user): void
             markReadBtn.addEventListener("click", (e) => {
                 e.preventDefault();
                 const readIds = loadedNotifications.map(n => n.id);
-                localStorage.setItem("pulse_notifs_read", JSON.stringify(readIds));
+                localStorage.setItem(readStorageKey, JSON.stringify(readIds));
                 updateBadge();
             });
             

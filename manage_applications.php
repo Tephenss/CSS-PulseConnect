@@ -20,6 +20,7 @@ $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?select=id,first_name,middle_name,last_name,suffix,email,student_id,course,account_status,approval_note,email_verified,created_at,reviewed_at'
     . '&role=eq.student'
     . '&registration_source=eq.app'
+    . '&account_status=in.(pending,approved,rejected)'
     . '&order=created_at.desc'
     . '&limit=500';
 

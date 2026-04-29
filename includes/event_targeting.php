@@ -48,6 +48,11 @@ function extract_student_year_level(array $row): string
         return (string) $matches[1];
     }
 
+    // Common section formats like "BSIT SD 1B" / "BSCS-2A".
+    if (preg_match('/([1-4])[A-Z]\b/i', $sectionName, $matches)) {
+        return (string) $matches[1];
+    }
+
     if (preg_match('/-([1-4])[A-Z]?$/i', $sectionName, $matches)) {
         return (string) $matches[1];
     }

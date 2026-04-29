@@ -57,10 +57,6 @@ render_header('Users & Roles', $user);
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
               Add Manually
           </button>
-          <button type="button" onclick="alert('File Parsing Backend Required: Feature Coming Soon!')" class="w-full flex items-center gap-2 px-4 py-3 text-[13px] font-bold text-zinc-700 hover:bg-orange-50 hover:text-orange-700 transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m3.75 9v6m3-3H9m1.5-12H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-              Import Teachers
-          </button>
         </div>
       </div>
       
@@ -383,7 +379,11 @@ render_header('Users & Roles', $user);
       </button>
     </div>
     <form id="formRegisterTeacher" class="p-5 space-y-4 max-h-[min(70vh,520px)] overflow-y-auto">
-      <p class="text-sm text-zinc-600">Creates a new account with role <span class="font-semibold text-sky-800">Teacher</span>. They can log in with the email and password you set.</p>
+      <p class="text-sm text-zinc-600">
+        Creates a new account with role <span class="font-semibold text-sky-800">Teacher</span>.
+        A temporary password will be auto-generated and emailed to the teacher.
+        They should change it in <span class="font-semibold">Settings &gt; Change Password</span>.
+      </p>
       <div id="regTeacherErr" class="hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="sm:col-span-1">
@@ -412,15 +412,6 @@ render_header('Users & Roles', $user);
           <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_contact">Contact Number</label>
           <input id="rt_contact" name="contact_number" type="text" placeholder="09123456789" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
-      </div>
-      <div>
-        <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_password">Password</label>
-        <input id="rt_password" name="password" type="password" required minlength="8" autocomplete="new-password" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
-        <p class="text-[11px] text-zinc-500 mt-1">At least 8 characters.</p>
-      </div>
-      <div>
-        <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_password2">Confirm password</label>
-        <input id="rt_password2" name="password2" type="password" required minlength="8" autocomplete="new-password" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
       </div>
       <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-2">
         <button type="button" id="btnCancelRegisterTeacher" class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Cancel</button>
@@ -477,13 +468,6 @@ render_header('Users & Roles', $user);
     regErr.classList.add('hidden');
     regErr.textContent = '';
     const fd = new FormData(formReg);
-    const pw = (fd.get('password') || '').toString();
-    const pw2 = (fd.get('password2') || '').toString();
-    if (pw !== pw2) {
-      regErr.textContent = 'Passwords do not match.';
-      regErr.classList.remove('hidden');
-      return;
-    }
     const submitBtn = document.getElementById('btnSubmitRegisterTeacher');
     const prev = submitBtn.textContent;
     submitBtn.disabled = true;
@@ -500,12 +484,11 @@ render_header('Users & Roles', $user);
           suffix: fd.get('suffix'),
           contact_number: fd.get('contact_number'),
           email: fd.get('email'),
-          password: pw,
         }),
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Registration failed');
-      showToast('Teacher account created.');
+      showToast('Teacher account created. Credentials were emailed.');
       closeModalReg();
       setTimeout(() => window.location.reload(), 400);
     } catch (err) {

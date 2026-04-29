@@ -506,3 +506,79 @@ function send_password_reset_code_email(
     return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
 }
 
+function send_teacher_account_credentials_email(
+    string $recipientEmail,
+    string $fullName,
+    string $plainPassword
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($fullName) !== '' ? trim($fullName) : 'Teacher';
+    $subject = 'PulseCONNECT Teacher Account Credentials';
+
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Your teacher account has been created.\n\n"
+        . "Login credentials:\n"
+        . "Email: {$to}\n"
+        . "Temporary Password: {$plainPassword}\n\n"
+        . "Important: Please change your password after logging in.\n"
+        . "Go to Settings > Change Password to set your own password.\n";
+
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:0;background:#F4F4F5;font-family:Arial,sans-serif;color:#111827;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">'
+        . '<tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
+        . '<tr><td style="background:#111827;padding:20px 24px;">'
+        . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">PulseCONNECT</h1>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Teacher Account Credentials</p>'
+        . '</td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . '<p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;color:#18181B;">Your teacher account has been created. Use the credentials below to log in:</p>'
+        . '<div style="border:1px solid #E4E4E7;border-radius:12px;padding:14px 16px;background:#FAFAFA;">'
+        . '<div style="font-size:12px;color:#71717A;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px;">Login Credentials</div>'
+        . '<div style="font-size:14px;color:#18181B;margin:0 0 6px 0;"><strong>Email:</strong> ' . htmlspecialchars($to, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<div style="font-size:14px;color:#18181B;margin:0;"><strong>Temporary Password:</strong> <span style="font-family:Consolas,monospace;font-weight:700;">' . htmlspecialchars($plainPassword, ENT_QUOTES, 'UTF-8') . '</span></div>'
+        . '</div>'
+        . '<div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;">'
+        . '<div style="font-weight:700;margin-bottom:4px;">Important</div>'
+        . '<div style="font-size:13px;line-height:1.5;">Please change your password after logging in. Go to <strong>Settings &gt; Change Password</strong> to set your own password.</div>'
+        . '</div>'
+        . '<p style="margin:14px 0 0 0;font-size:12px;color:#71717A;">This is an automated message from PulseCONNECT.</p>'
+        . '</td></tr></table>'
+        . '</td></tr></table>'
+        . '</body></html>';
+
+    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
+    $body = build_multipart_body($textMessage, $htmlMessage);
+
+    $smtpHost = trim((string) SMTP_HOST);
+    $smtpUser = trim((string) SMTP_USERNAME);
+    $smtpPass = (string) SMTP_PASSWORD;
+    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
+        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
+        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
+        $smtpFromName = trim((string) SMTP_FROM_NAME);
+        $smtpResult = smtp_send_mail(
+            $smtpHost,
+            $smtpPort,
+            $smtpEncryption,
+            $smtpUser,
+            $smtpPass,
+            EMAIL_SENDER_ADDRESS,
+            $smtpFromName,
+            $to,
+            $subject,
+            $body
+        );
+        if ($smtpResult) {
+            return true;
+        }
+    }
+
+    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+}
+

@@ -102,8 +102,20 @@ if ($previousAllowRegistration !== $allowRegistration) {
     )));
 
     if ($targetIds !== []) {
-        // Intentionally keep registration-access toggles silent.
-        // Publishing notifications are handled by events_approve.php.
+        // Notify students only when registration is opened via toggle.
+        // Keep OFF toggles silent to avoid unnecessary noise.
+        if ($allowRegistration && !$previousAllowRegistration) {
+            $eventTitle = trim((string) ($updatedEvent['title'] ?? 'this event'));
+            notify_users_for_registration_access(
+                $targetIds,
+                'Registration Open',
+                'Registration is now open for "' . $eventTitle . '". You can now register.',
+                [
+                    'event_id' => (string) ($updatedEvent['id'] ?? $eventId),
+                    'type' => 'reg_open',
+                ]
+            );
+        }
     }
 }
 
