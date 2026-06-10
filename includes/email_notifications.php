@@ -552,6 +552,94 @@ function send_teacher_account_credentials_email(
         . '</td></tr></table>'
         . '</body></html>';
 
+    return send_multipart_email($to, $subject, $textMessage, $htmlMessage);
+}
+
+function send_mobile_email_verification_code_email(
+    string $recipientEmail,
+    string $fullName,
+    string $code
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($fullName) !== '' ? trim($fullName) : 'CCS PulseConnect User';
+    $subject = 'CCS PulseConnect Email Verification Code';
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Your verification code is: {$code}\n\n"
+        . "This code expires in 5 minutes.\n"
+        . "If you did not request this, please ignore this email.";
+
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:0;background:#F4F4F5;font-family:Arial,sans-serif;color:#111827;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">'
+        . '<tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
+        . '<tr><td style="background:#111827;padding:20px 24px;">'
+        . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">CCS PulseConnect</h1>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Email Verification</p>'
+        . '</td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . '<p style="margin:0 0 10px 0;font-size:15px;line-height:1.6;color:#18181B;">Your verification code is:</p>'
+        . '<div style="display:inline-block;padding:10px 16px;border-radius:10px;background:#111827;color:#FFFFFF;font-weight:700;font-size:24px;letter-spacing:4px;">' . htmlspecialchars($code, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<p style="margin:14px 0 0 0;font-size:13px;color:#52525B;">This code expires in <strong>5 minutes</strong>.</p>'
+        . '<p style="margin:8px 0 0 0;font-size:12px;color:#71717A;">If you did not request this, please ignore this email.</p>'
+        . '</td></tr></table>'
+        . '</td></tr></table>'
+        . '</body></html>';
+
+    return send_multipart_email($to, $subject, $textMessage, $htmlMessage);
+}
+
+function send_application_under_review_email(
+    string $recipientEmail,
+    string $fullName
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($fullName) !== '' ? trim($fullName) : 'CCS PulseConnect User';
+    $subject = 'CCS PulseConnect Application Under Review';
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Your student registration has been received.\n"
+        . "Your account is now under admin review.\n\n"
+        . "Please wait for another email once your application is approved or rejected.";
+
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:0;background:#F4F4F5;font-family:Arial,sans-serif;color:#111827;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">'
+        . '<tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
+        . '<tr><td style="background:#111827;padding:20px 24px;">'
+        . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">CCS PulseConnect</h1>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Application Status</p>'
+        . '</td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . '<p style="margin:0 0 10px 0;font-size:15px;line-height:1.6;color:#18181B;">Your student registration has been received.</p>'
+        . '<p style="margin:0 0 10px 0;font-size:15px;line-height:1.6;color:#18181B;">Your account is now <strong>under admin review</strong>.</p>'
+        . '<p style="margin:0;font-size:14px;color:#52525B;">Please wait for another email once your application is approved or rejected.</p>'
+        . '</td></tr></table>'
+        . '</td></tr></table>'
+        . '</body></html>';
+
+    return send_multipart_email($to, $subject, $textMessage, $htmlMessage);
+}
+
+function send_multipart_email(
+    string $recipientEmail,
+    string $subject,
+    string $textMessage,
+    string $htmlMessage
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
     $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
     $body = build_multipart_body($textMessage, $htmlMessage);
 

@@ -41,6 +41,120 @@ function admin_login_headers(): array
     ];
 }
 
+function admin_login_write_headers(): array
+{
+    return [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: resolution=merge-duplicates,return=representation',
+    ];
+}
+
+function admin_login_ph_timezone(): DateTimeZone
+{
+    return new DateTimeZone('Asia/Manila');
+}
+
+function admin_login_verified_on_current_ph_day(?string $verifiedAtIso): bool
+{
+    if (!is_string($verifiedAtIso) || trim($verifiedAtIso) === '') {
+        return false;
+    }
+
+    try {
+        $verified = (new DateTimeImmutable($verifiedAtIso))->setTimezone(admin_login_ph_timezone());
+        $today = new DateTimeImmutable('now', admin_login_ph_timezone());
+
+        return $verified->format('Y-m-d') === $today->format('Y-m-d');
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function admin_login_resolve_full_name(array $user): string
+{
+    $fullName = trim((string) ($user['full_name'] ?? ''));
+    if ($fullName !== '') {
+        return $fullName;
+    }
+
+    return build_display_name(
+        (string) ($user['first_name'] ?? ''),
+        (string) ($user['middle_name'] ?? ''),
+        (string) ($user['last_name'] ?? ''),
+        (string) ($user['suffix'] ?? '')
+    );
+}
+
+function admin_login_fetch_daily_verification(string $userId): ?string
+{
+    if ($userId === '') {
+        return null;
+    }
+
+    $res = supabase_request(
+        'GET',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/admin_login_daily_verifications'
+            . '?select=verified_at'
+            . '&user_id=eq.' . rawurlencode($userId)
+            . '&limit=1',
+        admin_login_headers()
+    );
+
+    if (!$res['ok']) {
+        return null;
+    }
+
+    $rows = json_decode((string) $res['body'], true);
+    if (!is_array($rows) || !isset($rows[0]['verified_at'])) {
+        return null;
+    }
+
+    return (string) $rows[0]['verified_at'];
+}
+
+function admin_login_has_valid_daily_verification(string $userId): bool
+{
+    $verifiedAt = admin_login_fetch_daily_verification($userId);
+
+    return admin_login_verified_on_current_ph_day($verifiedAt);
+}
+
+function admin_login_store_daily_verification(string $userId): void
+{
+    if ($userId === '') {
+        return;
+    }
+
+    $now = gmdate('c');
+    $payload = [
+        'user_id' => $userId,
+        'verified_at' => $now,
+        'updated_at' => $now,
+    ];
+
+    supabase_request(
+        'POST',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/admin_login_daily_verifications',
+        admin_login_write_headers(),
+        json_encode($payload, JSON_UNESCAPED_SLASHES)
+    );
+}
+
+function admin_login_establish_user_session(string $userId, string $fullName, string $email, string $role = 'admin'): void
+{
+    session_regenerate_id(true);
+    $_SESSION['user'] = [
+        'id' => $userId,
+        'full_name' => $fullName !== '' ? $fullName : 'Admin',
+        'email' => $email,
+        'role' => $role,
+    ];
+    unset($_SESSION['admin_login_challenge']);
+}
+
 function admin_login_generate_code(): string
 {
     return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
@@ -107,15 +221,7 @@ function admin_login_issue_challenge(array $user, ?string &$error, ?string &$inf
 {
     $userId = trim((string) ($user['id'] ?? ''));
     $email = trim((string) ($user['email'] ?? ''));
-    $fullName = trim((string) ($user['full_name'] ?? ''));
-    if ($fullName === '') {
-        $fullName = build_display_name(
-            (string) ($user['first_name'] ?? ''),
-            (string) ($user['middle_name'] ?? ''),
-            (string) ($user['last_name'] ?? ''),
-            (string) ($user['suffix'] ?? '')
-        );
-    }
+    $fullName = admin_login_resolve_full_name($user);
 
     if ($userId === '' || $email === '') {
         $error = 'Missing admin account details. Please try again.';
@@ -214,14 +320,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $error = 'Invalid verification code.';
                         } else {
                             admin_login_delete_code((string) ($challenge['id'] ?? ''));
-                            session_regenerate_id(true);
-                            $_SESSION['user'] = [
-                                'id' => (string) ($challenge['id'] ?? ''),
-                                'full_name' => (string) ($challenge['full_name'] ?? 'Admin'),
-                                'email' => (string) ($challenge['email'] ?? ''),
-                                'role' => 'admin',
-                            ];
-                            unset($_SESSION['admin_login_challenge']);
+                            admin_login_store_daily_verification((string) ($challenge['id'] ?? ''));
+                            admin_login_establish_user_session(
+                                (string) ($challenge['id'] ?? ''),
+                                (string) ($challenge['full_name'] ?? 'Admin'),
+                                (string) ($challenge['email'] ?? '')
+                            );
                             header('Location: home.php');
                             exit;
                         }
@@ -271,6 +375,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if ($role !== 'admin') {
                                 $error = 'Students and Teachers must use the new mobile app to login.';
                             } else {
+                                $userId = trim((string) ($user['id'] ?? ''));
+                                $fullName = admin_login_resolve_full_name($user);
+                                $userEmail = trim((string) ($user['email'] ?? ''));
+
+                                if (admin_login_has_valid_daily_verification($userId)) {
+                                    admin_login_establish_user_session($userId, $fullName, $userEmail);
+                                    header('Location: home.php');
+                                    exit;
+                                }
+
                                 if (admin_login_issue_challenge($user, $error, $info)) {
                                     header('Location: login.php?step=verify');
                                     exit;
@@ -406,7 +520,12 @@ $isVerificationMode = $challenge !== null && $isVerificationStep;
                             class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
                             placeholder="Your password" autocomplete="current-password" />
 
-                        <div class="h-5"></div>
+                        <div class="auth-links mt-2 mb-1">
+                            <span></span>
+                            <a href="forgot_password.php">Forgot password?</a>
+                        </div>
+
+                        <div class="h-3"></div>
 
                         <button type="submit"
                             class="w-full rounded-xl bg-zinc-100 text-zinc-900 px-4 py-3 font-medium hover:bg-zinc-200 transition">
