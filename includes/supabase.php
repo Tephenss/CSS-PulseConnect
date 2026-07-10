@@ -1,7 +1,32 @@
 <?php
 declare(strict_types=1);
 
-function supabase_request(string $method, string $url, array $headers, ?string $body = null): array
+function supabase_is_retryable_curl_error(?string $error): bool
+{
+    if (!is_string($error) || trim($error) === '') {
+        return false;
+    }
+
+    $lower = strtolower($error);
+    foreach ([
+        'timeout',
+        'timed out',
+        'connection reset',
+        'could not resolve',
+        'ssl',
+        'recv failure',
+        'failed to connect',
+        'empty reply from server',
+    ] as $needle) {
+        if (str_contains($lower, $needle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function supabase_request_once(string $method, string $url, array $headers, ?string $body = null): array
 {
     $ch = curl_init($url);
     if ($ch === false) {
@@ -9,18 +34,30 @@ function supabase_request(string $method, string $url, array $headers, ?string $
     }
 
     $skipSslVerify = defined('SUPABASE_DEV_SKIP_SSL_VERIFY') ? (bool) SUPABASE_DEV_SKIP_SSL_VERIFY : false;
+    $hasLargeBody = is_string($body) && strlen($body) > 100000;
+    $connectTimeout = $hasLargeBody ? 20 : 15;
+    $timeout = $hasLargeBody ? 90 : 30;
 
-    curl_setopt_array($ch, [
+    $options = [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_TIMEOUT => 60,
+        CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_NOSIGNAL => true,
+        CURLOPT_TCP_KEEPALIVE => 1,
         // DEV ONLY: if you see "unable to get local issuer certificate", keep this true.
         // For production, configure a proper CA bundle instead.
         CURLOPT_SSL_VERIFYPEER => $skipSslVerify ? false : true,
         CURLOPT_SSL_VERIFYHOST => $skipSslVerify ? 0 : 2,
-    ]);
+    ];
+
+    if (defined('CURL_IPRESOLVE_V4')) {
+        $options[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
+    }
+
+    curl_setopt_array($ch, $options);
 
     if ($body !== null) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
@@ -41,6 +78,28 @@ function supabase_request(string $method, string $url, array $headers, ?string $
         'body' => $responseBody,
         'error' => null,
     ];
+}
+
+function supabase_request(string $method, string $url, array $headers, ?string $body = null): array
+{
+    $maxAttempts = 3;
+    $lastResult = ['ok' => false, 'status' => 0, 'body' => null, 'error' => 'cURL request failed'];
+
+    for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+        $lastResult = supabase_request_once($method, $url, $headers, $body);
+        if (($lastResult['ok'] ?? false) === true) {
+            return $lastResult;
+        }
+
+        $curlError = (string) ($lastResult['error'] ?? '');
+        if (!supabase_is_retryable_curl_error($curlError) || $attempt === $maxAttempts) {
+            return $lastResult;
+        }
+
+        usleep(300000 * $attempt);
+    }
+
+    return $lastResult;
 }
 
 function extract_supabase_message($body, int $httpStatus, string $fallback): string
@@ -72,9 +131,13 @@ function extract_supabase_message($body, int $httpStatus, string $fallback): str
 function build_error($body, int $httpStatus, ?string $curlError, string $fallback): string
 {
     if (is_string($curlError) && trim($curlError) !== '') {
+        $lower = strtolower($curlError);
+        if (str_contains($lower, 'ssl connection timeout') || str_contains($lower, 'connection timed out')) {
+            return 'Could not reach the server. Check your internet connection or turn off VPN, then try again.';
+        }
+
         return 'cURL error: ' . $curlError;
     }
 
     return extract_supabase_message($body, $httpStatus, $fallback);
 }
-

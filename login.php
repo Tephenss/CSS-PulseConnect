@@ -372,8 +372,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         } else {
                             $role = isset($user['role']) ? (string) $user['role'] : 'student';
 
-                            if ($role !== 'admin') {
-                                $error = 'Students and Teachers must use the new mobile app to login.';
+                            if ($role === 'teacher') {
+                                $userId = trim((string) ($user['id'] ?? ''));
+                                $fullName = admin_login_resolve_full_name($user);
+                                $userEmail = trim((string) ($user['email'] ?? ''));
+                                admin_login_establish_user_session($userId, $fullName, $userEmail, 'teacher');
+                                header('Location: home.php');
+                                exit;
+                            } elseif ($role !== 'admin') {
+                                $error = 'Students must use the mobile app to login.';
                             } else {
                                 $userId = trim((string) ($user['id'] ?? ''));
                                 $fullName = admin_login_resolve_full_name($user);

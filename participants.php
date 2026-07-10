@@ -12,7 +12,7 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 
-$user = require_role(['admin']);
+$user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'admin');
 $userId = (string) ($user['id'] ?? '');
 $appTz = new DateTimeZone('Asia/Manila');
@@ -68,8 +68,11 @@ $participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_G
 if (!in_array($participantTab, ['participants', 'absence_reasons'], true)) {
     $participantTab = 'participants';
 }
-$backHref = '/events.php';
-$returnTo = '/events.php';
+if ($role === 'teacher' && $participantTab === 'absence_reasons') {
+    $participantTab = 'participants';
+}
+$backHref = $role === 'teacher' ? '/manage_events.php' : '/events.php';
+$returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 $attendanceCountsAsPresent = static function (?array $row): bool {
@@ -1276,20 +1279,23 @@ if ($eventWindowClosed) {
 render_header('Participants', $user);
 ?>
 
-<div class="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-  <div>
-    <h2 class="text-xl font-bold text-zinc-900 mb-1 leading-tight"><?= htmlspecialchars((string) ($event['title'] ?? 'Event')) ?></h2>
-    <p class="text-zinc-600 text-sm">Participant directory and real-time attendance tracking.</p>
-  </div>
-  <div class="flex flex-wrap items-center gap-2.5">
+<div class="mb-4">
+  <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
+    <div class="flex items-center gap-3">
+      <a href="<?= htmlspecialchars($backHref) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
+        <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+      </a>
+      <div>
+        <h2 class="text-xl md:text-2xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars((string) ($event['title'] ?? 'Event')) ?></h2>
+        <p class="text-sm text-zinc-500 mt-1">Participant directory and real-time attendance tracking.</p>
+      </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2.5">
     <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=excel<?= htmlspecialchars($returnToQuery) ?>" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
       <svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
       Export Excel
     </a>
-    <a href="<?= htmlspecialchars($backHref) ?>" class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-800 hover:bg-zinc-50 transition font-medium flex items-center gap-1.5 shadow-sm">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
-      Back
-    </a>
+    </div>
   </div>
 </div>
 

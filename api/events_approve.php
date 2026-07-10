@@ -8,6 +8,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/registration_access.php';
 
 $user = require_role(['admin']);
 $data = require_post_json();
@@ -188,12 +189,12 @@ function fetch_event_for_approval(string $eventId, array $headers): ?array
     $supportsProposalStage = true;
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
         . '?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration,proposal_stage,requirements_requested_at,requirements_submitted_at'
+        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at'
         . '&limit=1';
     $res = supabase_request('GET', $url, $headers);
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-        if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage') || str_contains($message, 'requirements_requested_at') || str_contains($message, 'requirements_submitted_at'))
+        if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage') || str_contains($message, 'requirements_requested_at') || str_contains($message, 'requirements_submitted_at') || str_contains($message, 'is_free_event') || str_contains($message, 'registration_limit'))
             && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
             $supportsProposalStage = false;
             $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
@@ -211,6 +212,9 @@ function fetch_event_for_approval(string $eventId, array $headers): ?array
     $event = $rows[0];
     if (!array_key_exists('allow_registration', $event)) {
         $event['allow_registration'] = false;
+    }
+    if (!array_key_exists('is_free_event', $event)) {
+        $event['is_free_event'] = true;
     }
     if (!array_key_exists('proposal_stage', $event)) {
         $event['proposal_stage'] = null;
@@ -246,126 +250,6 @@ function validate_teacher_ids(array $teacherIds, array $headers): array
     }
 
     return array_keys($valid);
-}
-
-function extract_section_name(mixed $rawSections): string
-{
-    if (is_array($rawSections)) {
-        if (isset($rawSections['name'])) {
-            return trim((string) $rawSections['name']);
-        }
-
-        if (isset($rawSections[0]) && is_array($rawSections[0])) {
-            return trim((string) ($rawSections[0]['name'] ?? ''));
-        }
-    }
-
-    return '';
-}
-
-function normalize_student_course_code(array $row): string
-{
-    $rawCourse = strtoupper(trim((string) ($row['course'] ?? '')));
-    if (in_array($rawCourse, ['IT', 'BSIT'], true)) {
-        return 'BSIT';
-    }
-    if (in_array($rawCourse, ['CS', 'BSCS'], true)) {
-        return 'BSCS';
-    }
-
-    $sectionName = strtoupper(extract_section_name($row['sections'] ?? null));
-    if (str_starts_with($sectionName, 'BSIT')) {
-        return 'BSIT';
-    }
-    if (str_starts_with($sectionName, 'BSCS')) {
-        return 'BSCS';
-    }
-
-    return '';
-}
-
-function extract_student_year_level(array $row): string
-{
-    $sectionName = trim(extract_section_name($row['sections'] ?? null));
-    if ($sectionName === '') {
-        return '';
-    }
-
-    if (preg_match('/\b([1-4])\b/', $sectionName, $matches)) {
-        return (string) $matches[1];
-    }
-
-    // Common section formats like "BSIT SD 1B" / "BSCS-2A".
-    if (preg_match('/([1-4])[A-Z]\b/i', $sectionName, $matches)) {
-        return (string) $matches[1];
-    }
-
-    if (preg_match('/-([1-4])[A-Z]?$/i', $sectionName, $matches)) {
-        return (string) $matches[1];
-    }
-
-    return '';
-}
-
-function student_matches_event_target(array $row, string $eventFor): bool
-{
-    $normalizedTarget = strtoupper(trim($eventFor));
-    if ($normalizedTarget === '' || $normalizedTarget === 'ALL') {
-        return true;
-    }
-
-    $studentCourse = normalize_student_course_code($row);
-    $studentYear = extract_student_year_level($row);
-
-    if (preg_match('/^(BSIT|BSCS)\s*-\s*([1-4])$/', $normalizedTarget, $matches)) {
-        return $studentCourse === $matches[1] && $studentYear === $matches[2];
-    }
-
-    if (in_array($normalizedTarget, ['BSIT', 'BSCS'], true)) {
-        return $studentCourse === $normalizedTarget;
-    }
-
-    if (in_array($normalizedTarget, ['1', '2', '3', '4'], true)) {
-        return $studentYear === $normalizedTarget;
-    }
-
-    if (preg_match('/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/', $normalizedTarget, $matches)) {
-        $targetCourse = $matches[1];
-        $rawYears = preg_split('/\s*,\s*/', trim($matches[2])) ?: [];
-
-        $targetYears = [];
-        foreach ($rawYears as $rawYear) {
-            $candidate = strtoupper(trim((string) $rawYear));
-            if ($candidate === 'ALL') {
-                $targetYears = ['ALL'];
-                break;
-            }
-            if (in_array($candidate, ['1', '2', '3', '4'], true)) {
-                $targetYears[$candidate] = true;
-            }
-        }
-
-        if (empty($targetYears)) {
-            $targetYears = ['ALL'];
-        } elseif (!array_is_list($targetYears)) {
-            $targetYears = array_keys($targetYears);
-        }
-
-        $courseMatches = $targetCourse === 'ALL'
-            ? true
-            : ($studentCourse !== '' && $studentCourse === $targetCourse);
-        if (!$courseMatches) {
-            return false;
-        }
-
-        if (count($targetYears) === 1 && $targetYears[0] === 'ALL') {
-            return true;
-        }
-
-        return $studentYear !== '' && in_array($studentYear, $targetYears, true);
-    }
-
-    return false;
 }
 
 function sync_event_teacher_membership(string $eventId, array $teacherIds, string $adminId, array $headers): array
@@ -556,7 +440,7 @@ if ($status === 'approved' && $supportsProposalStage) {
 }
 
 if ($status === 'published' && $previousStatus !== 'published') {
-    $payload['allow_registration'] = false;
+    $payload['allow_registration'] = normalize_registration_bool($existingEvent['is_free_event'] ?? true);
 }
 
 if (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
@@ -668,7 +552,12 @@ if ($event && in_array($status, ['published', 'draft'], true)) {
 
         if ($status === 'published' && in_array($previousStatus, ['approved', 'pending', 'draft'], true)) {
             $notifTitle = 'New Event Published';
-            $notifBody = '"' . $eventTitle . '" has been published. Registration opens once the organizer enables it.';
+            $isFreeEvent = normalize_registration_bool($existingEvent['is_free_event'] ?? true);
+            if ($isFreeEvent) {
+                $notifBody = '"' . $eventTitle . '" has been published. Registration is now open — you can register now.';
+            } else {
+                $notifBody = '"' . $eventTitle . '" has been published. Payment approval is required before you can register.';
+            }
             $notifType = 'event_published';
         }
 

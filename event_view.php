@@ -306,7 +306,7 @@ render_header('Event Details', $user);
             <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars($status) ?></span>
         </div>
         
-        <?php if ($role === 'admin' || $role === 'teacher'): ?>
+        <?php if ($role === 'admin'): ?>
         <div class="flex items-center gap-2">
             <?php if ($role === 'admin' && $event['status'] === 'pending'): ?>
                 <button id="btnRejectProposal" class="rounded-xl border border-red-200 bg-red-50 text-red-700 font-bold px-4 py-2 text-[13px] hover:bg-red-100 transition shadow-sm">
@@ -510,11 +510,11 @@ render_header('Event Details', $user);
                 </div>
                 <div>
                     <div class="text-[11px] font-black text-zinc-500 uppercase tracking-wider mb-0.5">Target Participants</div>
-                    <div class="text-2xl font-bold text-zinc-900"><?= $totalRegistered ?> <span class="text-sm font-semibold text-zinc-400">Total Registered</span></div>
+                    <div class="text-2xl font-bold text-zinc-900"><?= htmlspecialchars(format_event_registration_total($totalRegistered, $event)) ?> <span class="text-sm font-semibold text-zinc-400"><?= event_registration_limit($event) !== null ? 'Registered' : 'Total Registered' ?></span></div>
                 </div>
             </div>
 
-            <?php if (!$isFinishedEvent): ?>
+            <?php if ($role === 'admin' && !$isFinishedEvent): ?>
             <!-- Registration Toggle (Matches Manual Design) -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm mt-2">
                 <div class="flex items-center justify-between mb-2">
@@ -574,7 +574,7 @@ render_header('Event Details', $user);
     </div>
 </div>
 
-<?php if ($role === 'admin' || $role === 'teacher'): ?>
+<?php if ($role === 'admin'): ?>
 <!-- ═══════════  EDIT EVENT MODAL (With AI & Groq) ═══════════ -->
 <div id="eventModal" class="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none opacity-0 transition-opacity duration-300">
   <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" id="modalBackdrop"></div>
@@ -1058,7 +1058,7 @@ render_header('Event Details', $user);
 </style>
 
 <script>
-<?php if ($role === 'admin' || $role === 'teacher'): ?>
+<?php if ($role === 'admin'): ?>
 // ------------------------------------------------------------------
 // MODAL LOGIC (EDIT EVENT & REGISTRATION TOGGLE)
 // ------------------------------------------------------------------

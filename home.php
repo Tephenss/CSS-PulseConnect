@@ -9,8 +9,8 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 
-$user = require_role(['admin']);
-$role = (string) ($user['role'] ?? 'admin');
+$user = require_role(['admin', 'teacher']);
+$role = (string) ($user['role'] ?? 'teacher');
 
 // Load events to show on homepage (students see published only).
 $select = 'select=id,title,description,location,start_at,end_at,status';

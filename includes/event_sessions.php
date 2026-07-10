@@ -32,30 +32,18 @@ function event_sessions_supported_columns(array $headers): array
         }
     }
 
-    $candidates = [
-        'event_id',
-        'title',
-        'start_at',
-        'end_at',
-        'scan_window_minutes',
-        'attendance_window_minutes',
-        'sort_order',
-        'session_no',
-        'topic',
-        'description',
-        'location',
-        'updated_at',
-    ];
-
-    $supported = ['id'];
-    foreach ($candidates as $column) {
-        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
-            . '?select=id,' . rawurlencode($column)
-            . '&limit=1';
-        $res = supabase_request('GET', $url, $headers);
-        if ($res['ok']) {
-            $supported[] = $column;
-        }
+    $fullSelect = 'id,event_id,title,start_at,end_at,scan_window_minutes,attendance_window_minutes,sort_order,session_no,topic,description,location,updated_at';
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+        . '?select=' . $fullSelect
+        . '&limit=1';
+    $res = supabase_request('GET', $url, $headers);
+    if ($res['ok']) {
+        $supported = array_values(array_filter(array_map(
+            static fn (string $column): string => trim($column),
+            explode(',', $fullSelect)
+        )));
+    } else {
+        $supported = ['id', 'event_id', 'title', 'start_at', 'end_at', 'sort_order', 'session_no'];
     }
 
     $cached = array_values(array_unique($supported));
@@ -279,9 +267,58 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
     }
 }
 
-function fetch_event_sessions(string $eventId, array $headers): array
+function normalize_event_session_rows(array $rows, string $fallbackEventId = ''): array
 {
-    $supportedColumns = event_sessions_supported_columns($headers);
+    $normalized = [];
+    foreach (array_values($rows) as $index => $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $startAt = trim((string) ($row['start_at'] ?? ''));
+        if ($startAt === '') {
+            continue;
+        }
+
+        $eventId = trim((string) ($row['event_id'] ?? $fallbackEventId));
+        $scanWindow = 30;
+        if (isset($row['scan_window_minutes'])) {
+            $scanWindow = max(1, (int) $row['scan_window_minutes']);
+        } elseif (isset($row['attendance_window_minutes'])) {
+            $scanWindow = max(1, (int) $row['attendance_window_minutes']);
+        }
+
+        $endAt = trim((string) ($row['end_at'] ?? ''));
+        if ($endAt === '') {
+            try {
+                $endAt = (new DateTimeImmutable($startAt))->modify('+60 minutes')->format('c');
+            } catch (Throwable $e) {
+                $endAt = $startAt;
+            }
+        }
+
+        $normalized[] = [
+            'id' => (string) ($row['id'] ?? ''),
+            'event_id' => $eventId,
+            'title' => (string) ($row['title'] ?? ''),
+            'topic' => isset($row['topic']) ? (string) $row['topic'] : null,
+            'description' => isset($row['description']) ? (string) $row['description'] : null,
+            'location' => isset($row['location']) ? (string) $row['location'] : null,
+            'start_at' => $startAt,
+            'end_at' => $endAt,
+            'scan_window_minutes' => $scanWindow,
+            'sort_order' => isset($row['sort_order'])
+                ? (int) $row['sort_order']
+                : (isset($row['session_no']) ? max(0, (int) $row['session_no'] - 1) : $index),
+            'session_no' => isset($row['session_no']) ? (int) $row['session_no'] : ($index + 1),
+        ];
+    }
+
+    return $normalized;
+}
+
+function build_event_sessions_select_columns(array $supportedColumns): array
+{
     $selectColumns = ['id', 'event_id', 'title', 'start_at'];
     foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'attendance_window_minutes', 'sort_order', 'session_no'] as $column) {
         if (in_array($column, $supportedColumns, true)) {
@@ -289,9 +326,26 @@ function fetch_event_sessions(string $eventId, array $headers): array
         }
     }
 
+    return array_values(array_unique($selectColumns));
+}
+
+function fetch_event_sessions_map(array $eventIds, array $headers): array
+{
+    $eventIds = array_values(array_unique(array_filter(array_map(
+        static fn ($value): string => trim((string) $value),
+        $eventIds
+    ))));
+    if ($eventIds === []) {
+        return [];
+    }
+
+    $supportedColumns = event_sessions_supported_columns($headers);
+    $selectColumns = build_event_sessions_select_columns($supportedColumns);
+    $inList = '(' . implode(',', array_map('rawurlencode', $eventIds)) . ')';
+
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
         . '?select=' . implode(',', $selectColumns)
-        . '&event_id=eq.' . rawurlencode($eventId);
+        . '&event_id=in.' . $inList;
     if (in_array('sort_order', $supportedColumns, true)) {
         $url .= '&order=sort_order.asc';
     } elseif (in_array('session_no', $supportedColumns, true)) {
@@ -312,65 +366,55 @@ function fetch_event_sessions(string $eventId, array $headers): array
         return [];
     }
 
-    $normalized = [];
-    foreach (array_values($rows) as $index => $row) {
-        if (!is_array($row)) {
+    $grouped = [];
+    foreach (normalize_event_session_rows($rows) as $session) {
+        $eventId = trim((string) ($session['event_id'] ?? ''));
+        if ($eventId === '') {
             continue;
         }
-        $startAt = trim((string) ($row['start_at'] ?? ''));
-        if ($startAt === '') {
-            continue;
-        }
-
-        $scanWindow = 30;
-        if (isset($row['scan_window_minutes'])) {
-            $scanWindow = max(1, (int) $row['scan_window_minutes']);
-        } elseif (isset($row['attendance_window_minutes'])) {
-            $scanWindow = max(1, (int) $row['attendance_window_minutes']);
-        }
-
-        $endAt = trim((string) ($row['end_at'] ?? ''));
-        if ($endAt === '') {
-            try {
-                $endAt = (new DateTimeImmutable($startAt))->modify('+60 minutes')->format('c');
-            } catch (Throwable $e) {
-                $endAt = $startAt;
-            }
-        }
-
-        $normalized[] = [
-            'id' => (string) ($row['id'] ?? ''),
-            'event_id' => (string) ($row['event_id'] ?? $eventId),
-            'title' => (string) ($row['title'] ?? ''),
-            'topic' => isset($row['topic']) ? (string) $row['topic'] : null,
-            'description' => isset($row['description']) ? (string) $row['description'] : null,
-            'location' => isset($row['location']) ? (string) $row['location'] : null,
-            'start_at' => $startAt,
-            'end_at' => $endAt,
-            'scan_window_minutes' => $scanWindow,
-            'sort_order' => isset($row['sort_order'])
-                ? (int) $row['sort_order']
-                : (isset($row['session_no']) ? max(0, (int) $row['session_no'] - 1) : $index),
-            'session_no' => isset($row['session_no']) ? (int) $row['session_no'] : ($index + 1),
-        ];
+        $grouped[$eventId][] = $session;
     }
 
-    return $normalized;
+    return $grouped;
+}
+
+function fetch_event_sessions(string $eventId, array $headers): array
+{
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return [];
+    }
+
+    $map = fetch_event_sessions_map([$eventId], $headers);
+    return $map[$eventId] ?? [];
 }
 
 function attach_event_sessions_to_events(array $events, array $headers): array
 {
+    $eventIds = [];
+    foreach ($events as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $eventId = trim((string) ($event['id'] ?? ''));
+        if ($eventId !== '') {
+            $eventIds[] = $eventId;
+        }
+    }
+
+    $sessionsMap = fetch_event_sessions_map($eventIds, $headers);
+
     foreach ($events as $index => $event) {
         if (!is_array($event)) {
             continue;
         }
 
-        $eventId = (string) ($event['id'] ?? '');
+        $eventId = trim((string) ($event['id'] ?? ''));
         if ($eventId === '') {
             continue;
         }
 
-        $events[$index]['sessions'] = fetch_event_sessions($eventId, $headers);
+        $events[$index]['sessions'] = $sessionsMap[$eventId] ?? [];
     }
 
     return $events;

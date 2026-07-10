@@ -1,6 +1,36 @@
 * { font-family: "Inter", system-ui, -apple-system, sans-serif; }
 body { overflow-x: hidden; }
 
+/* Role-aware chrome colors (matches app palettes). */
+:root {
+  --sidebar-bg: #450a0a;
+  --sidebar-border: rgba(127, 29, 29, 0.45);
+  --sidebar-link: #fca5a5;
+  --sidebar-link-hover-bg: rgba(127, 29, 29, 0.5);
+  --sidebar-link-active-bg: rgba(127, 29, 29, 0.9);
+  --sidebar-link-active-ring: rgba(234, 88, 12, 0.2);
+  --sidebar-section: #f87171;
+  --sidebar-accent-start: #fb923c;
+  --sidebar-accent-end: #ea580c;
+}
+
+body.role-teacher {
+  --sidebar-bg: #0c4a6e;
+  --sidebar-border: rgba(3, 105, 161, 0.45);
+  --sidebar-link: #bae6fd;
+  --sidebar-link-hover-bg: rgba(3, 105, 161, 0.42);
+  --sidebar-link-active-bg: rgba(2, 132, 199, 0.62);
+  --sidebar-link-active-ring: rgba(125, 211, 252, 0.25);
+  --sidebar-section: #7dd3fc;
+  --sidebar-accent-start: #38bdf8;
+  --sidebar-accent-end: #0ea5e9;
+}
+
+.sidebar-shell {
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+}
+
 @keyframes floatLogo {
   0% { transform: translateY(0px); }
   50% { transform: translateY(-6px); filter: drop-shadow(0 8px 6px rgba(0,0,0,0.4)); }
@@ -171,11 +201,11 @@ a:hover .hide-anatomy,
   border-radius: 0.65rem;
   font-size: 0.825rem;
   font-weight: 450;
-  color: #fca5a5;
+  color: var(--sidebar-link);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.sidebar-link:hover { color: #ffffff; background: rgba(127, 29, 29, 0.5); }
-.sidebar-link.active { color: #ffffff; background: rgba(127, 29, 29, 0.9); box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.2); }
+.sidebar-link:hover { color: #ffffff; background: var(--sidebar-link-hover-bg); }
+.sidebar-link.active { color: #ffffff; background: var(--sidebar-link-active-bg); box-shadow: inset 0 0 0 1px var(--sidebar-link-active-ring); }
 .sidebar-link.active::before {
   content: "";
   position: absolute;
@@ -185,7 +215,7 @@ a:hover .hide-anatomy,
   width: 3px;
   height: 60%;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #fb923c, #ea580c);
+  background: linear-gradient(180deg, var(--sidebar-accent-start), var(--sidebar-accent-end));
 }
 .sidebar-link svg {
   width: 18px;
@@ -200,7 +230,7 @@ a:hover .hide-anatomy,
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #f87171;
+  color: var(--sidebar-section);
   padding: 0.5rem 0.85rem 0.35rem;
   margin-top: 0.75rem;
   white-space: nowrap;

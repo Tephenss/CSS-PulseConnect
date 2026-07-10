@@ -43,7 +43,8 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
 }
 
 $eventSelectVariants = [
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
@@ -565,6 +566,12 @@ render_header('Manage Events', $user);
             <div class="step-dot">3</div>
             <span class="step-label hidden sm:inline">Schedule</span>
           </div>
+          <?php if ($role === 'teacher'): ?>
+          <div class="wizard-step" id="ws4">
+            <div class="step-dot">4</div>
+            <span class="step-label hidden sm:inline">Requirements</span>
+          </div>
+          <?php endif; ?>
         </div>
 
         <!-- Step 1: Info -->
@@ -643,6 +650,36 @@ render_header('Manage Events', $user);
               </label>
             </div>
           </div>
+
+          <?php if ($role === 'teacher'): ?>
+          <div>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Registration Type</label>
+            <div class="space-y-2">
+              <label class="inline-flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 cursor-pointer hover:bg-zinc-50 transition w-full">
+                <input type="checkbox" id="registration_type_free" class="registration-type-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" data-value="free" checked />
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold text-zinc-800">Free Event</span>
+                  <span class="block text-[11px] text-zinc-500 leading-snug">When published, students can register immediately.</span>
+                </span>
+              </label>
+              <label class="inline-flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 cursor-pointer hover:bg-zinc-50 transition w-full">
+                <input type="checkbox" id="registration_type_paid" class="registration-type-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" data-value="paid" />
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold text-zinc-800">Paid Event</span>
+                  <span class="block text-[11px] text-zinc-500 leading-snug">Students need payment approval before they can register.</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="mt-3">
+              <label for="registration_limit" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Student Limit</label>
+              <input type="number" id="registration_limit" name="registration_limit" min="1" max="9999" step="1" inputmode="numeric" pattern="[0-9]*"
+                class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition"
+                placeholder="e.g. 50 (max 9999)" />
+              <p class="mt-1 text-[11px] text-zinc-500">Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).</p>
+            </div>
+          </div>
+          <?php endif; ?>
 
           <div class="pt-2">
             <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide">Event Structure</label>
@@ -826,7 +863,82 @@ render_header('Manage Events', $user);
               </div>
             </div>
           </div>
+
+          <?php if ($role === 'teacher'): ?>
+          <div>
+            <label for="registration_close_weeks" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Registration Close Limit</label>
+            <select id="registration_close_weeks" name="registration_close_weeks"
+              class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
+              <option value="1" selected>1 week before event</option>
+              <option value="2">2 weeks before event</option>
+              <option value="3">3 weeks before event</option>
+              <option value="4">4 weeks before event</option>
+            </select>
+          </div>
+          <?php endif; ?>
         </div>
+
+        <?php if ($role === 'teacher'): ?>
+        <div id="step4" class="space-y-4 hidden pb-4">
+          <div class="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
+            <div class="text-xs font-bold uppercase tracking-wide text-orange-700">Phase 4: Requirements</div>
+            <p class="mt-1 text-[12px] leading-relaxed text-orange-800">
+              Upload the required proposal forms now so the event goes directly to admin review after submission.
+            </p>
+          </div>
+
+          <div id="teacherProposalCreateSection">
+          <div id="teacherProposalRequirementsList" class="space-y-3">
+            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
+              data-requirement-code="LU-AA-FO-113"
+              data-default-label="LU-AA-FO-113(ACTIVITY PROPOSAL FORM)"
+              data-required="1">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-bold text-zinc-900">LU-AA-FO-113(ACTIVITY PROPOSAL FORM)</div>
+                  <div class="mt-1 text-[11px] text-zinc-500">Required default document</div>
+                </div>
+                <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
+              </div>
+              <label class="mt-3 block text-xs font-medium text-zinc-600">Upload Image File</label>
+              <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+                class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
+            </div>
+
+            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
+              data-requirement-code="LU-AA-FO-108"
+              data-default-label="LU-AA-FO-108(ANNUAL PROPOSAL PLAN)"
+              data-required="1">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-bold text-zinc-900">LU-AA-FO-108(ANNUAL PROPOSAL PLAN)</div>
+                  <div class="mt-1 text-[11px] text-zinc-500">Required default document</div>
+                </div>
+                <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
+              </div>
+              <label class="mt-3 block text-xs font-medium text-zinc-600">Upload Image File</label>
+              <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+                class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
+            </div>
+          </div>
+
+          <button type="button" id="btnAddTeacherProposalRequirement"
+            class="inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-bold text-orange-700 hover:bg-orange-100 transition">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Add Additional Requirement
+          </button>
+          </div>
+
+          <div id="teacherProposalEditSection" class="hidden space-y-3">
+            <div class="rounded-2xl border border-zinc-200 bg-zinc-50/70 px-4 py-3 text-xs text-zinc-600">
+              Existing uploaded documents are restored below. Upload a new file only for requirements you want to replace, then submit again.
+            </div>
+            <div id="teacherProposalEditRequirementsList" class="space-y-3"></div>
+          </div>
+        </div>
+        <?php endif; ?>
 
         <div id="formMsg" class="text-sm text-amber-800 min-h-0 !mt-0"></div>
       </form>
@@ -1413,8 +1525,38 @@ foreach ($events as $ev) {
     </div>
   </div>
 
-  <?php if ($role === 'admin'): ?>
-    <!-- Tabs Navigation for Admin (Matches PDF Page 33) -->
+  <?php if ($role === 'teacher'): ?>
+    <div class="flex border-b border-zinc-200 mb-5 gap-6 mt-3">
+      <button id="tabActive"
+        class="pb-3 border-b-[2.5px] border-sky-500 font-bold text-sky-600 text-[13px] transition-colors">Active</button>
+      <button id="tabApproval"
+        class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors flex items-center gap-1.5">
+        Approval
+        <?php
+        $approvalCount = 0;
+        foreach ($events as $eventRow) {
+          $statusRow = strtolower(trim((string) ($eventRow['status'] ?? '')));
+          if (in_array($statusRow, ['pending', 'approved', 'rejected'], true)) {
+            $approvalCount++;
+            continue;
+          }
+          $descRow = (string) ($eventRow['description'] ?? '');
+          $isRejectedRow = str_contains($descRow, '[REJECT_REASON:');
+          if ($statusRow === 'archived' && $isRejectedRow) {
+            $approvalCount++;
+          }
+        }
+        ?>
+        <?php if ($approvalCount > 0): ?>
+          <span
+            class="bg-sky-100 border border-sky-200 text-sky-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm"><?= $approvalCount ?></span>
+        <?php endif; ?>
+      </button>
+      <button id="tabExpired"
+        class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors">Expired</button>
+    </div>
+  <?php elseif ($role === 'admin'): ?>
+    <!-- Tabs Navigation for Admin (existing behavior) -->
     <div class="flex border-b border-zinc-200 mb-5 gap-6 mt-3">
       <button id="tabAll"
         class="pb-3 border-b-[2.5px] border-orange-500 font-bold text-orange-600 text-[13px] transition-colors w-24">All
@@ -1529,11 +1671,30 @@ foreach ($events as $ev) {
           $formattedDate = format_date_local($rawDate);
           ?>
           <div
-            class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?>"
+            class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?> <?= $role === 'teacher' ? 'cursor-pointer' : '' ?>"
             data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
             data-type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
             data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
-            data-teacher="<?= htmlspecialchars($tName ?? '') ?>" data-status="<?= htmlspecialchars($status) ?>">
+            data-teacher="<?= htmlspecialchars($tName ?? '') ?>" data-status="<?= htmlspecialchars($status) ?>"
+            data-start-at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
+            data-end-at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
+            data-is-rejected="<?= $isRejected ? '1' : '0' ?>"
+            data-id="<?= htmlspecialchars($eid) ?>"
+            data-location-full="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
+            data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
+            data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
+            data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
+            data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
+            data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
+            data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
+            data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
+            data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+            data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
+            data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
+            data-registration_close_weeks="<?= htmlspecialchars((string) ($e['registration_close_weeks'] ?? '1')) ?>"
+            data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
+            data-can_edit="<?= $canEdit ? '1' : '0' ?>"
+            tabindex="<?= $role === 'teacher' ? '0' : '-1' ?>">
             <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
               <!-- Event Info -->
@@ -1714,6 +1875,7 @@ foreach ($events as $ev) {
                   <button
                     class="btnEdit rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50 transition font-medium"
                     data-id="<?= htmlspecialchars($eid) ?>"
+                    data-status="<?= htmlspecialchars($status) ?>"
                     data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
                     data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
                     data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
@@ -1724,6 +1886,9 @@ foreach ($events as $ev) {
                     data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                     data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
                     data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+                    data-proposal_stage="<?= htmlspecialchars($proposalStage) ?>"
+                    data-proposal_requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
+                    data-proposal_submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
                     data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>">View/Edit</button>
                 <?php endif; ?>
 
@@ -1733,8 +1898,7 @@ foreach ($events as $ev) {
           </div>
         <?php endforeach; ?>
 
-        <?php if (count($events) === 0): ?>
-          <div class="text-center py-16 text-zinc-600">
+        <div id="eventListEmptyState" class="text-center py-16 text-zinc-600 <?= count($events) === 0 ? '' : 'hidden' ?>">
             <div
               class="w-16 h-16 rounded-2xl bg-zinc-100 border border-zinc-200 flex items-center justify-center mx-auto mb-4">
               <svg class="w-8 h-8 text-zinc-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -1744,8 +1908,7 @@ foreach ($events as $ev) {
             </div>
             <h3 class="text-zinc-800 font-medium mb-1">No events yet</h3>
             <p class="text-sm">Click <span class="text-orange-700 font-medium">"Create Event"</span> to get started.</p>
-          </div>
-        <?php endif; ?>
+        </div>
       </div>
     </div>
   </div>
@@ -1875,9 +2038,9 @@ foreach ($events as $ev) {
     <div class="flex items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 sm:px-6">
       <div>
         <div class="text-xs font-black uppercase tracking-[0.24em] text-orange-600">Proposal requirements</div>
-        <h3 id="proposalRequirementsTitle" class="mt-1 text-xl font-bold text-zinc-900">Request proposal documents</h3>
+        <h3 id="proposalRequirementsTitle" class="mt-1 text-xl font-bold text-zinc-900">Submitted proposal documents</h3>
         <p class="mt-1 text-sm text-zinc-500">
-          Select the forms the teacher must upload before this proposal can move into final review.
+          Review the requirement package and uploaded files submitted by the teacher.
         </p>
       </div>
       <button type="button" id="btnCloseProposalRequirements"
@@ -1891,7 +2054,7 @@ foreach ($events as $ev) {
     <div class="modal-body px-5 py-5 sm:px-6">
       <input type="hidden" id="proposalRequirementsEventId" value="" />
 
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4">
+      <div class="hidden rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div class="text-sm font-semibold text-zinc-900">Requirement progress</div>
@@ -1911,7 +2074,7 @@ foreach ($events as $ev) {
         </div>
       </div>
 
-      <div class="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+      <div id="proposalRequirementsEditorSection" class="mt-5 hidden rounded-2xl border border-zinc-200 bg-white p-4">
         <div class="flex items-center justify-between gap-3">
           <div>
             <div class="text-sm font-semibold text-zinc-900">Common document presets</div>
@@ -1936,7 +2099,7 @@ foreach ($events as $ev) {
         </div>
       </div>
 
-      <div class="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+      <div id="proposalRequirementsAdditionalSection" class="mt-5 hidden rounded-2xl border border-zinc-200 bg-white p-4">
         <div class="flex items-center justify-between gap-3">
           <div>
             <div class="text-sm font-semibold text-zinc-900">Additional requirements</div>
@@ -1968,9 +2131,10 @@ foreach ($events as $ev) {
     <div class="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-5 py-4 sm:px-6">
       <button type="button" id="btnCancelProposalRequirements"
         class="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100">
-        Cancel
+        Close
       </button>
       <button type="button" id="btnSaveProposalRequirements"
+        hidden
         class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-orange-600/20 transition hover:from-orange-500 hover:to-red-500">
         Send Requirements
       </button>
@@ -2026,6 +2190,7 @@ foreach ($events as $ev) {
 <script>
   // ── Modal helpers ──
   const eventModal = document.getElementById('eventModal');
+  const eventForm = document.getElementById('eventForm');
   const archiveModal = document.getElementById('archiveModal');
   const publishTeacherModal = document.getElementById('publishTeacherModal');
   const publishTeacherPanel = document.getElementById('publishTeacherPanel');
@@ -2038,6 +2203,8 @@ foreach ($events as $ev) {
   const proposalRequirementsProgressPercent = document.getElementById('proposalRequirementsProgressPercent');
   const proposalRequirementsUploadSummary = document.getElementById('proposalRequirementsUploadSummary');
   const proposalRequirementsUploads = document.getElementById('proposalRequirementsUploads');
+  const proposalRequirementsEditorSection = document.getElementById('proposalRequirementsEditorSection');
+  const proposalRequirementsAdditionalSection = document.getElementById('proposalRequirementsAdditionalSection');
   const proposalRequirementsList = document.getElementById('proposalRequirementsList');
   const btnAddProposalRequirement = document.getElementById('btnAddProposalRequirement');
   const btnSaveProposalRequirements = document.getElementById('btnSaveProposalRequirements');
@@ -2160,19 +2327,19 @@ foreach ($events as $ev) {
       const item = document.createElement('div');
       item.className = 'rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3';
       item.innerHTML = `
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-black text-zinc-700">${escapeHtml(code)}</span>
-              <div class="text-sm font-semibold text-zinc-900">${escapeHtml(label)}</div>
-            </div>
-            <div class="mt-1 text-xs text-zinc-500">
-              ${fileUrl ? `Uploaded${uploadedText ? ` • ${escapeHtml(uploadedText)}` : ''}` : 'Still waiting for teacher upload'}
-            </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-black text-zinc-700">${escapeHtml(code)}</span>
+            <div class="text-sm font-semibold text-zinc-900">${escapeHtml(label)}</div>
           </div>
-          ${fileUrl
-            ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
-            : `<span class="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-500">Pending upload</span>`}
+          <div class="mt-1 text-xs text-zinc-500">
+            ${fileUrl ? `Uploaded${uploadedText ? ` • ${escapeHtml(uploadedText)}` : ''}` : 'Still waiting for teacher upload'}
+          </div>
+          <div class="mt-3">
+            ${fileUrl
+              ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
+              : `<span class="inline-flex rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-500">Pending upload</span>`}
+          </div>
         </div>
       `;
       proposalRequirementsUploads.appendChild(item);
@@ -2190,14 +2357,6 @@ foreach ($events as $ev) {
     proposalRequirementsProgressBar.style.width = `${Math.max(0, Math.min(100, Number(summary.percent || 0)))}%`;
     proposalRequirementsProgressText.textContent = `${summary.submitted || 0} of ${summary.total || 0} uploaded`;
     proposalRequirementsProgressPercent.textContent = `${summary.percent || 0}%`;
-
-    if ((proposalRequirementState.requirements || []).length === 0) {
-      btnSaveProposalRequirements.textContent = 'Send Requirements';
-    } else if (stage === 'under_review') {
-      btnSaveProposalRequirements.textContent = 'Update Requirements';
-    } else {
-      btnSaveProposalRequirements.textContent = 'Save Requirements';
-    }
   }
 
   function populateProposalRequirementEditor(requirements) {
@@ -2248,6 +2407,9 @@ foreach ($events as $ev) {
     if (!proposalRequirementsModal) return;
     proposalRequirementsEventId.value = button.dataset.id || '';
     proposalRequirementsTitle.textContent = `Proposal documents • ${button.dataset.title || 'Pending proposal'}`;
+    proposalRequirementsEditorSection?.classList.add('hidden');
+    proposalRequirementsAdditionalSection?.classList.add('hidden');
+    if (btnSaveProposalRequirements) btnSaveProposalRequirements.hidden = true;
     proposalRequirementState = {
       stage: button.dataset.stage || 'pending_requirements',
       requirements: safeJsonParse(button.dataset.requirements, []),
@@ -2317,6 +2479,15 @@ foreach ($events as $ev) {
 
   // Wizard initialization (simple + seminar based)
   let step = 1;
+  let eventModalReadOnly = false;
+  const teacherProposalMode = <?= $role === 'teacher' ? 'true' : 'false' ?>;
+  const maxWizardStep = teacherProposalMode ? 4 : 3;
+  let teacherProposalEditState = {
+    status: '',
+    stage: '',
+    requirements: [],
+    submissions: [],
+  };
 
   const structureOptions = Array.from(document.querySelectorAll('.structure-option'));
   const eventModeInput = document.getElementById('event_mode');
@@ -2332,6 +2503,11 @@ foreach ($events as $ev) {
   const seminar1EndInput = document.getElementById('seminar1_end_local');
   const seminar2StartInput = document.getElementById('seminar2_start_local');
   const seminar2EndInput = document.getElementById('seminar2_end_local');
+  const teacherProposalRequirementsList = document.getElementById('teacherProposalRequirementsList');
+  const btnAddTeacherProposalRequirement = document.getElementById('btnAddTeacherProposalRequirement');
+  const teacherProposalCreateSection = document.getElementById('teacherProposalCreateSection');
+  const teacherProposalEditSection = document.getElementById('teacherProposalEditSection');
+  const teacherProposalEditRequirementsList = document.getElementById('teacherProposalEditRequirementsList');
   let isApplyingSimpleEndDefault = false;
 
   const flatpickrConfig = {
@@ -2693,31 +2869,337 @@ foreach ($events as $ev) {
       .filter(Boolean);
   }
 
-  const subtitles = ['Fill in the event info', 'Add a description', 'Set the schedule'];
+  function createTeacherProposalRequirementRow() {
+    const row = document.createElement('div');
+    row.className = 'teacher-proposal-item rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm';
+    row.dataset.requirementCode = 'ADDITIONAL';
+    row.dataset.required = '0';
+    row.innerHTML = `
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1">
+          <label class="block text-xs font-medium text-zinc-600 mb-1.5">Requirement Title</label>
+          <input type="text" class="proposal-label-input w-full rounded-xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" placeholder="e.g. Department endorsement letter" />
+        </div>
+        <button type="button" class="proposal-remove-btn rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100 transition">Remove</button>
+      </div>
+      <label class="mt-3 block text-xs font-medium text-zinc-600">Upload Image File</label>
+      <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+        class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
+    `;
+    row.querySelector('.proposal-remove-btn')?.addEventListener('click', () => row.remove());
+    return row;
+  }
+
+  function resetTeacherProposalRequirements() {
+    if (!teacherProposalRequirementsList) return;
+    teacherProposalEditState = {
+      status: '',
+      stage: '',
+      requirements: [],
+      submissions: [],
+    };
+    teacherProposalRequirementsList.querySelectorAll('.teacher-proposal-item').forEach((item) => {
+      const labelInput = item.querySelector('.proposal-label-input');
+      if (labelInput) labelInput.value = '';
+      const fileInput = item.querySelector('.proposal-file-input');
+      if (fileInput) fileInput.value = '';
+    });
+    teacherProposalRequirementsList.querySelectorAll('.teacher-proposal-item[data-required="0"]').forEach((item) => item.remove());
+    if (teacherProposalEditRequirementsList) teacherProposalEditRequirementsList.innerHTML = '';
+    teacherProposalCreateSection?.classList.remove('hidden');
+    teacherProposalEditSection?.classList.add('hidden');
+  }
+
+  function renderTeacherProposalEditRequirements(requirements, submissions) {
+    if (!teacherProposalEditRequirementsList) return;
+    teacherProposalEditRequirementsList.innerHTML = '';
+
+    const submissionsByRequirement = {};
+    (submissions || []).forEach((submission) => {
+      const requirementId = String(submission?.requirement_id || '').trim();
+      if (requirementId) submissionsByRequirement[requirementId] = submission;
+    });
+
+    (requirements || []).forEach((requirement, index) => {
+      const requirementId = String(requirement?.id || '').trim();
+      const code = String(requirement?.code || `DOC${index + 1}`).trim() || `DOC${index + 1}`;
+      const label = String(requirement?.label || code).trim() || code;
+      const submission = requirementId ? submissionsByRequirement[requirementId] : null;
+      const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
+      const fileName = String(submission?.file_name || '').trim();
+
+      const row = document.createElement('div');
+      row.className = 'rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm';
+      row.dataset.requirementId = requirementId;
+      row.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-bold text-zinc-700">${escapeHtml(code)}</span>
+              <div class="text-sm font-bold text-zinc-900">${escapeHtml(label)}</div>
+            </div>
+            <div class="mt-1 text-xs text-zinc-500">
+              ${fileUrl
+                ? `Current file: ${escapeHtml(fileName || 'Uploaded document')}`
+                : 'No uploaded file found. Please upload one to continue.'}
+            </div>
+          </div>
+          ${fileUrl
+            ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
+            : `<span class="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-500">Missing upload</span>`}
+        </div>
+        <label class="mt-3 block text-xs font-medium text-zinc-600">Replace file (optional)</label>
+        <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+          class="proposal-edit-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
+      `;
+      teacherProposalEditRequirementsList.appendChild(row);
+    });
+  }
+
+  function setTeacherProposalStepMode(mode, source = null) {
+    if (!teacherProposalMode) return;
+    if (mode === 'edit' && source) {
+      const requirements = safeJsonParse(source.dataset.proposal_requirements || '[]', []);
+      const submissions = safeJsonParse(source.dataset.proposal_submissions || '[]', []);
+      teacherProposalEditState = {
+        status: String(source.dataset.status || '').trim().toLowerCase(),
+        stage: String(source.dataset.proposal_stage || '').trim().toLowerCase(),
+        requirements: Array.isArray(requirements) ? requirements : [],
+        submissions: Array.isArray(submissions) ? submissions : [],
+      };
+      teacherProposalCreateSection?.classList.add('hidden');
+      teacherProposalEditSection?.classList.remove('hidden');
+      renderTeacherProposalEditRequirements(teacherProposalEditState.requirements, teacherProposalEditState.submissions);
+      return;
+    }
+
+    setTeacherProposalStepMode('create');
+    teacherProposalCreateSection?.classList.remove('hidden');
+    teacherProposalEditSection?.classList.add('hidden');
+  }
+
+  function collectTeacherProposalRequirements() {
+    const items = Array.from(document.querySelectorAll('#teacherProposalRequirementsList .teacher-proposal-item'));
+    const requirements = [];
+    const files = [];
+
+    items.forEach((item, index) => {
+      const labelInput = item.querySelector('.proposal-label-input');
+      const label = ((labelInput?.value) || item.dataset.defaultLabel || '').trim();
+      const code = (item.dataset.requirementCode || 'ADDITIONAL').trim().toUpperCase();
+      const required = item.dataset.required === '1';
+      const fileInput = item.querySelector('.proposal-file-input');
+      const file = fileInput?.files?.[0] || null;
+
+      if (!label) {
+        throw new Error('Enter a title for every additional requirement.');
+      }
+      if (!file) {
+        throw new Error(`Upload the file for "${label}".`);
+      }
+
+      requirements.push({
+        code: code === 'ADDITIONAL' ? `DOC${index + 1}` : code,
+        label,
+      });
+      files.push(file);
+    });
+
+    if (!requirements.length && teacherProposalMode) {
+      throw new Error('Add the required proposal documents before submitting.');
+    }
+
+    return { requirements, files };
+  }
+
+  function collectTeacherProposalEditReplacements() {
+    const rows = Array.from(document.querySelectorAll('#teacherProposalEditRequirementsList [data-requirement-id]'));
+    const replacements = [];
+    rows.forEach((row) => {
+      const requirementId = String(row.dataset.requirementId || '').trim();
+      const input = row.querySelector('.proposal-edit-file-input');
+      const file = input?.files?.[0] || null;
+      if (requirementId && file) {
+        replacements.push({ requirementId, file });
+      }
+    });
+    return replacements;
+  }
+
+  btnAddTeacherProposalRequirement?.addEventListener('click', () => {
+    teacherProposalRequirementsList?.appendChild(createTeacherProposalRequirementRow());
+  });
+
+  const subtitles = teacherProposalMode
+    ? ['Fill in the event info', 'Add a description', 'Set the schedule', 'Upload requirements']
+    : ['Fill in the event info', 'Add a description', 'Set the schedule'];
 
   function setWizardStep(s) {
     document.getElementById('step1')?.classList.toggle('hidden', s !== 1);
     document.getElementById('step2')?.classList.toggle('hidden', s !== 2);
     document.getElementById('step3')?.classList.toggle('hidden', s !== 3);
+    document.getElementById('step4')?.classList.toggle('hidden', s !== 4);
 
     const btnBack = document.getElementById('btnBack');
     const btnNext = document.getElementById('btnNext');
     const btnSubmit = document.getElementById('btnSubmit');
 
     if (btnBack) btnBack.disabled = s === 1;
-    btnNext?.classList.toggle('hidden', s === 3);
-    btnSubmit?.classList.toggle('hidden', s !== 3);
+    btnNext?.classList.toggle('hidden', s === maxWizardStep);
+    btnSubmit?.classList.toggle('hidden', s !== maxWizardStep || eventModalReadOnly);
 
     const subtitle = document.getElementById('modalSubtitle');
     if (subtitle) subtitle.textContent = subtitles[s - 1] || '';
 
-    ['ws1', 'ws2', 'ws3'].forEach((id, i) => {
+    ['ws1', 'ws2', 'ws3', 'ws4'].forEach((id, i) => {
       const el = document.getElementById(id);
       if (!el) return;
       el.classList.remove('active', 'completed');
       if ((i + 1) === s) el.classList.add('active');
       if ((i + 1) < s) el.classList.add('completed');
     });
+  }
+
+  function setEventModalReadOnly(readOnly) {
+    eventModalReadOnly = !!readOnly;
+
+    const interactiveSelectors = [
+      'input:not([type="hidden"])',
+      'select',
+      'textarea',
+      'button.structure-option',
+      '.target-year-checkbox',
+      '#sttBtn',
+      '#mainUndoBtn',
+      '#mainExpandBtn',
+      '#mainAiImproveBtn'
+    ];
+
+    eventForm?.querySelectorAll(interactiveSelectors.join(', ')).forEach((element) => {
+      const isPicker = element.classList?.contains('datetime-picker');
+      if (isPicker) {
+        setPickerDisabled(element, eventModalReadOnly);
+        return;
+      }
+
+      if ('disabled' in element) {
+        element.disabled = eventModalReadOnly;
+      }
+
+      if (element.matches('input, textarea, select')) {
+        element.classList.toggle('bg-zinc-50', eventModalReadOnly);
+        element.classList.toggle('text-zinc-500', eventModalReadOnly);
+        element.classList.toggle('cursor-not-allowed', eventModalReadOnly);
+      }
+    });
+  }
+
+  function openEventModalFromDataset(source, readOnly = false) {
+    if (!source) return;
+
+    document.getElementById('mode').value = 'edit';
+    document.getElementById('event_id').value = source.dataset.id || '';
+    document.getElementById('title').value = source.dataset.title || '';
+    document.getElementById('location').value = source.dataset.locationFull || source.dataset.location || '';
+    const rawDescription = source.dataset.description || '';
+    const cleanedDescription = String(rawDescription)
+      .replace(/\[REJECT_REASON:[^\]]*\]\s*/gi, '')
+      .trim();
+    document.getElementById('description').value = cleanedDescription;
+
+    if (document.getElementById('event_type')) document.getElementById('event_type').value = source.dataset.event_type || 'Event';
+    const decodedTarget = decodeTargetParticipant(source.dataset.event_for || 'All');
+    if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
+    setSelectedTargetYears(decodedTarget.years || ['ALL']);
+    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = source.dataset.grace_time || '15';
+    setRegistrationType((source.dataset.is_free_event ?? '1') !== '0' ? 'free' : 'paid');
+    const registrationLimitInput = document.getElementById('registration_limit');
+    if (registrationLimitInput) {
+      registrationLimitInput.value = source.dataset.registration_limit || '';
+    }
+    const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
+    if (registrationCloseWeeksInput) {
+      registrationCloseWeeksInput.value = source.dataset.registration_close_weeks || '1';
+    }
+
+    setPickerValue(startAtInput, source.dataset.start_at ? toLocalInput(source.dataset.start_at) : '');
+    setPickerValue(endAtInput, source.dataset.end_at ? toLocalInput(source.dataset.end_at) : '');
+
+    let sessions = [];
+    try {
+      sessions = sanitizeSessions(JSON.parse(source.dataset.sessions || '[]'));
+    } catch (err) {
+      sessions = [];
+    }
+
+    const dataMode = (source.dataset.event_mode || '').trim();
+    const isSeminar = dataMode === 'seminar_based' || sessions.length > 0;
+
+    if (isSeminar) {
+      const seminarCount = sessions.length > 1 ? 2 : 1;
+      setStructure('seminar_based', seminarCount);
+
+      const s1 = sessions[0] || null;
+      const s2 = sessions[1] || null;
+
+      document.getElementById('seminar1_title').value = s1?.title || '';
+      setPickerValue(document.getElementById('seminar1_start_local'), s1?.start_at ? toLocalInput(s1.start_at) : '');
+      setPickerValue(document.getElementById('seminar1_end_local'), s1?.end_at ? toLocalInput(s1.end_at) : '');
+
+      document.getElementById('seminar2_title').value = s2?.title || '';
+      setPickerValue(document.getElementById('seminar2_start_local'), s2?.start_at ? toLocalInput(s2.start_at) : '');
+      setPickerValue(document.getElementById('seminar2_end_local'), s2?.end_at ? toLocalInput(s2.end_at) : '');
+    } else {
+      setStructure('simple', 0);
+
+      document.getElementById('seminar1_title').value = '';
+      setPickerValue(document.getElementById('seminar1_start_local'), '');
+      setPickerValue(document.getElementById('seminar1_end_local'), '');
+      document.getElementById('seminar2_title').value = '';
+      setPickerValue(document.getElementById('seminar2_start_local'), '');
+      setPickerValue(document.getElementById('seminar2_end_local'), '');
+    }
+
+    setPickerMin(startAtInput, null);
+    setPickerMin(seminar1StartInput, null);
+    setPickerMin(seminar2StartInput, null);
+
+    updateEndMin(startAtInput, endAtInput);
+    updateEndMin(seminar1StartInput, seminar1EndInput);
+    updateEndMin(seminar2StartInput, seminar2EndInput);
+
+    const msg = document.getElementById('formMsg');
+    if (msg) {
+      msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
+      msg.textContent = '';
+    }
+
+    const modalTitle = document.getElementById('modalTitle');
+    if (modalTitle) modalTitle.textContent = readOnly ? 'Event Details' : 'Edit Event';
+
+    step = 1;
+    setWizardStep(1);
+    setEventModalReadOnly(readOnly);
+
+    const subtitle = document.getElementById('modalSubtitle');
+    if (subtitle) {
+      subtitle.textContent = readOnly
+        ? 'Review the event information and schedule'
+        : 'Update the event details below';
+    }
+
+    if (!readOnly) {
+      setTeacherProposalStepMode('edit', source);
+      const submitLabel = document.querySelector('#btnSubmit span:last-child');
+      if (submitLabel) {
+        const sourceStatus = String(source.dataset.status || '').trim().toLowerCase();
+        submitLabel.textContent = teacherProposalMode && sourceStatus === 'archived'
+          ? 'Resubmit for Review'
+          : 'Save Event';
+      }
+    }
+
+    openModal(eventModal);
   }
 
   structureOptions.forEach((option) => {
@@ -2859,6 +3341,54 @@ foreach ($events as $ev) {
   }
   bindTargetYearCheckboxes();
 
+  function getRegistrationType() {
+    const paidInput = document.getElementById('registration_type_paid');
+    return paidInput?.checked ? 'paid' : 'free';
+  }
+
+  function setRegistrationType(type) {
+    const freeInput = document.getElementById('registration_type_free');
+    const paidInput = document.getElementById('registration_type_paid');
+    const isFree = type !== 'paid';
+    if (freeInput) freeInput.checked = isFree;
+    if (paidInput) paidInput.checked = !isFree;
+  }
+
+  function bindRegistrationTypeCheckboxes() {
+    const freeInput = document.getElementById('registration_type_free');
+    const paidInput = document.getElementById('registration_type_paid');
+    if (!freeInput || !paidInput) return;
+
+    freeInput.addEventListener('change', () => {
+      if (freeInput.checked) {
+        paidInput.checked = false;
+        return;
+      }
+      if (!paidInput.checked) {
+        freeInput.checked = true;
+      }
+    });
+
+    paidInput.addEventListener('change', () => {
+      if (paidInput.checked) {
+        freeInput.checked = false;
+        return;
+      }
+      if (!freeInput.checked) {
+        paidInput.checked = true;
+      }
+    });
+  }
+  bindRegistrationTypeCheckboxes();
+
+  const REGISTRATION_LIMIT_MAX = 9999;
+
+  const registrationLimitInput = document.getElementById('registration_limit');
+  registrationLimitInput?.addEventListener('input', () => {
+    const digitsOnly = String(registrationLimitInput.value || '').replace(/\D+/g, '').slice(0, 4);
+    registrationLimitInput.value = digitsOnly;
+  });
+
   document.getElementById('btnCreateEvent').addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
     document.getElementById('event_id').value = '';
@@ -2880,6 +3410,12 @@ foreach ($events as $ev) {
     if (document.getElementById('target_course')) document.getElementById('target_course').value = 'ALL';
     setSelectedTargetYears(['ALL']);
     if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '15';
+    setRegistrationType('free');
+    const registrationLimitInput = document.getElementById('registration_limit');
+    if (registrationLimitInput) registrationLimitInput.value = '';
+    const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
+    if (registrationCloseWeeksInput) registrationCloseWeeksInput.value = '1';
+    resetTeacherProposalRequirements();
 
     const msg = document.getElementById('formMsg');
     if (msg) {
@@ -2889,6 +3425,10 @@ foreach ($events as $ev) {
 
     const modalTitle = document.getElementById('modalTitle');
     if (modalTitle) modalTitle.textContent = 'Create Event';
+    const subtitle = document.getElementById('modalSubtitle');
+    if (subtitle) subtitle.textContent = 'Fill in the event info';
+    const submitLabel = document.querySelector('#btnSubmit span:last-child');
+    if (submitLabel) submitLabel.textContent = teacherProposalMode ? 'Submit for Review' : 'Save Event';
 
     setStructure('simple', 0);
 
@@ -2903,6 +3443,7 @@ foreach ($events as $ev) {
 
     step = 1;
     setWizardStep(1);
+    setEventModalReadOnly(false);
     openModal(eventModal);
   });
 
@@ -2914,6 +3455,8 @@ foreach ($events as $ev) {
       step = 2;
     } else if (step === 2) {
       step = 3;
+    } else if (step === 3 && maxWizardStep === 4) {
+      step = 4;
     }
     setWizardStep(step);
   });
@@ -2928,84 +3471,38 @@ foreach ($events as $ev) {
   });
 
   document.querySelectorAll('.btnEdit').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.getElementById('mode').value = 'edit';
-      document.getElementById('event_id').value = btn.dataset.id || '';
-      document.getElementById('title').value = btn.dataset.title || '';
-      document.getElementById('location').value = btn.dataset.location || '';
-      document.getElementById('description').value = btn.dataset.description || '';
-
-      if (document.getElementById('event_type')) document.getElementById('event_type').value = btn.dataset.event_type || 'Event';
-      const decodedTarget = decodeTargetParticipant(btn.dataset.event_for || 'All');
-      if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
-      setSelectedTargetYears(decodedTarget.years || ['ALL']);
-      if (document.getElementById('grace_time')) document.getElementById('grace_time').value = btn.dataset.grace_time || '15';
-
-      setPickerValue(startAtInput, btn.dataset.start_at ? toLocalInput(btn.dataset.start_at) : '');
-      setPickerValue(endAtInput, btn.dataset.end_at ? toLocalInput(btn.dataset.end_at) : '');
-
-      let sessions = [];
-      try {
-        sessions = sanitizeSessions(JSON.parse(btn.dataset.sessions || '[]'));
-      } catch (err) {
-        sessions = [];
-      }
-
-      const dataMode = (btn.dataset.event_mode || '').trim();
-      const isSeminar = dataMode === 'seminar_based' || sessions.length > 0;
-
-      if (isSeminar) {
-        const seminarCount = sessions.length > 1 ? 2 : 1;
-        setStructure('seminar_based', seminarCount);
-
-        const s1 = sessions[0] || null;
-        const s2 = sessions[1] || null;
-
-        document.getElementById('seminar1_title').value = s1?.title || '';
-        setPickerValue(document.getElementById('seminar1_start_local'), s1?.start_at ? toLocalInput(s1.start_at) : '');
-        setPickerValue(document.getElementById('seminar1_end_local'), s1?.end_at ? toLocalInput(s1.end_at) : '');
-
-        document.getElementById('seminar2_title').value = s2?.title || '';
-        setPickerValue(document.getElementById('seminar2_start_local'), s2?.start_at ? toLocalInput(s2.start_at) : '');
-        setPickerValue(document.getElementById('seminar2_end_local'), s2?.end_at ? toLocalInput(s2.end_at) : '');
-      } else {
-        setStructure('simple', 0);
-
-        document.getElementById('seminar1_title').value = '';
-        setPickerValue(document.getElementById('seminar1_start_local'), '');
-        setPickerValue(document.getElementById('seminar1_end_local'), '');
-        document.getElementById('seminar2_title').value = '';
-        setPickerValue(document.getElementById('seminar2_start_local'), '');
-        setPickerValue(document.getElementById('seminar2_end_local'), '');
-      }
-
-      setPickerMin(startAtInput, null);
-      setPickerMin(seminar1StartInput, null);
-      setPickerMin(seminar2StartInput, null);
-
-      updateEndMin(startAtInput, endAtInput);
-      updateEndMin(seminar1StartInput, seminar1EndInput);
-      updateEndMin(seminar2StartInput, seminar2EndInput);
-
-      const msg = document.getElementById('formMsg');
-      if (msg) {
-        msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
-        msg.textContent = '';
-      }
-
-      const modalTitle = document.getElementById('modalTitle');
-      if (modalTitle) modalTitle.textContent = 'Edit Event';
-
-      step = 1;
-      setWizardStep(1);
-      openModal(eventModal);
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openEventModalFromDataset(btn, false);
     });
   });
+
+  <?php if ($role === 'teacher'): ?>
+    document.querySelectorAll('.event-card[data-id]').forEach((card) => {
+      const openCardDetails = () => {
+        const id = card.dataset.id || '';
+        if (!id) return;
+        window.location.href = '/event_view.php?id=' + encodeURIComponent(id);
+      };
+
+      card.addEventListener('click', (event) => {
+        // Don't hijack clicks on internal controls (action buttons, links, etc.).
+        if (event.target.closest('button, a, input, select, textarea, label')) return;
+        openCardDetails();
+      });
+
+      card.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openCardDetails();
+      });
+    });
+  <?php endif; ?>
 
   document.getElementById('eventForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    if (step !== 3) {
+    if (step !== maxWizardStep) {
       document.getElementById('btnNext').click();
       return;
     }
@@ -3099,6 +3596,13 @@ foreach ($events as $ev) {
       }
 
       const eventSpan = startDate.toDateString() === endDate.toDateString() ? 'single_day' : 'multi_day';
+      let teacherProposalPayload = { requirements: [], files: [] };
+      let teacherProposalEditReplacements = [];
+      if (teacherProposalMode && mode === 'create') {
+        teacherProposalPayload = collectTeacherProposalRequirements();
+      } else if (teacherProposalMode && mode === 'edit') {
+        teacherProposalEditReplacements = collectTeacherProposalEditReplacements();
+      }
 
       const payload = {
         title,
@@ -3115,12 +3619,44 @@ foreach ($events as $ev) {
         csrf_token: window.CSRF_TOKEN
       };
 
+      if (teacherProposalMode && mode === 'create') {
+        payload.proposal_requirements = teacherProposalPayload.requirements;
+      }
+
+      if (teacherProposalMode) {
+        payload.is_free_event = getRegistrationType() === 'free';
+        const registrationLimitInput = document.getElementById('registration_limit');
+        const limitRaw = registrationLimitInput ? String(registrationLimitInput.value || '').trim() : '';
+        if (limitRaw !== '') {
+          const limitNum = Number.parseInt(limitRaw, 10);
+          if (!Number.isFinite(limitNum) || limitNum < 1) {
+            throw new Error('Student limit must be a positive whole number.');
+          }
+          if (limitNum > REGISTRATION_LIMIT_MAX) {
+            throw new Error('Student limit cannot exceed 9999.');
+          }
+          payload.registration_limit = limitNum;
+        } else {
+          payload.registration_limit = null;
+        }
+
+        const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
+        const closeWeeksRaw = registrationCloseWeeksInput ? String(registrationCloseWeeksInput.value || '').trim() : '1';
+        const closeWeeks = Number.parseInt(closeWeeksRaw, 10);
+        if (!Number.isFinite(closeWeeks) || closeWeeks < 1 || closeWeeks > 4) {
+          throw new Error('Registration close limit must be between 1 and 4 weeks.');
+        }
+        payload.registration_close_weeks = closeWeeks;
+      }
+
       if (mode === 'edit') {
         payload.event_id = document.getElementById('event_id').value;
       }
 
       msg.className = 'text-sm font-bold text-amber-600 mt-2 text-center';
-      msg.textContent = mode === 'edit' ? 'Updating event...' : 'Creating event...';
+      msg.textContent = mode === 'edit'
+        ? 'Updating event...'
+        : (teacherProposalMode ? 'Creating proposal and uploading requirements...' : 'Creating event...');
       submitBtn.disabled = true;
       submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
@@ -3136,8 +3672,98 @@ foreach ($events as $ev) {
         throw new Error(data.error || 'Request failed.');
       }
 
+      if (teacherProposalMode && mode === 'create') {
+        const createdEvent = data.event || {};
+        const eventId = String(createdEvent.id || '').trim();
+        const savedRequirements = Array.isArray(createdEvent.proposal_requirements) ? createdEvent.proposal_requirements : [];
+        if (!eventId || savedRequirements.length !== teacherProposalPayload.files.length) {
+          throw new Error('Proposal event was created, but the requirement package is incomplete.');
+        }
+
+        msg.textContent = 'Uploading proposal requirements...';
+
+        for (let i = 0; i < savedRequirements.length; i += 1) {
+          const requirement = savedRequirements[i];
+          const file = teacherProposalPayload.files[i];
+          const requirementId = String(requirement?.id || '').trim();
+          if (!requirementId || !file) {
+            throw new Error('Missing uploaded proposal file data.');
+          }
+
+          const formData = new FormData();
+          formData.append('event_id', eventId);
+          formData.append('requirement_id', requirementId);
+          formData.append('csrf_token', window.CSRF_TOKEN || '');
+          formData.append('proposal_file', file);
+
+          const uploadRes = await fetch('/api/event_proposal_document_upload.php', {
+            method: 'POST',
+            body: formData,
+          });
+          const uploadData = await uploadRes.json();
+          if (!uploadData.ok) {
+            throw new Error(uploadData.error || `Failed to upload ${file.name}.`);
+          }
+        }
+
+        msg.textContent = 'Submitting proposal for admin review...';
+        const reviewRes = await fetch('/api/event_proposal_submit_review.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event_id: eventId, csrf_token: window.CSRF_TOKEN })
+        });
+        const reviewData = await reviewRes.json();
+        if (!reviewData.ok) {
+          throw new Error(reviewData.error || 'Failed to submit the proposal for review.');
+        }
+      } else if (teacherProposalMode && mode === 'edit') {
+        const eventId = String(payload.event_id || '').trim();
+        const shouldResubmitRejected = teacherProposalEditState.status === 'archived';
+
+        if (shouldResubmitRejected && !eventId) {
+          throw new Error('Missing event id for proposal resubmission.');
+        }
+
+        if (teacherProposalEditReplacements.length > 0) {
+          msg.textContent = 'Uploading replacement proposal files...';
+          for (const replacement of teacherProposalEditReplacements) {
+            const formData = new FormData();
+            formData.append('event_id', eventId);
+            formData.append('requirement_id', replacement.requirementId);
+            formData.append('csrf_token', window.CSRF_TOKEN || '');
+            formData.append('proposal_file', replacement.file);
+
+            const uploadRes = await fetch('/api/event_proposal_document_upload.php', {
+              method: 'POST',
+              body: formData,
+            });
+            const uploadData = await uploadRes.json();
+            if (!uploadData.ok) {
+              throw new Error(uploadData.error || `Failed to upload ${replacement.file.name}.`);
+            }
+          }
+        }
+
+        if (shouldResubmitRejected) {
+          msg.textContent = 'Submitting updated proposal for admin review...';
+          const reviewRes = await fetch('/api/event_proposal_submit_review.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_id: eventId, csrf_token: window.CSRF_TOKEN })
+          });
+          const reviewData = await reviewRes.json();
+          if (!reviewData.ok) {
+            throw new Error(reviewData.error || 'Failed to resubmit the proposal for review.');
+          }
+        }
+      }
+
       msg.className = 'text-sm font-bold text-emerald-500 mt-2 text-center';
-      msg.textContent = 'Success!';
+      msg.textContent = (teacherProposalMode && mode === 'create')
+        ? 'Proposal submitted for admin review!'
+        : (teacherProposalMode && mode === 'edit' && teacherProposalEditState.status === 'archived')
+          ? 'Proposal re-submitted for admin review!'
+          : 'Success!';
       setTimeout(() => window.location.reload(), 350);
     } catch (err) {
       msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
@@ -3302,26 +3928,66 @@ foreach ($events as $ev) {
     }
   });
   // ── Unified Filtering Logic (Tabs + Search + Type) ──
+  const role = '<?= htmlspecialchars($role) ?>';
   const tabAll = document.getElementById('tabAll');
   const tabPending = document.getElementById('tabPending');
+  const tabActive = document.getElementById('tabActive');
+  const tabApproval = document.getElementById('tabApproval');
+  const tabExpired = document.getElementById('tabExpired');
   const searchInput = document.getElementById('searchEvents');
   const typeFilter = document.getElementById('filterType');
   const eventCards = document.querySelectorAll('.event-card');
 
-  let activeTab = 'all'; // 'all' or 'pending'
+  let activeTab = role === 'teacher' ? 'active' : 'all';
+
+  function resolveTeacherBucket(card) {
+    const status = ((card.dataset.status || '') + '').toLowerCase();
+    const hasRejectRemark = ((card.dataset.isRejected || '') + '') === '1';
+
+    const endRaw = ((card.dataset.endAt || '') + '').trim();
+    const endDate = endRaw !== '' ? new Date(endRaw) : null;
+    const now = new Date();
+    const isPast = endDate instanceof Date && !Number.isNaN(endDate.getTime()) && endDate < now;
+
+    if (((status === 'expired' || status === 'finished' || isPast) && status !== 'archived')) {
+      return 'expired';
+    }
+
+    if (status === 'published' && !isPast) {
+      return 'active';
+    }
+
+    if ((status === 'pending' || status === 'approved' || status === 'rejected') && !isPast) {
+      return 'approval';
+    }
+
+    if (status === 'archived' && hasRejectRemark && !isPast) {
+      return 'approval';
+    }
+
+    return 'hidden';
+  }
 
   function refreshEventVisibility() {
     const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
     const selectedType = typeFilter ? typeFilter.value : 'all';
+    let visibleCount = 0;
 
     eventCards.forEach(card => {
-      const status = card.dataset.status;
-      const title = card.dataset.title.toLowerCase();
-      const location = card.dataset.location.toLowerCase();
-      const teacher = card.dataset.teacher.toLowerCase();
-      const type = card.dataset.type;
+      const status = ((card.dataset.status || '') + '').toLowerCase();
+      const title = ((card.dataset.title || '') + '').toLowerCase();
+      const location = ((card.dataset.location || '') + '').toLowerCase();
+      const teacher = ((card.dataset.teacher || '') + '').toLowerCase();
+      const type = (card.dataset.type || '').trim();
 
-      const matchesTab = (activeTab === 'all') || (status === 'pending');
+      let matchesTab = true;
+      if (role === 'teacher') {
+        const bucket = resolveTeacherBucket(card);
+        matchesTab = bucket === activeTab;
+      } else {
+        matchesTab = (activeTab === 'all') || (status === 'pending');
+      }
+
       const matchesSearch = searchTerm === '' ||
         title.includes(searchTerm) ||
         location.includes(searchTerm) ||
@@ -3330,6 +3996,7 @@ foreach ($events as $ev) {
 
       if (matchesTab && matchesSearch && matchesType) {
         card.style.display = 'block';
+        visibleCount += 1;
 
         // Trigger Animation Refresh
         if (card.classList.contains('event-card-animated')) {
@@ -3345,10 +4012,36 @@ foreach ($events as $ev) {
       }
     });
 
+    const emptyState = document.getElementById('eventListEmptyState');
+    if (emptyState) {
+      emptyState.classList.toggle('hidden', visibleCount > 0);
+    }
+
     // Update gradients after visibility change
     if (typeof window.syncEventListGradients === 'function') {
       setTimeout(window.syncEventListGradients, 50);
     }
+  }
+
+  function setTeacherTabState(nextTab) {
+    activeTab = nextTab;
+    const tabs = [
+      { el: tabActive, key: 'active' },
+      { el: tabApproval, key: 'approval' },
+      { el: tabExpired, key: 'expired' },
+    ];
+
+    tabs.forEach(({ el, key }) => {
+      if (!el) return;
+      const active = key === nextTab;
+      el.classList.toggle('border-sky-500', active);
+      el.classList.toggle('text-sky-600', active);
+      el.classList.toggle('font-bold', active);
+      el.classList.toggle('border-transparent', !active);
+      el.classList.toggle('text-zinc-500', !active);
+      el.classList.toggle('font-semibold', !active);
+    });
+    refreshEventVisibility();
   }
 
   if (tabAll && tabPending) {
@@ -3371,9 +4064,16 @@ foreach ($events as $ev) {
     });
   }
 
+  if (tabActive && tabApproval && tabExpired) {
+    tabActive.addEventListener('click', () => setTeacherTabState('active'));
+    tabApproval.addEventListener('click', () => setTeacherTabState('approval'));
+    tabExpired.addEventListener('click', () => setTeacherTabState('expired'));
+  }
+
   // Real-time input listeners
   searchInput?.addEventListener('input', refreshEventVisibility);
   typeFilter?.addEventListener('change', refreshEventVisibility);
+  refreshEventVisibility();
 
   // ── Reject (Page 34 Modal) ──
   const rejectModal = document.getElementById('rejectModal');

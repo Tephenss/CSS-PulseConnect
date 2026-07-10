@@ -8,8 +8,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 
-$user = require_role(['admin']);
-$role = (string) ($user['role'] ?? 'admin');
+$user = require_role(['admin', 'teacher']);
+$role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
 
 // Only show published events on calendar

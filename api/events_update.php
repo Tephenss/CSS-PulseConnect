@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
 {
@@ -100,6 +101,23 @@ if (isset($data['grace_time'])) {
     $gt = clean_string((string) $data['grace_time']);
     if ($gt !== '') $fields['grace_time'] = $gt;
 }
+if (isset($data['is_free_event'])) {
+    $fields['is_free_event'] = normalize_registration_bool($data['is_free_event']);
+}
+if (array_key_exists('registration_limit', $data)) {
+    $registrationLimit = normalize_registration_limit($data['registration_limit']);
+    if ($data['registration_limit'] !== null && $data['registration_limit'] !== '' && $registrationLimit === null) {
+        json_response(['ok' => false, 'error' => 'Student limit must be between 1 and 9999.'], 400);
+    }
+    $fields['registration_limit'] = $registrationLimit;
+}
+if (array_key_exists('registration_close_weeks', $data)) {
+    $registrationCloseWeeks = normalize_registration_close_weeks($data['registration_close_weeks']);
+    if ($data['registration_close_weeks'] !== null && $data['registration_close_weeks'] !== '' && $registrationCloseWeeks === null) {
+        json_response(['ok' => false, 'error' => 'Registration close limit must be between 1 and 4 weeks.'], 400);
+    }
+    $fields['registration_close_weeks'] = $registrationCloseWeeks;
+}
 $shouldUpdateMode = isset($data['event_mode']) || $eventMode !== $currentEventMode;
 if ($shouldUpdateMode) {
     $fields['event_mode'] = $eventMode;
@@ -156,6 +174,25 @@ $headers = [
 ];
 
 $res = supabase_request('PATCH', $url, $headers, json_encode($fields, JSON_UNESCAPED_SLASHES));
+if (!$res['ok'] && (is_missing_column_error($res, 'event_mode') || is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks'))) {
+    $retryFields = $fields;
+    if (is_missing_column_error($res, 'event_mode')) {
+        unset($retryFields['event_mode']);
+        if ($shouldUpdateMode) {
+            $retryFields['event_structure'] = mode_to_structure($eventMode, $eventMode === 'seminar_based' ? $sessions : []);
+        }
+    }
+    if (is_missing_column_error($res, 'is_free_event')) {
+        unset($retryFields['is_free_event']);
+    }
+    if (is_missing_column_error($res, 'registration_limit')) {
+        unset($retryFields['registration_limit']);
+    }
+    if (is_missing_column_error($res, 'registration_close_weeks')) {
+        unset($retryFields['registration_close_weeks']);
+    }
+    $res = supabase_request('PATCH', $url, $headers, json_encode($retryFields, JSON_UNESCAPED_SLASHES));
+}
 if (!$res['ok'] && is_missing_column_error($res, 'event_mode')) {
     $retryFields = $fields;
     unset($retryFields['event_mode']);

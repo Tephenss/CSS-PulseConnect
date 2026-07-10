@@ -52,14 +52,15 @@ function render_header(string $title, ?array $user): void
     echo '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">';
     echo '<link rel="stylesheet" href="/assets/css/app.css?v=' . time() . '">';
     echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . time() . '">';
+    $roleClass = $role === 'teacher' ? 'role-teacher' : ($role === 'admin' ? 'role-admin' : 'role-student');
     echo '<link rel="stylesheet" href="/assets/css/auth.css">';
-    echo '</head><body class="min-h-screen bg-zinc-50 text-zinc-900">';
+    echo '</head><body class="min-h-screen bg-zinc-50 text-zinc-900 ' . $roleClass . '">';
 
     // Mobile overlay
     echo '<div id="sidebar-overlay" class="fixed inset-0 bg-black/40 z-40 opacity-0 pointer-events-none lg:hidden" onclick="closeMobileSidebar()"></div>';
 
     // ── SIDEBAR ──
-    echo '<aside id="sidebar" class="fixed top-0 left-0 h-screen bg-[#450a0a] border-r border-red-900/50 flex flex-col z-50 overflow-hidden">';
+    echo '<aside id="sidebar" class="sidebar-shell fixed top-0 left-0 h-screen flex flex-col z-50 overflow-hidden">';
 
     // Logo area
     echo '<div class="sidebar-header px-2 pt-8 pb-6 flex flex-col items-center justify-center flex-shrink-0 min-w-0 transition-all">';
@@ -91,11 +92,13 @@ function render_header(string $title, ?array $user): void
     echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>';
     echo '<span class="sidebar-label">Dashboard</span></a>';
 
-    // Events
-    $isActive = str_contains($title, 'Events') && !str_contains($title, 'Manage');
-    echo '<a href="/events.php" data-tooltip="Events" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
-    echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
-    echo '<span class="sidebar-label">Events</span></a>';
+    // Events (teacher flow is merged under Manage Events).
+    if ($role !== 'teacher') {
+        $isActive = str_contains($title, 'Events') && !str_contains($title, 'Manage');
+        echo '<a href="/events.php" data-tooltip="Events" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
+        echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
+        echo '<span class="sidebar-label">Events</span></a>';
+    }
 
     // Student-only links
     if ($role === 'student') {
@@ -128,12 +131,6 @@ function render_header(string $title, ?array $user): void
             $badgeHiddenClass = $pendingAppCount > 0 ? '' : ' hidden';
             echo '<span id="manage-applications-badge" class="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-amber-500 text-white border border-amber-300 shadow-sm' . $badgeHiddenClass . '">' . htmlspecialchars($badge) . '</span>';
             echo '</a>';
-        }
-
-        if ($role === 'teacher') {
-            echo '<a href="/scan.php" data-tooltip="QR Scanner" class="sidebar-link ' . (str_contains($title, 'Scan') ? 'active' : '') . '">';
-            echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z"/></svg>';
-            echo '<span class="sidebar-label">QR Scanner</span></a>';
         }
 
         $calHref = $role === 'admin' ? '/admin_calendar.php' : '/teacher_calendar.php';

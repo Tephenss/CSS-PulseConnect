@@ -9,8 +9,13 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 
-$user = require_role(['admin']);
-$role = (string) ($user['role'] ?? 'admin');
+$user = require_role(['admin', 'teacher']);
+$role = (string) ($user['role'] ?? 'teacher');
+
+if ($role === 'teacher') {
+  header('Location: /manage_events.php');
+  exit;
+}
 
 $select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';

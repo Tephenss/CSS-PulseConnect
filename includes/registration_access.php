@@ -51,6 +51,175 @@ function event_allows_open_registration(array $event): bool
     return normalize_registration_bool($event['allow_registration'] ?? false);
 }
 
+function event_is_free_registration_event(array $event): bool
+{
+    return normalize_registration_bool($event['is_free_event'] ?? true);
+}
+
+function event_registration_open_to_all(array $event): bool
+{
+    if (event_allows_open_registration($event)) {
+        return true;
+    }
+
+    if (!event_is_free_registration_event($event)) {
+        return false;
+    }
+
+    $status = strtolower(trim((string) ($event['status'] ?? '')));
+    return $status === 'published';
+}
+
+function normalize_registration_limit(mixed $value): ?int
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    $limit = (int) $value;
+    if ($limit < 1 || $limit > 9999) {
+        return null;
+    }
+
+    return $limit;
+}
+
+function event_registration_limit(array $event): ?int
+{
+    return normalize_registration_limit($event['registration_limit'] ?? null);
+}
+
+function format_event_registration_total(int $count, array $event): string
+{
+    $limit = event_registration_limit($event);
+    if ($limit !== null) {
+        return $count . '/' . $limit;
+    }
+
+    return (string) $count;
+}
+
+function normalize_registration_close_weeks(mixed $value): ?int
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    $weeks = (int) $value;
+    return ($weeks >= 1 && $weeks <= 4) ? $weeks : null;
+}
+
+function event_registration_close_weeks(array $event): ?int
+{
+    return normalize_registration_close_weeks($event['registration_close_weeks'] ?? null);
+}
+
+function event_registration_last_day(array $event): ?DateTimeImmutable
+{
+    $weeks = event_registration_close_weeks($event);
+    if ($weeks === null) {
+        return null;
+    }
+
+    $startAt = trim((string) ($event['start_at'] ?? ''));
+    if ($startAt === '') {
+        return null;
+    }
+
+    try {
+        $start = new DateTimeImmutable($startAt);
+    } catch (Throwable $e) {
+        return null;
+    }
+
+    $manila = new DateTimeZone('Asia/Manila');
+    $startInManila = $start->setTimezone($manila);
+    $startDate = new DateTimeImmutable($startInManila->format('Y-m-d'), $manila);
+
+    return $startDate->modify('-' . $weeks . ' weeks');
+}
+
+function is_event_registration_window_closed(array $event, ?DateTimeInterface $now = null): bool
+{
+    $lastDay = event_registration_last_day($event);
+    if ($lastDay === null) {
+        return false;
+    }
+
+    $manila = new DateTimeZone('Asia/Manila');
+    $today = $now !== null
+        ? DateTimeImmutable::createFromInterface($now)->setTimezone($manila)->modify('today')
+        : new DateTimeImmutable('today', $manila);
+
+    return $today > $lastDay;
+}
+
+function fetch_event_registration_count(string $eventId, array $headers, ?array $event = null): int
+{
+    if (is_array($event) && array_key_exists('registered_count', $event)) {
+        return max(0, (int) ($event['registered_count'] ?? 0));
+    }
+
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return 0;
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=id'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&limit=10000';
+
+    $res = supabase_request('GET', $url, [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ]);
+
+    if (!$res['ok']) {
+        return 0;
+    }
+
+    $rows = json_decode((string) $res['body'], true);
+    return is_array($rows) ? count($rows) : 0;
+}
+
+function event_registration_is_full(string $eventId, array $event, array $headers): bool
+{
+    $limit = event_registration_limit($event);
+    if ($limit === null) {
+        return false;
+    }
+
+    return fetch_event_registration_count($eventId, $headers, $event) >= $limit;
+}
+
+function close_event_registration(string $eventId, array $headers): void
+{
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return;
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId);
+    supabase_request('PATCH', $url, array_merge($headers, [
+        'Content-Type: application/json',
+        'Prefer: return=minimal',
+    ]), json_encode([
+        'allow_registration' => false,
+        'updated_at' => gmdate('c'),
+    ], JSON_UNESCAPED_SLASHES));
+}
+
+function maybe_close_event_registration_at_capacity(string $eventId, array $event, array $headers): void
+{
+    if (!event_registration_is_full($eventId, $event, $headers)) {
+        return;
+    }
+
+    close_event_registration($eventId, $headers);
+}
+
 function build_registration_access_template_key(string $eventId): string
 {
     return hash_hmac('sha256', 'registration-access|' . trim($eventId), SUPABASE_KEY);
@@ -62,19 +231,33 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
         . '?id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $selectWithColumn = $baseUrl
-        . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration';
+        . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count';
     $res = supabase_request('GET', $selectWithColumn, $headers);
 
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-        if (!registration_access_missing_column_message($message, 'allow_registration')) {
-            return null;
-        }
+        if (registration_access_missing_column_message($message, 'allow_registration')
+            || registration_access_missing_column_message($message, 'is_free_event')
+            || registration_access_missing_column_message($message, 'registration_limit')
+            || registration_access_missing_column_message($message, 'registration_close_weeks')
+            || registration_access_missing_column_message($message, 'registered_count')) {
+            $fallbackUrl = $baseUrl
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration';
+            $res = supabase_request('GET', $fallbackUrl, $headers);
+            if (!$res['ok']) {
+                $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+                if (!registration_access_missing_column_message($message, 'allow_registration')) {
+                    return null;
+                }
 
-        $fallbackUrl = $baseUrl
-            . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span';
-        $res = supabase_request('GET', $fallbackUrl, $headers);
-        if (!$res['ok']) {
+                $fallbackUrl = $baseUrl
+                    . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span';
+                $res = supabase_request('GET', $fallbackUrl, $headers);
+                if (!$res['ok']) {
+                    return null;
+                }
+            }
+        } else {
             return null;
         }
     }
@@ -87,6 +270,18 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
     $event = $rows[0];
     if (!array_key_exists('allow_registration', $event)) {
         $event['allow_registration'] = false;
+    }
+    if (!array_key_exists('is_free_event', $event)) {
+        $event['is_free_event'] = true;
+    }
+    if (!array_key_exists('registration_limit', $event)) {
+        $event['registration_limit'] = null;
+    }
+    if (!array_key_exists('registration_close_weeks', $event)) {
+        $event['registration_close_weeks'] = null;
+    }
+    if (!array_key_exists('registered_count', $event)) {
+        $event['registered_count'] = fetch_event_registration_count((string) ($event['id'] ?? ''), $headers, $event);
     }
 
     return $event;
@@ -270,7 +465,28 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
         ];
     }
 
-    if (event_allows_open_registration($event)) {
+    $eventId = trim((string) ($event['id'] ?? ''));
+    if ($eventId !== '' && event_registration_is_full($eventId, $event, $headers)) {
+        return [
+            'allowed' => false,
+            'target_allowed' => true,
+            'approval_required' => false,
+            'controlled_registration' => !event_registration_open_to_all($event),
+            'message' => 'Registration is full for this event.',
+        ];
+    }
+
+    if (is_event_registration_window_closed($event)) {
+        return [
+            'allowed' => false,
+            'target_allowed' => true,
+            'approval_required' => false,
+            'controlled_registration' => !event_registration_open_to_all($event),
+            'message' => 'Registration is closed for this event.',
+        ];
+    }
+
+    if (event_registration_open_to_all($event)) {
         return [
             'allowed' => true,
             'target_allowed' => true,

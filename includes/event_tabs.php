@@ -25,6 +25,8 @@ if (!function_exists('render_event_tabs')) {
      * - uses_sessions (bool)
      * - event_status (string)
      * - participant_day (optional string)
+     *
+     * Teacher tabs: Event Details + Participants only.
      */
     function render_event_tabs(array $options): void
     {
@@ -58,6 +60,14 @@ if (!function_exists('render_event_tabs')) {
         echo '<div class="border-b border-zinc-200 mb-6 pt-2">';
         echo '<nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">';
         echo event_tab_link_html($detailsHref, 'Event Details', $currentTab === 'details');
+
+        if ($role === 'teacher') {
+            echo event_tab_link_html($participantsHref, 'Participants', $currentTab === 'participants');
+            echo '</nav>';
+            echo '</div>';
+            return;
+        }
+
         echo event_tab_link_html($participantsHref, 'Event Participants', $currentTab === 'participants');
 
         if ($role === 'admin' && $isFinished) {
@@ -65,14 +75,16 @@ if (!function_exists('render_event_tabs')) {
         }
 
         if ($isFinished) {
-            echo event_tab_link_html($feedbackHref, 'Event Feedback', $currentTab === 'feedback');
+            // Feedback is visible to admins and teachers; students see it in their own flow.
+            if ($role === 'admin' || $role === 'teacher') {
+                echo event_tab_link_html($feedbackHref, 'Event Feedback', $currentTab === 'feedback');
+            }
         }
 
-        if (!$isFinished) {
+        if (!$isFinished && $role === 'admin') {
+            // Evaluation Questions + QR are strictly admin tools.
             echo event_tab_link_html($questionsHref, 'Evaluation Questions', $currentTab === 'questions');
-            if ($role === 'admin') {
-                echo event_tab_link_html($qrHref, 'QR Scanner Access', $currentTab === 'qr');
-            }
+            echo event_tab_link_html($qrHref, 'QR Scanner Access', $currentTab === 'qr');
         }
 
         echo '</nav>';

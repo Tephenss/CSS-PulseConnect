@@ -228,7 +228,8 @@ function save_proposal_requirements(
     string $eventId,
     array $requirements,
     string $adminId,
-    array $headers
+    array $headers,
+    array $options = []
 ): array {
     $requirements = normalize_proposal_requirement_input($requirements);
     if ($requirements === []) {
@@ -421,25 +422,34 @@ function save_proposal_requirements(
         }
     }
 
-    $eventPayload = json_encode([
-        'proposal_stage' => 'requirements_requested',
-        'requirements_requested_at' => gmdate('c'),
-        'requirements_submitted_at' => null,
-        'updated_at' => gmdate('c'),
-    ], JSON_UNESCAPED_SLASHES);
+    $includeRequirements = !empty($options['include_requirements']);
+    $skipEventStageUpdate = !empty($options['skip_event_stage_update']);
+    $savedRequirements = $includeRequirements
+        ? (fetch_proposal_requirements_map([$eventId], $headers)[$eventId] ?? [])
+        : [];
 
-    if (!is_string($eventPayload)) {
-        return ['ok' => false, 'error' => 'Unable to prepare the event update payload.'];
-    }
+    if (!$skipEventStageUpdate) {
+        $eventPayload = json_encode([
+            'proposal_stage' => (string) ($options['proposal_stage'] ?? 'requirements_requested'),
+            'requirements_requested_at' => $options['requirements_requested_at'] ?? gmdate('c'),
+            'requirements_submitted_at' => $options['requirements_submitted_at'] ?? null,
+            'updated_at' => gmdate('c'),
+        ], JSON_UNESCAPED_SLASHES);
 
-    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId);
-    $eventRes = supabase_request('PATCH', $eventUrl, proposal_requirement_write_headers(), $eventPayload);
-    if (!$eventRes['ok']) {
-        return ['ok' => false, 'error' => build_error($eventRes['body'] ?? null, (int) ($eventRes['status'] ?? 0), $eventRes['error'] ?? null, 'Failed to update the event requirement state')];
+        if (!is_string($eventPayload)) {
+            return ['ok' => false, 'error' => 'Unable to prepare the event update payload.'];
+        }
+
+        $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId);
+        $eventRes = supabase_request('PATCH', $eventUrl, proposal_requirement_write_headers(), $eventPayload);
+        if (!$eventRes['ok']) {
+            return ['ok' => false, 'error' => build_error($eventRes['body'] ?? null, (int) ($eventRes['status'] ?? 0), $eventRes['error'] ?? null, 'Failed to update the event requirement state')];
+        }
     }
 
     return [
         'ok' => true,
         'count' => count($requirements),
+        'requirements' => $savedRequirements,
     ];
 }

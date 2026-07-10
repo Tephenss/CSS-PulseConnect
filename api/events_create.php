@@ -10,6 +10,8 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/proposal_requirements.php';
+require_once __DIR__ . '/../includes/registration_access.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
 {
@@ -46,6 +48,7 @@ $graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_tim
 $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 $eventMode = normalize_event_mode(isset($data['event_mode']) ? (string) $data['event_mode'] : 'simple');
 $sessions = normalize_event_sessions($data['sessions'] ?? null, $location);
+$proposalRequirements = is_array($data['proposal_requirements'] ?? null) ? $data['proposal_requirements'] : [];
 
 if ($eventMode === 'seminar_based') {
     if (count($sessions) === 0) {
@@ -55,6 +58,10 @@ if ($eventMode === 'seminar_based') {
     $window = derive_event_window_from_sessions($sessions);
     $startAt = (string) ($window['start_at'] ?? '');
     $endAt = (string) ($window['end_at'] ?? '');
+}
+
+if ((string) ($user['role'] ?? '') === 'teacher' && $proposalRequirements === []) {
+    json_response(['ok' => false, 'error' => 'Add the required proposal documents before submitting.'], 400);
 }
 
 if ($title === '' || mb_strlen($title) > 150) {
@@ -76,6 +83,27 @@ if ($end <= $start) {
 
 $role = (string) ($user['role'] ?? 'student');
 $status = $role === 'admin' ? 'approved' : 'pending';
+$isFreeEvent = true;
+$registrationLimit = null;
+$registrationCloseWeeks = null;
+
+if ($role === 'teacher') {
+    if (array_key_exists('is_free_event', $data)) {
+        $isFreeEvent = normalize_registration_bool($data['is_free_event']);
+    }
+    if (array_key_exists('registration_limit', $data)) {
+        $registrationLimit = normalize_registration_limit($data['registration_limit']);
+        if ($data['registration_limit'] !== null && $data['registration_limit'] !== '' && $registrationLimit === null) {
+            json_response(['ok' => false, 'error' => 'Student limit must be between 1 and 9999.'], 400);
+        }
+    }
+    if (array_key_exists('registration_close_weeks', $data)) {
+        $registrationCloseWeeks = normalize_registration_close_weeks($data['registration_close_weeks']);
+        if ($data['registration_close_weeks'] !== null && $data['registration_close_weeks'] !== '' && $registrationCloseWeeks === null) {
+            json_response(['ok' => false, 'error' => 'Registration close limit must be between 1 and 4 weeks.'], 400);
+        }
+    }
+}
 
 $payload = [
     'title' => $title,
@@ -90,6 +118,16 @@ $payload = [
     'grace_time' => $graceTime,
     'event_span' => $eventSpan,
 ];
+
+if ($role === 'teacher') {
+    $payload['is_free_event'] = $isFreeEvent;
+    if ($registrationLimit !== null) {
+        $payload['registration_limit'] = $registrationLimit;
+    }
+    if ($registrationCloseWeeks !== null) {
+        $payload['registration_close_weeks'] = $registrationCloseWeeks;
+    }
+}
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at';
 $headers = [
@@ -107,6 +145,21 @@ if (!$res['ok'] && is_missing_column_error($res, 'event_mode')) {
     $payloadWithStructure = $payload;
     $payloadWithStructure['event_structure'] = mode_to_structure($eventMode, $sessions);
     $res = supabase_request('POST', $url, $headers, json_encode([$payloadWithStructure], JSON_UNESCAPED_SLASHES));
+}
+if (!$res['ok'] && (is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks'))) {
+    if ($role === 'teacher' && $registrationLimit !== null && is_missing_column_error($res, 'registration_limit')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Student limit could not be saved. Run supabase/APPLY_REGISTRATION_FIXES.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+
+    $retryPayload = $payloadWithMode;
+    unset($retryPayload['is_free_event'], $retryPayload['registration_limit'], $retryPayload['registration_close_weeks']);
+    if (!isset($retryPayload['event_mode'])) {
+        $retryPayload['event_structure'] = mode_to_structure($eventMode, $sessions);
+    }
+    $res = supabase_request('POST', $url, $headers, json_encode([$retryPayload], JSON_UNESCAPED_SLASHES));
 }
 
 if (!$res['ok']) {
@@ -138,6 +191,31 @@ if ($eventMode === 'seminar_based' && is_array($event) && !empty($event['id'])) 
         'apikey: ' . SUPABASE_KEY,
         'Authorization: Bearer ' . SUPABASE_KEY,
     ]);
+}
+
+if ($role === 'teacher' && is_array($event) && !empty($event['id'])) {
+    $proposalSave = save_proposal_requirements(
+        (string) $event['id'],
+        $proposalRequirements,
+        (string) ($user['id'] ?? ''),
+        proposal_requirement_headers(),
+        [
+            'skip_event_stage_update' => true,
+            'include_requirements' => true,
+        ]
+    );
+
+    if (!($proposalSave['ok'] ?? false)) {
+        $cleanupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode((string) $event['id']);
+        supabase_request('DELETE', $cleanupUrl, [
+            'Accept: application/json',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+        ]);
+        json_response(['ok' => false, 'error' => (string) ($proposalSave['error'] ?? 'Failed to save proposal requirements.')], 500);
+    }
+
+    $event['proposal_requirements'] = $proposalSave['requirements'] ?? [];
 }
 
 json_response(['ok' => true, 'event' => $event], 200);
