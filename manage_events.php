@@ -10,6 +10,8 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/proposal_requirements.php';
+require_once __DIR__ . '/includes/student_requirements.php';
+require_once __DIR__ . '/includes/manage_events_live.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -879,17 +881,19 @@ render_header('Manage Events', $user);
         </div>
 
         <?php if ($role === 'teacher'): ?>
-        <div id="step4" class="space-y-4 hidden pb-4">
-          <div class="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-            <div class="text-xs font-bold uppercase tracking-wide text-orange-700">Phase 4: Requirements</div>
-            <p class="mt-1 text-[12px] leading-relaxed text-orange-800">
-              Upload the required proposal forms now so the event goes directly to admin review after submission.
+        <div id="step4" class="space-y-5 hidden pb-4">
+          <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm space-y-4">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-orange-700">Event Req</span>
+              <span class="text-[11px] font-semibold text-zinc-500">Required for admin review</span>
+            </div>
+            <p class="text-[12px] leading-relaxed text-zinc-600">
+              Upload the required proposal forms for admin review before your event can be published.
             </p>
-          </div>
 
           <div id="teacherProposalCreateSection">
           <div id="teacherProposalRequirementsList" class="space-y-3">
-            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
+            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 shadow-sm"
               data-requirement-code="LU-AA-FO-113"
               data-default-label="LU-AA-FO-113(ACTIVITY PROPOSAL FORM)"
               data-required="1">
@@ -905,7 +909,7 @@ render_header('Manage Events', $user);
                 class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
             </div>
 
-            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
+            <div class="teacher-proposal-item rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 shadow-sm"
               data-requirement-code="LU-AA-FO-108"
               data-default-label="LU-AA-FO-108(ANNUAL PROPOSAL PLAN)"
               data-required="1">
@@ -936,6 +940,45 @@ render_header('Manage Events', $user);
               Existing uploaded documents are restored below. Upload a new file only for requirements you want to replace, then submit again.
             </div>
             <div id="teacherProposalEditRequirementsList" class="space-y-3"></div>
+          </div>
+          </div>
+
+          <div id="studentRequirementsSection" class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm space-y-4">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-sky-700">Student Req</span>
+              <span class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zinc-500">Optional</span>
+            </div>
+            <p class="text-[12px] leading-relaxed text-zinc-600">
+              Select documents students must upload on the app before registering. Leave this empty if students can register directly with no document upload.
+            </p>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <?php foreach (STUDENT_REQUIREMENT_PRESETS as $code => $label): ?>
+            <label class="flex items-start gap-3 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-4 cursor-pointer hover:border-sky-300 transition">
+              <input type="checkbox" class="student-req-checkbox mt-0.5 h-4 w-4 rounded border-zinc-300 text-sky-600 focus:ring-sky-500"
+                data-code="<?= htmlspecialchars($code) ?>" data-label="<?= htmlspecialchars($label) ?>" />
+              <span>
+                <span class="block text-sm font-semibold text-zinc-900"><?= htmlspecialchars($label) ?></span>
+                <span class="block text-[11px] text-zinc-500 mt-0.5">Students upload this on the app</span>
+              </span>
+            </label>
+            <?php endforeach; ?>
+          </div>
+
+          <div class="rounded-2xl border border-zinc-200 bg-zinc-50/50 p-4 space-y-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-sm font-bold text-zinc-900">Other Requirements</div>
+                <p class="text-[11px] text-zinc-500 mt-0.5">Add any additional document students must submit.</p>
+              </div>
+              <button type="button" id="btnAddStudentRequirementOther"
+                class="inline-flex items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 hover:bg-sky-100 transition">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Add Other
+              </button>
+            </div>
+            <div id="studentRequirementOtherList" class="space-y-2"></div>
+          </div>
           </div>
         </div>
         <?php endif; ?>
@@ -1132,16 +1175,18 @@ foreach ($events as $ev) {
   elseif ($s === 'draft')
     $draftCount++;
 }
+$liveListHash = manage_events_live_list_hash($user, $events);
 ?>
 
 <!-- ═══════  HEADER  ═══════ -->
 <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
   <div>
     <p class="text-zinc-600 text-sm">
-      <?php if ($role === 'admin'): ?>Full control — create, edit, approve and publish events.<?php else: ?>Create
+      <?php if ($role === 'admin'): ?>Review teacher proposals — send requirements, approve documents, and publish events.<?php else: ?>Create
         events (pending). Admin approves & publishes.<?php endif; ?>
     </p>
   </div>
+  <?php if ($role === 'teacher'): ?>
   <button id="btnCreateEvent"
     class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white px-5 py-2.5 text-sm font-medium hover:from-orange-500 hover:to-red-500 transition-all shadow-lg shadow-orange-600/25 hover:shadow-orange-500/40 hover:scale-[1.02] active:scale-[0.98]">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
@@ -1149,6 +1194,7 @@ foreach ($events as $ev) {
     </svg>
     Create Event
   </button>
+  <?php endif; ?>
 </div>
 
 <!-- ═══════  STAT CARDS  ═══════ -->
@@ -1504,6 +1550,17 @@ foreach ($events as $ev) {
     background: linear-gradient(90deg, #f97316 0%, #10b981 100%);
     transition: width 0.25s ease;
   }
+
+  .event-card-live-update {
+    animation: eventLivePulse 1.8s ease;
+    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.35);
+  }
+
+  @keyframes eventLivePulse {
+    0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.45); }
+    40% { box-shadow: 0 0 0 6px rgba(249, 115, 22, 0.12); }
+    100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+  }
 </style>
 
 <!-- ═══════  EVENTS TABLE  ═══════ -->
@@ -1547,10 +1604,8 @@ foreach ($events as $ev) {
           }
         }
         ?>
-        <?php if ($approvalCount > 0): ?>
-          <span
-            class="bg-sky-100 border border-sky-200 text-sky-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm"><?= $approvalCount ?></span>
-        <?php endif; ?>
+        <span id="teacherApprovalTabBadge"
+          class="bg-sky-100 border border-sky-200 text-sky-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm<?= $approvalCount > 0 ? '' : ' hidden' ?>"><?= $approvalCount ?></span>
       </button>
       <button id="tabExpired"
         class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors">Expired</button>
@@ -1564,11 +1619,15 @@ foreach ($events as $ev) {
       <button id="tabPending"
         class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors flex items-center gap-1.5 px-2">
         Pending Proposals
-        <?php $pendingCount = count(array_filter($events, fn($e) => ($e['status'] ?? '') === 'pending')); ?>
-        <?php if ($pendingCount > 0): ?>
-          <span
-            class="bg-red-100 border border-red-200 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm"><?= $pendingCount ?></span>
-        <?php endif; ?>
+        <?php $pendingCount = count(array_filter($events, static function (array $event): bool {
+          if (($event['status'] ?? '') !== 'pending') {
+            return false;
+          }
+          $stage = strtolower(trim((string) ($event['proposal_stage'] ?? 'pending_requirements')));
+          return manage_events_admin_pending_visible('pending', $stage);
+        })); ?>
+        <span id="pendingProposalsTabBadge"
+          class="bg-red-100 border border-red-200 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm<?= $pendingCount > 0 ? '' : ' hidden' ?>"><?= $pendingCount ?></span>
       </button>
     </div>
   <?php else: ?>
@@ -1618,7 +1677,7 @@ foreach ($events as $ev) {
       class="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none opacity-100 transition-opacity duration-300 z-10">
     </div>
 
-    <div id="eventScrollContainer" class="event-scroll-container">
+    <div id="eventScrollContainer" class="event-scroll-container" data-live-list-hash="<?= htmlspecialchars($liveListHash) ?>">
       <div class="space-y-3 pb-24">
         <?php foreach ($events as $e): ?>
           <?php
@@ -1629,6 +1688,13 @@ foreach ($events as $ev) {
           // For teachers: If archived but NOT rejected, skip (it's a manual archive)
           if ($role === 'teacher' && $status === 'archived' && !$isRejected)
             continue;
+
+          if ($role === 'admin' && $status === 'pending') {
+            $rawProposalStage = strtolower(trim((string) ($e['proposal_stage'] ?? 'pending_requirements')));
+            if (!manage_events_admin_pending_visible($status, $rawProposalStage)) {
+              continue;
+            }
+          }
           ?>
           <?php
           $eid = (string) ($e['id'] ?? '');
@@ -1644,16 +1710,50 @@ foreach ($events as $ev) {
           $proposalSummary = $proposalSummaryMap[$eid] ?? ['total' => 0, 'submitted' => 0, 'complete' => false, 'percent' => 0];
           $proposalSubmissionsVisible = $proposalVisibleSubmissions;
           $proposalSummaryVisible = $proposalSummary;
+          $proposalStage = manage_events_live_effective_stage($status, $proposalStage, $proposalRequirements);
           $adminWaitingOnFinalSubmit = $role === 'admin'
             && $status === 'pending'
             && $proposalRequirements !== []
             && $proposalStage !== 'under_review'
             && $proposalStage !== 'approved';
+          $proposalDisplaySummary = ($role === 'admin' && $adminWaitingOnFinalSubmit)
+            ? build_proposal_requirement_summary($proposalRequirements, $proposalSubmissions)
+            : $proposalSummaryVisible;
+          $liveRequirementItems = [];
+          foreach ($proposalRequirements as $requirement) {
+            if (!is_array($requirement)) {
+              continue;
+            }
+            $requirementId = trim((string) ($requirement['id'] ?? ''));
+            $liveRequirementItems[] = [
+              'id' => $requirementId,
+              'uploaded' => $requirementId !== '' && isset($proposalSubmissions[$requirementId]),
+            ];
+          }
+          $liveRevision = manage_events_live_revision(
+            [
+              'status' => $status,
+              'proposal_stage' => $proposalStage,
+              'updated_at' => (string) ($e['updated_at'] ?? ''),
+              'requirements_submitted_at' => (string) ($e['requirements_submitted_at'] ?? ''),
+              'description' => $description,
+            ],
+            $proposalDisplaySummary,
+            $liveRequirementItems
+          );
           $proposalStageConfig = match ($proposalStage) {
-            'requirements_requested' => ['label' => 'Waiting on teacher', 'bg' => 'bg-orange-50', 'text' => 'text-orange-700', 'border' => 'border-orange-200'],
-            'under_review' => ['label' => 'Under review', 'bg' => 'bg-violet-50', 'text' => 'text-violet-700', 'border' => 'border-violet-200'],
-            'approved' => ['label' => 'Ready for publish', 'bg' => 'bg-emerald-50', 'text' => 'text-emerald-700', 'border' => 'border-emerald-200'],
-            default => ['label' => 'Needs requirements', 'bg' => 'bg-amber-50', 'text' => 'text-amber-700', 'border' => 'border-amber-200'],
+            'requirements_requested' => $role === 'teacher'
+              ? ['label' => 'Upload documents', 'bg' => 'bg-orange-50', 'text' => 'text-orange-700', 'border' => 'border-orange-200']
+              : ['label' => 'Waiting on teacher', 'bg' => 'bg-orange-50', 'text' => 'text-orange-700', 'border' => 'border-orange-200'],
+            'under_review' => $role === 'teacher'
+              ? ['label' => 'Waiting for admin', 'bg' => 'bg-violet-50', 'text' => 'text-violet-700', 'border' => 'border-violet-200']
+              : ['label' => 'Under review', 'bg' => 'bg-violet-50', 'text' => 'text-violet-700', 'border' => 'border-violet-200'],
+            'approved' => $role === 'teacher'
+              ? ['label' => 'Approved', 'bg' => 'bg-emerald-50', 'text' => 'text-emerald-700', 'border' => 'border-emerald-200']
+              : ['label' => 'Ready for publish', 'bg' => 'bg-emerald-50', 'text' => 'text-emerald-700', 'border' => 'border-emerald-200'],
+            default => $role === 'teacher'
+              ? ['label' => 'Waiting for requirements', 'bg' => 'bg-amber-50', 'text' => 'text-amber-700', 'border' => 'border-amber-200']
+              : ['label' => 'Needs requirements', 'bg' => 'bg-amber-50', 'text' => 'text-amber-700', 'border' => 'border-amber-200'],
           };
 
           $statusConfig = match ($status) {
@@ -1694,6 +1794,9 @@ foreach ($events as $ev) {
             data-registration_close_weeks="<?= htmlspecialchars((string) ($e['registration_close_weeks'] ?? '1')) ?>"
             data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
             data-can_edit="<?= $canEdit ? '1' : '0' ?>"
+            data-proposal-stage="<?= htmlspecialchars($proposalStage) ?>"
+            data-proposal-revision="<?= htmlspecialchars($liveRevision) ?>"
+            data-live-updated-at="<?= htmlspecialchars((string) ($e['updated_at'] ?? '')) ?>"
             tabindex="<?= $role === 'teacher' ? '0' : '-1' ?>">
             <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
@@ -1710,12 +1813,12 @@ foreach ($events as $ev) {
                       <h3 class="text-sm font-semibold text-zinc-900 truncate">
                         <?= htmlspecialchars((string) ($e['title'] ?? '')) ?></h3>
                       <span
-                        class="text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
+                        class="event-status-badge text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
                         <?= ($status === 'archived' && $isRejected) ? 'Rejected' : ucfirst(htmlspecialchars($status)) ?>
                       </span>
                       <?php if (in_array($status, ['pending', 'approved'], true)): ?>
                         <span
-                          class="text-[10px] font-bold rounded-full border px-2 py-0.5 <?= $proposalStageConfig['bg'] ?> <?= $proposalStageConfig['text'] ?> <?= $proposalStageConfig['border'] ?> flex-shrink-0">
+                          class="proposal-stage-badge text-[10px] font-bold rounded-full border px-2 py-0.5 <?= $proposalStageConfig['bg'] ?> <?= $proposalStageConfig['text'] ?> <?= $proposalStageConfig['border'] ?> flex-shrink-0">
                           <?= htmlspecialchars($proposalStageConfig['label']) ?>
                         </span>
                       <?php endif; ?>
@@ -1734,7 +1837,7 @@ foreach ($events as $ev) {
                     </div>
 
                     <?php if ($status === 'archived' && $isRejected): ?>
-                      <div class="mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm">
+                      <div class="proposal-reject-remark mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm">
                         <div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round"
@@ -1742,10 +1845,12 @@ foreach ($events as $ev) {
                           </svg>
                           Admin Remark:
                         </div>
+                        <p class="proposal-reject-remark-text">
                         <?php
                         preg_match('/\[REJECT_REASON:\s*(.*?)\]/', $description, $m);
                         echo htmlspecialchars($m[1] ?? 'Proposal review required.');
                         ?>
+                        </p>
                       </div>
                     <?php endif; ?>
 
@@ -1785,21 +1890,21 @@ foreach ($events as $ev) {
                       </p>
                     <?php endif; ?>
                     <?php if ($status === 'pending'): ?>
-                      <div class="mt-3 rounded-xl border border-zinc-200 bg-white/80 px-3 py-2 shadow-sm">
+                      <div class="proposal-progress-section mt-3 rounded-xl border border-zinc-200 bg-white/80 px-3 py-2 shadow-sm">
                         <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                           <span class="font-semibold text-zinc-700">
                             Proposal requirements
                           </span>
-                          <span class="text-zinc-500">
-                            <?= (int) ($proposalSummaryVisible['submitted'] ?? 0) ?>/<?= (int) ($proposalSummaryVisible['total'] ?? 0) ?> uploaded
+                          <span class="proposal-upload-count text-zinc-500">
+                            <?= (int) ($proposalDisplaySummary['submitted'] ?? 0) ?>/<?= (int) ($proposalDisplaySummary['total'] ?? 0) ?> uploaded
                           </span>
                         </div>
-                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200">
+                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200 proposal-progress-track">
                           <div
-                            class="h-full rounded-full bg-gradient-to-r from-orange-500 to-emerald-500 transition-all"
-                            style="width: <?= max(0, min(100, (int) ($proposalSummaryVisible['percent'] ?? 0))) ?>%"></div>
+                            class="proposal-progress-fill h-full rounded-full bg-gradient-to-r from-orange-500 to-emerald-500 transition-all"
+                            style="width: <?= max(0, min(100, (int) ($proposalDisplaySummary['percent'] ?? 0))) ?>%"></div>
                         </div>
-                        <div class="mt-2 flex flex-wrap gap-1.5">
+                        <div class="proposal-req-tags mt-2 flex flex-wrap gap-1.5">
                           <?php if ($proposalRequirements !== []): ?>
                             <?php foreach ($proposalRequirements as $requirement): ?>
                               <?php
@@ -1813,13 +1918,25 @@ foreach ($events as $ev) {
                               </span>
                             <?php endforeach; ?>
                           <?php else: ?>
-                            <span class="text-[11px] text-zinc-500">Admin has not requested the required documents yet.</span>
+                            <span class="text-[11px] text-zinc-500"><?= $role === 'teacher'
+                              ? 'Waiting for admin to send document requirements.'
+                              : 'Admin has not requested the required documents yet.' ?></span>
                           <?php endif; ?>
                         </div>
                         <?php if ($adminWaitingOnFinalSubmit): ?>
-                          <p class="mt-2 text-[11px] font-medium text-zinc-500">
-                            Draft progress is shown here. Full file review opens after the teacher submits for review.
+                          <p class="proposal-waiting-note mt-2 text-[11px] font-medium text-zinc-500">
+                            Draft progress is shown here (<?= (int) ($proposalDisplaySummary['submitted'] ?? 0) ?>/<?= (int) ($proposalDisplaySummary['total'] ?? 0) ?> uploaded). Full file review opens after the teacher submits for review.
                           </p>
+                        <?php elseif ($role === 'teacher' && $status === 'pending' && $proposalStage === 'requirements_requested'): ?>
+                          <p class="proposal-waiting-note mt-2 text-[11px] font-medium text-orange-700">
+                            Open View/Edit to upload the requested proposal documents.
+                          </p>
+                        <?php elseif ($role === 'teacher' && $status === 'pending' && $proposalStage === 'under_review'): ?>
+                          <p class="proposal-waiting-note mt-2 text-[11px] font-medium text-violet-700">
+                            Documents submitted. Waiting for admin approval.
+                          </p>
+                        <?php else: ?>
+                          <p class="proposal-waiting-note mt-2 text-[11px] font-medium text-zinc-500 hidden"></p>
                         <?php endif; ?>
                       </div>
                     <?php endif; ?>
@@ -1828,13 +1945,21 @@ foreach ($events as $ev) {
               </div>
 
               <!-- Actions -->
-              <div class="flex gap-1.5 flex-wrap items-center lg:flex-shrink-0 pl-0 sm:pl-[52px] lg:pl-0">
+              <div class="event-admin-actions flex gap-1.5 flex-wrap items-center lg:flex-shrink-0 pl-0 sm:pl-[52px] lg:pl-0">
                 <?php if ($role === 'admin'): ?>
                   <?php if ($status === 'pending'): ?>
                     <button
                       class="btnReject rounded-lg border border-red-200 bg-red-50 px-4 py-1.5 text-[13px] text-red-700 hover:bg-red-100 transition font-bold"
                       data-id="<?= htmlspecialchars($eid) ?>"
                       data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Reject</button>
+                    <?php $approveReady = $proposalStage === 'under_review'; ?>
+                    <button
+                      class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm<?= $approveReady ? '' : ' opacity-50 cursor-not-allowed' ?>"
+                      data-id="<?= htmlspecialchars($eid) ?>"
+                      data-status="approved"
+                      data-label="Approve"
+                      data-approve-ready="<?= $approveReady ? '1' : '0' ?>"
+                      <?= $approveReady ? '' : 'disabled title="Waiting for the teacher to submit documents for review."' ?>>Approve</button>
                     <button
                       class="btnRequirements rounded-lg border border-orange-200 bg-orange-50 px-4 py-1.5 text-[13px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-sm"
                       data-id="<?= htmlspecialchars($eid) ?>"
@@ -1845,13 +1970,8 @@ foreach ($events as $ev) {
                       data-summary="<?= htmlspecialchars((string) json_encode($proposalSummaryVisible, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>">
                       <?= $proposalRequirements === []
                         ? 'Send Req'
-                        : ($proposalStage === 'under_review' ? 'Review Docs' : 'Edit Req') ?>
+                        : ($proposalStage === 'under_review' ? 'Review Docs' : 'View') ?>
                     </button>
-                    <?php if ($proposalStage === 'under_review'): ?>
-                      <button
-                        class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
-                        data-id="<?= htmlspecialchars($eid) ?>" data-status="approved">Approve</button>
-                    <?php endif; ?>
                   <?php endif; ?>
 
                   <?php if ($status === 'approved'): ?>
@@ -1907,7 +2027,11 @@ foreach ($events as $ev) {
               </svg>
             </div>
             <h3 class="text-zinc-800 font-medium mb-1">No events yet</h3>
+            <?php if ($role === 'teacher'): ?>
             <p class="text-sm">Click <span class="text-orange-700 font-medium">"Create Event"</span> to get started.</p>
+            <?php else: ?>
+            <p class="text-sm">Teacher proposals will appear here once submitted.</p>
+            <?php endif; ?>
         </div>
       </div>
     </div>
@@ -3031,8 +3155,53 @@ foreach ($events as $ev) {
   });
 
   const subtitles = teacherProposalMode
-    ? ['Fill in the event info', 'Add a description', 'Set the schedule', 'Upload requirements']
+    ? ['Fill in the event info', 'Add a description', 'Set the schedule', 'Event & student requirements']
     : ['Fill in the event info', 'Add a description', 'Set the schedule'];
+
+  function collectStudentRequirements() {
+    const items = [];
+    document.querySelectorAll('#studentRequirementsSection .student-req-checkbox:checked').forEach((checkbox) => {
+      items.push({
+        code: String(checkbox.dataset.code || '').trim(),
+        label: String(checkbox.dataset.label || '').trim(),
+      });
+    });
+    document.querySelectorAll('#studentRequirementOtherList .student-req-other-item').forEach((row) => {
+      const label = String(row.querySelector('input')?.value || '').trim();
+      if (label) {
+        items.push({ code: 'OTHER', label });
+      }
+    });
+    return items;
+  }
+
+  function resetStudentRequirementsForm() {
+    document.querySelectorAll('#studentRequirementsSection .student-req-checkbox').forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    const otherList = document.getElementById('studentRequirementOtherList');
+    if (otherList) otherList.innerHTML = '';
+  }
+
+  function createStudentRequirementOtherRow(value = '') {
+    const row = document.createElement('div');
+    row.className = 'student-req-other-item flex items-center gap-2';
+    row.innerHTML = `
+      <input type="text" value="${value.replace(/"/g, '&quot;')}" maxlength="120"
+        class="flex-1 rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-400"
+        placeholder="e.g. Barangay Clearance" />
+      <button type="button" class="rounded-lg border border-zinc-200 px-2.5 py-2 text-xs font-semibold text-zinc-600 hover:bg-zinc-50">Remove</button>
+    `;
+    row.querySelector('button')?.addEventListener('click', () => row.remove());
+    return row;
+  }
+
+  document.getElementById('btnAddStudentRequirementOther')?.addEventListener('click', () => {
+    const list = document.getElementById('studentRequirementOtherList');
+    if (!list) return;
+    list.appendChild(createStudentRequirementOtherRow());
+    list.lastElementChild?.querySelector('input')?.focus();
+  });
 
   function setWizardStep(s) {
     document.getElementById('step1')?.classList.toggle('hidden', s !== 1);
@@ -3389,7 +3558,7 @@ foreach ($events as $ev) {
     registrationLimitInput.value = digitsOnly;
   });
 
-  document.getElementById('btnCreateEvent').addEventListener('click', () => {
+  document.getElementById('btnCreateEvent')?.addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
     document.getElementById('event_id').value = '';
 
@@ -3416,6 +3585,7 @@ foreach ($events as $ev) {
     const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
     if (registrationCloseWeeksInput) registrationCloseWeeksInput.value = '1';
     resetTeacherProposalRequirements();
+    resetStudentRequirementsForm();
 
     const msg = document.getElementById('formMsg');
     if (msg) {
@@ -3455,7 +3625,7 @@ foreach ($events as $ev) {
       step = 2;
     } else if (step === 2) {
       step = 3;
-    } else if (step === 3 && maxWizardStep === 4) {
+    } else if (step === 3 && maxWizardStep >= 4) {
       step = 4;
     }
     setWizardStep(step);
@@ -3510,6 +3680,9 @@ foreach ($events as $ev) {
     const mode = document.getElementById('mode').value;
     const msg = document.getElementById('formMsg');
     const submitBtn = document.getElementById('btnSubmit');
+    let createdEventId = '';
+
+    window.pulseManageEventsBusy = true;
 
     try {
       const title = document.getElementById('title').value.trim();
@@ -3621,6 +3794,7 @@ foreach ($events as $ev) {
 
       if (teacherProposalMode && mode === 'create') {
         payload.proposal_requirements = teacherProposalPayload.requirements;
+        payload.student_requirements = collectStudentRequirements();
       }
 
       if (teacherProposalMode) {
@@ -3675,12 +3849,11 @@ foreach ($events as $ev) {
       if (teacherProposalMode && mode === 'create') {
         const createdEvent = data.event || {};
         const eventId = String(createdEvent.id || '').trim();
+        createdEventId = eventId;
         const savedRequirements = Array.isArray(createdEvent.proposal_requirements) ? createdEvent.proposal_requirements : [];
         if (!eventId || savedRequirements.length !== teacherProposalPayload.files.length) {
           throw new Error('Proposal event was created, but the requirement package is incomplete.');
         }
-
-        msg.textContent = 'Uploading proposal requirements...';
 
         for (let i = 0; i < savedRequirements.length; i += 1) {
           const requirement = savedRequirements[i];
@@ -3689,6 +3862,8 @@ foreach ($events as $ev) {
           if (!requirementId || !file) {
             throw new Error('Missing uploaded proposal file data.');
           }
+
+          msg.textContent = `Uploading proposal file ${i + 1} of ${savedRequirements.length}...`;
 
           const formData = new FormData();
           formData.append('event_id', eventId);
@@ -3725,8 +3900,9 @@ foreach ($events as $ev) {
         }
 
         if (teacherProposalEditReplacements.length > 0) {
-          msg.textContent = 'Uploading replacement proposal files...';
-          for (const replacement of teacherProposalEditReplacements) {
+          for (let i = 0; i < teacherProposalEditReplacements.length; i += 1) {
+            const replacement = teacherProposalEditReplacements[i];
+            msg.textContent = `Uploading replacement file ${i + 1} of ${teacherProposalEditReplacements.length}...`;
             const formData = new FormData();
             formData.append('event_id', eventId);
             formData.append('requirement_id', replacement.requirementId);
@@ -3767,16 +3943,25 @@ foreach ($events as $ev) {
       setTimeout(() => window.location.reload(), 350);
     } catch (err) {
       msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
-      msg.textContent = err?.message || 'Server error encountered.';
+      if (createdEventId) {
+        msg.textContent = (err?.message || 'Server error encountered.')
+          + ' The proposal was saved without all files. Open View/Edit on the event and upload the missing documents.';
+      } else {
+        msg.textContent = err?.message || 'Server error encountered.';
+      }
       submitBtn.disabled = false;
       submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    } finally {
+      window.pulseManageEventsBusy = false;
     }
   });
   // ── Approve (Page 34) ──
   document.querySelectorAll('.btnApprove').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
       const event_id = btn.dataset.id;
       const status = btn.dataset.status;
+      const label = btn.dataset.label || 'Approve';
       btn.disabled = true;
       btn.textContent = '...';
       try {
@@ -3791,7 +3976,8 @@ foreach ($events as $ev) {
       } catch (e) {
         alert(e.message || 'Failed');
       } finally {
-        btn.disabled = false;
+        btn.textContent = label;
+        btn.disabled = btn.dataset.approveReady !== '1';
       }
     });
   });
@@ -3940,6 +4126,10 @@ foreach ($events as $ev) {
 
   let activeTab = role === 'teacher' ? 'active' : 'all';
 
+  function getEventCards() {
+    return document.querySelectorAll('.event-card');
+  }
+
   function resolveTeacherBucket(card) {
     const status = ((card.dataset.status || '') + '').toLowerCase();
     const hasRejectRemark = ((card.dataset.isRejected || '') + '') === '1';
@@ -3973,7 +4163,7 @@ foreach ($events as $ev) {
     const selectedType = typeFilter ? typeFilter.value : 'all';
     let visibleCount = 0;
 
-    eventCards.forEach(card => {
+    getEventCards().forEach(card => {
       const status = ((card.dataset.status || '') + '').toLowerCase();
       const title = ((card.dataset.title || '') + '').toLowerCase();
       const location = ((card.dataset.location || '') + '').toLowerCase();
@@ -4643,6 +4833,353 @@ foreach ($events as $ev) {
 
     logDebug("STT Script fully loaded & event listeners attached.");
   })();
+  window.refreshEventVisibility = refreshEventVisibility;
+</script>
+
+<script>
+(function () {
+  const liveStageStyles = {
+    requirements_requested: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
+    under_review: { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-200' },
+    approved: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+    pending_requirements: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  };
+  let manageEventsLiveInFlight = false;
+  let manageEventsLiveReloadScheduled = false;
+
+  function isManageEventsBusy() {
+    return window.pulseManageEventsBusy === true;
+  }
+
+  function scheduleManageEventsListReload() {
+    if (isManageEventsBusy()) return;
+    if (manageEventsLiveReloadScheduled) return;
+    manageEventsLiveReloadScheduled = true;
+    window.setTimeout(() => {
+      if (isManageEventsBusy()) {
+        manageEventsLiveReloadScheduled = false;
+        return;
+      }
+      window.location.reload();
+    }, 350);
+  }
+
+  function countPendingCardsInDom() {
+    return Array.from(document.querySelectorAll('.event-card[data-id]'))
+      .filter((card) => (card.dataset.status || '').toLowerCase() === 'pending').length;
+  }
+
+  function syncManageEventsListFromLive(data) {
+    if (!data || isManageEventsBusy()) return false;
+
+    const container = document.getElementById('eventScrollContainer');
+    const currentHash = container ? (container.dataset.liveListHash || '') : '';
+    const nextHash = data.list_hash || '';
+
+    const pendingCount = Number(data.pending_count || 0);
+    const pendingInDom = countPendingCardsInDom();
+    const missingPendingCards = Number.isFinite(pendingCount) && pendingCount > pendingInDom;
+
+    if (nextHash && currentHash && nextHash !== currentHash) {
+      scheduleManageEventsListReload();
+      return true;
+    }
+
+    if (missingPendingCards) {
+      scheduleManageEventsListReload();
+      return true;
+    }
+
+    if (nextHash && container && !currentHash) {
+      container.dataset.liveListHash = nextHash;
+    }
+
+    return false;
+  }
+
+  function escapeLiveHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function updatePendingTabBadge(count) {
+    const badge = document.getElementById('pendingProposalsTabBadge');
+    if (!badge) return;
+    const safeCount = Number.isFinite(count) && count > 0 ? count : 0;
+    badge.classList.toggle('hidden', safeCount <= 0);
+    if (safeCount > 0) badge.textContent = String(safeCount);
+  }
+
+  function updateApprovalTabBadge(count) {
+    const badge = document.getElementById('teacherApprovalTabBadge');
+    if (!badge) return;
+    const safeCount = Number.isFinite(count) && count > 0 ? count : 0;
+    badge.classList.toggle('hidden', safeCount <= 0);
+    if (safeCount > 0) badge.textContent = String(safeCount);
+  }
+
+  function formatLiveStatusLabel(status, isRejected) {
+    if (isRejected) return 'Rejected';
+    const normalized = String(status || '').toLowerCase();
+    if (!normalized) return 'Unknown';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+
+  function parseDisplayedUploadTotal(card) {
+    const countEl = card.querySelector('.proposal-upload-count');
+    if (!countEl) return null;
+    const match = String(countEl.textContent || '').match(/\d+\/(\d+)/);
+    if (!match) return null;
+    const total = Number.parseInt(match[1], 10);
+    return Number.isFinite(total) ? total : null;
+  }
+
+  function hasLiveEventChanges(card, eventData) {
+    if ((card.dataset.proposalRevision || '') !== (eventData.revision || '')) return true;
+    if ((card.dataset.proposalStage || '') !== (eventData.proposal_stage || '')) return true;
+    if ((card.dataset.status || '') !== (eventData.status || '')) return true;
+    if ((card.dataset.liveUpdatedAt || '') !== (eventData.updated_at || '')) return true;
+
+    const nextRejected = eventData.is_rejected ? '1' : '0';
+    if ((card.dataset.isRejected || '') !== nextRejected) return true;
+
+    const displayedTotal = parseDisplayedUploadTotal(card);
+    const nextTotal = Number((eventData.summary || {}).total || 0);
+    if (displayedTotal !== null && displayedTotal !== nextTotal) return true;
+
+    return false;
+  }
+
+  function upsertRejectRemark(card, rejectReason) {
+    const reason = String(rejectReason || '').trim();
+    if (!reason) return;
+
+    let remarkEl = card.querySelector('.proposal-reject-remark');
+    if (!remarkEl) {
+      remarkEl = document.createElement('div');
+      remarkEl.className = 'proposal-reject-remark mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm';
+      remarkEl.innerHTML = '<div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">'
+        + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">'
+        + '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008h-.008v-.008z" />'
+        + '</svg>Admin Remark:</div>'
+        + '<p class="proposal-reject-remark-text"></p>';
+
+      const titleRow = card.querySelector('.flex.items-center.gap-2.mb-1');
+      if (titleRow && titleRow.parentElement) {
+        titleRow.parentElement.insertBefore(remarkEl, titleRow.nextElementSibling);
+      } else {
+        card.querySelector('.min-w-0.flex-1')?.prepend(remarkEl);
+      }
+    }
+
+    const textEl = remarkEl.querySelector('.proposal-reject-remark-text');
+    if (textEl) textEl.textContent = reason;
+    remarkEl.classList.remove('hidden');
+  }
+
+  function applyLiveEventUpdate(card, eventData) {
+    if (!card || !eventData || !hasLiveEventChanges(card, eventData)) return false;
+
+    const isRejected = !!eventData.is_rejected;
+
+    card.dataset.proposalStage = eventData.proposal_stage || '';
+    card.dataset.proposalRevision = eventData.revision || '';
+    card.dataset.liveUpdatedAt = eventData.updated_at || '';
+    card.dataset.isRejected = isRejected ? '1' : '0';
+    if (eventData.status) {
+      card.dataset.status = eventData.status;
+    }
+    if (typeof eventData.description === 'string') {
+      card.dataset.description = eventData.description;
+    }
+
+    const statusBadge = card.querySelector('.event-status-badge');
+    if (statusBadge && eventData.status) {
+      statusBadge.textContent = formatLiveStatusLabel(eventData.status, isRejected);
+    }
+
+    if (isRejected && eventData.reject_reason) {
+      upsertRejectRemark(card, eventData.reject_reason);
+    }
+
+    const stageStyle = liveStageStyles[eventData.proposal_stage] || liveStageStyles.pending_requirements;
+    let stageBadge = card.querySelector('.proposal-stage-badge');
+    const showStage = ['pending', 'approved'].includes(String(eventData.status || '').toLowerCase());
+    if (showStage) {
+      if (!stageBadge) {
+        stageBadge = document.createElement('span');
+        stageBadge.className = 'proposal-stage-badge text-[10px] font-bold rounded-full border px-2 py-0.5 flex-shrink-0';
+        const statusBadgeEl = card.querySelector('.event-status-badge');
+        statusBadgeEl?.insertAdjacentElement('afterend', stageBadge);
+      }
+      stageBadge.textContent = eventData.stage_label || 'Needs requirements';
+      stageBadge.className = 'proposal-stage-badge text-[10px] font-bold rounded-full border px-2 py-0.5 flex-shrink-0 '
+        + stageStyle.bg + ' ' + stageStyle.text + ' ' + stageStyle.border;
+      stageBadge.classList.remove('hidden');
+    } else if (stageBadge) {
+      stageBadge.classList.add('hidden');
+    }
+
+    const progressSection = card.querySelector('.proposal-progress-section');
+    const isPending = String(eventData.status || '').toLowerCase() === 'pending';
+    if (isPending && !progressSection) {
+      const host = card.querySelector('.min-w-0.flex-1');
+      if (host) {
+        const section = document.createElement('div');
+        section.className = 'proposal-progress-section mt-3 rounded-xl border border-zinc-200 bg-white/80 px-3 py-2 shadow-sm';
+        section.innerHTML = '<div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">'
+          + '<span class="font-semibold text-zinc-700">Proposal requirements</span>'
+          + '<span class="proposal-upload-count text-zinc-500">0/0 uploaded</span>'
+          + '</div>'
+          + '<div class="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200 proposal-progress-track">'
+          + '<div class="proposal-progress-fill h-full rounded-full bg-gradient-to-r from-orange-500 to-emerald-500 transition-all" style="width:0%"></div>'
+          + '</div>'
+          + '<div class="proposal-req-tags mt-2 flex flex-wrap gap-1.5"></div>'
+          + '<p class="proposal-waiting-note mt-2 text-[11px] font-medium text-zinc-500 hidden"></p>';
+        host.appendChild(section);
+      }
+    }
+
+    const progressEl = card.querySelector('.proposal-progress-section');
+    if (progressEl) {
+      progressEl.classList.toggle('hidden', !isPending);
+
+      const summary = eventData.summary || { total: 0, submitted: 0, percent: 0 };
+      const countEl = progressEl.querySelector('.proposal-upload-count');
+      const fillEl = progressEl.querySelector('.proposal-progress-fill');
+      const tagsEl = progressEl.querySelector('.proposal-req-tags');
+      const noteEl = progressEl.querySelector('.proposal-waiting-note');
+      const emptyLabel = eventData.requirements_empty_label
+        || 'Admin has not requested the required documents yet.';
+
+      if (countEl) {
+        countEl.textContent = `${summary.submitted || 0}/${summary.total || 0} uploaded`;
+      }
+      if (fillEl) {
+        fillEl.style.width = `${Math.max(0, Math.min(100, Number(summary.percent || 0)))}%`;
+      }
+      if (tagsEl) {
+        const requirements = Array.isArray(eventData.requirements) ? eventData.requirements : [];
+        tagsEl.innerHTML = requirements.length
+          ? requirements.map((requirement) => {
+              const uploaded = !!requirement.uploaded;
+              const cls = uploaded
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-zinc-200 bg-zinc-50 text-zinc-500';
+              const label = uploaded ? 'Uploaded' : 'Pending';
+              const code = requirement.code || requirement.label || 'DOC';
+              return `<span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${cls}">${label} ${escapeLiveHtml(code)}</span>`;
+            }).join('')
+          : `<span class="text-[11px] text-zinc-500">${escapeLiveHtml(emptyLabel)}</span>`;
+      }
+      if (noteEl) {
+        const teacherNote = eventData.teacher_progress_note || '';
+        if (eventData.admin_waiting_on_final_submit) {
+          noteEl.textContent = `Draft progress is shown here (${summary.submitted || 0}/${summary.total || 0} uploaded). Full file review opens after the teacher submits for review.`;
+          noteEl.classList.remove('hidden');
+        } else if (teacherNote) {
+          noteEl.textContent = teacherNote;
+          noteEl.classList.remove('hidden');
+        } else {
+          noteEl.textContent = '';
+          noteEl.classList.add('hidden');
+        }
+      }
+    }
+
+    const reqBtn = card.querySelector('.btnRequirements');
+    if (reqBtn) {
+      reqBtn.textContent = eventData.requirements_button || 'Send Req';
+      reqBtn.dataset.stage = eventData.proposal_stage || '';
+      reqBtn.dataset.requirements = JSON.stringify(eventData.requirements_json || []);
+      reqBtn.dataset.submissions = JSON.stringify(eventData.submissions_json || []);
+      reqBtn.dataset.summary = JSON.stringify(eventData.summary || {});
+    }
+
+    const approveBtn = card.querySelector('.btnApprove');
+    if (approveBtn && eventData.show_approve === false) {
+      approveBtn.classList.add('hidden');
+    } else if (approveBtn) {
+      approveBtn.classList.remove('hidden');
+      const ready = !!eventData.approve_ready;
+      approveBtn.disabled = !ready;
+      approveBtn.dataset.approveReady = ready ? '1' : '0';
+      approveBtn.classList.toggle('opacity-50', !ready);
+      approveBtn.classList.toggle('cursor-not-allowed', !ready);
+      approveBtn.title = ready
+        ? ''
+        : 'Waiting for the teacher to submit documents for review.';
+    }
+
+    card.classList.add('event-card-live-update');
+    window.setTimeout(() => card.classList.remove('event-card-live-update'), 1800);
+    return true;
+  }
+
+  async function refreshManageEventsLive() {
+    if (manageEventsLiveInFlight || isManageEventsBusy()) return;
+    manageEventsLiveInFlight = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch('/api/manage_events_live.php?_=' + Date.now(), {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || data.ok !== true) return;
+
+      if (syncManageEventsListFromLive(data)) {
+        return;
+      }
+
+      updatePendingTabBadge(Number(data.pending_count || 0));
+      updateApprovalTabBadge(Number(data.approval_count || 0));
+
+      if (typeof window.updateManageEventsBadgeFromSignals === 'function') {
+        window.updateManageEventsBadgeFromSignals(data.signals || []);
+      }
+
+      const events = Array.isArray(data.events) ? data.events : [];
+      let changed = false;
+      events.forEach((eventData) => {
+        const card = Array.from(document.querySelectorAll('.event-card[data-id]'))
+          .find((node) => (node.dataset.id || '') === (eventData.id || ''));
+        if (card && applyLiveEventUpdate(card, eventData)) {
+          changed = true;
+        }
+      });
+
+      if (changed && typeof window.refreshEventVisibility === 'function') {
+        window.refreshEventVisibility();
+      }
+    } catch (e) {
+      // Keep current UI on transient network failures.
+    } finally {
+      window.clearTimeout(timeoutId);
+      manageEventsLiveInFlight = false;
+    }
+  }
+
+  window.refreshManageEventsLive = refreshManageEventsLive;
+  window.syncManageEventsListFromLive = syncManageEventsListFromLive;
+  window.setTimeout(refreshManageEventsLive, 300);
+  window.setInterval(refreshManageEventsLive, 5000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      refreshManageEventsLive();
+      if (typeof window.PulseFlushPendingNotifications === 'function') {
+        window.PulseFlushPendingNotifications();
+      }
+    }
+  });
+})();
 </script>
 
 <?php render_footer(); ?>

@@ -12,9 +12,11 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/student_requirements.php';
 
 $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
+$userId = (string) ($user['id'] ?? '');
 
 $id = isset($_GET['id']) ? (string) $_GET['id'] : '';
 if ($id === '') {
@@ -355,6 +357,8 @@ render_header('Event Details', $user);
         'role' => $role,
         'uses_sessions' => count($sessions) > 0,
         'event_status' => $status,
+        'has_student_requirements' => event_has_student_requirements($id, $headers),
+        'is_event_creator' => $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId,
     ]);
     ?>
 

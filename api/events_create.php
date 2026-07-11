@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+
 session_start();
 
 require_once __DIR__ . '/../config.php';
@@ -11,6 +14,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
+require_once __DIR__ . '/../includes/student_requirements.php';
 require_once __DIR__ . '/../includes/registration_access.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
@@ -49,6 +53,7 @@ $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_spa
 $eventMode = normalize_event_mode(isset($data['event_mode']) ? (string) $data['event_mode'] : 'simple');
 $sessions = normalize_event_sessions($data['sessions'] ?? null, $location);
 $proposalRequirements = is_array($data['proposal_requirements'] ?? null) ? $data['proposal_requirements'] : [];
+$studentRequirements = is_array($data['student_requirements'] ?? null) ? $data['student_requirements'] : [];
 
 if ($eventMode === 'seminar_based') {
     if (count($sessions) === 0) {
@@ -216,6 +221,27 @@ if ($role === 'teacher' && is_array($event) && !empty($event['id'])) {
     }
 
     $event['proposal_requirements'] = $proposalSave['requirements'] ?? [];
+
+    if ($studentRequirements !== []) {
+        $studentSave = save_student_requirements(
+            (string) $event['id'],
+            $studentRequirements,
+            (string) ($user['id'] ?? ''),
+            proposal_requirement_headers()
+        );
+
+        if (!($studentSave['ok'] ?? false)) {
+            $cleanupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode((string) $event['id']);
+            supabase_request('DELETE', $cleanupUrl, [
+                'Accept: application/json',
+                'apikey: ' . SUPABASE_KEY,
+                'Authorization: Bearer ' . SUPABASE_KEY,
+            ]);
+            json_response(['ok' => false, 'error' => (string) ($studentSave['error'] ?? 'Failed to save student requirements.')], 500);
+        }
+
+        $event['student_requirements'] = $studentSave['requirements'] ?? [];
+    }
 }
 
 json_response(['ok' => true, 'event' => $event], 200);

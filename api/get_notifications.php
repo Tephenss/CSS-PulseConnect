@@ -2,11 +2,13 @@
 declare(strict_types=1);
 
 session_start();
+set_time_limit(25);
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/web_notifications.php';
+require_once __DIR__ . '/../includes/api_cache.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
@@ -14,11 +16,21 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 
 $user = require_role(['admin', 'teacher']);
 $limit = isset($_GET['limit']) ? max(1, min(100, (int) $_GET['limit'])) : 10;
+$userId = trim((string) ($user['id'] ?? ''));
+$role = trim((string) ($user['role'] ?? ''));
+$cacheKey = 'notifications:' . $role . ':' . $userId . ':' . $limit;
+$skipCache = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
+$cached = $skipCache ? null : api_cache_read($cacheKey, 45);
+if (is_array($cached)) {
+    json_response($cached, 200);
+}
 
 $notifications = web_fetch_notifications_for_user($user, $limit);
 
-json_response([
+$payload = [
     'ok' => true,
     'notifications' => $notifications,
     'count' => count($notifications),
-], 200);
+];
+api_cache_write($cacheKey, $payload);
+json_response($payload, 200);

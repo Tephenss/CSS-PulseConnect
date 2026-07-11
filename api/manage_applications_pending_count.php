@@ -2,11 +2,13 @@
 declare(strict_types=1);
 
 session_start();
+set_time_limit(25);
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
+require_once __DIR__ . '/../includes/api_cache.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
@@ -18,6 +20,11 @@ if ($user === null) {
 }
 if (($user['role'] ?? '') !== 'admin') {
     json_response(['ok' => false, 'error' => 'Forbidden'], 403);
+}
+
+$cached = api_cache_read('manage_applications_pending_count', 60);
+if (is_array($cached)) {
+    json_response($cached, 200);
 }
 
 $url = rtrim((string) SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
@@ -41,8 +48,9 @@ if (!is_array($res) || empty($res['ok'])) {
 $rows = json_decode((string) ($res['body'] ?? '[]'), true);
 $count = is_array($rows) ? count($rows) : 0;
 
-json_response([
+$payload = [
     'ok' => true,
     'count' => $count,
-]);
-
+];
+api_cache_write('manage_applications_pending_count', $payload);
+json_response($payload, 200);

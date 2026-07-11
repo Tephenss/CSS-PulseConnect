@@ -35,8 +35,9 @@ function supabase_request_once(string $method, string $url, array $headers, ?str
 
     $skipSslVerify = defined('SUPABASE_DEV_SKIP_SSL_VERIFY') ? (bool) SUPABASE_DEV_SKIP_SSL_VERIFY : false;
     $hasLargeBody = is_string($body) && strlen($body) > 100000;
-    $connectTimeout = $hasLargeBody ? 20 : 15;
-    $timeout = $hasLargeBody ? 90 : 30;
+    $isGet = strtoupper($method) === 'GET';
+    $connectTimeout = $hasLargeBody ? 15 : ($isGet ? 6 : 10);
+    $timeout = $hasLargeBody ? 90 : ($isGet ? 25 : 30);
 
     $options = [
         CURLOPT_RETURNTRANSFER => true,
@@ -82,7 +83,7 @@ function supabase_request_once(string $method, string $url, array $headers, ?str
 
 function supabase_request(string $method, string $url, array $headers, ?string $body = null): array
 {
-    $maxAttempts = 3;
+    $maxAttempts = strtoupper($method) === 'GET' ? 1 : 2;
     $lastResult = ['ok' => false, 'status' => 0, 'body' => null, 'error' => 'cURL request failed'];
 
     for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {

@@ -20,13 +20,15 @@ if (!function_exists('render_event_tabs')) {
      *
      * Options:
      * - event_id (string, required)
-     * - current_tab (details|participants|absence_reasons|feedback|questions|qr)
+     * - current_tab (details|participants|document_review|absence_reasons|feedback|questions|qr)
      * - role (admin|teacher|student)
      * - uses_sessions (bool)
      * - event_status (string)
      * - participant_day (optional string)
+     * - has_student_requirements (bool, optional)
+     * - is_event_creator (bool, optional)
      *
-     * Teacher tabs: Event Details + Participants only.
+     * Teacher tabs: Event Details + Participants + Document Review (creator only, when requirements exist).
      */
     function render_event_tabs(array $options): void
     {
@@ -56,6 +58,9 @@ if (!function_exists('render_event_tabs')) {
         $questionsHref = '/evaluation_admin.php?' . $eventQuery . '&tab=questions';
         $qrHref = '/event_teachers.php?' . $eventQuery;
         $detailsHref = '/event_view.php?id=' . rawurlencode($eventId);
+        $documentReviewHref = '/event_document_review.php?event_id=' . rawurlencode($eventId) . $returnQuery;
+        $hasStudentRequirements = (bool) ($options['has_student_requirements'] ?? false);
+        $isEventCreator = (bool) ($options['is_event_creator'] ?? false);
 
         echo '<div class="border-b border-zinc-200 mb-6 pt-2">';
         echo '<nav class="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">';
@@ -63,6 +68,9 @@ if (!function_exists('render_event_tabs')) {
 
         if ($role === 'teacher') {
             echo event_tab_link_html($participantsHref, 'Participants', $currentTab === 'participants');
+            if ($isEventCreator && $hasStudentRequirements) {
+                echo event_tab_link_html($documentReviewHref, 'Document Review', $currentTab === 'document_review');
+            }
             echo '</nav>';
             echo '</div>';
             return;

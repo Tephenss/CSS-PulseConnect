@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/registration_access.php';
+require_once __DIR__ . '/student_requirements.php';
 
 function event_registration_service_headers(): array
 {
@@ -237,12 +238,22 @@ function build_event_registration_info(string $eventId, array $headers, ?string 
         $studentRow = fetch_student_profile_by_id($studentId, $headers);
         if (is_array($studentRow)) {
             $access = resolve_student_registration_access($event, $studentRow, $headers);
+            $docAccess = resolve_student_document_access($eventId, $studentId, $headers);
             $payload['availability'] = [
                 'allowed' => (bool) ($access['allowed'] ?? false),
                 'target_allowed' => (bool) ($access['target_allowed'] ?? false),
                 'approval_required' => (bool) ($access['approval_required'] ?? false),
+                'requirements_required' => (bool) ($docAccess['required'] ?? false),
+                'requirements_complete' => (bool) ($docAccess['complete'] ?? false),
+                'requirements_approved' => (bool) ($docAccess['approved'] ?? false),
+                'requirements_status' => (string) ($docAccess['status'] ?? ''),
+                'requirements_decline_reason' => (string) ($docAccess['decline_reason'] ?? ''),
                 'message' => (string) ($access['message'] ?? ''),
             ];
+            if (($docAccess['required'] ?? false) && !($docAccess['approved'] ?? false) && ($access['message'] ?? '') === '') {
+                $payload['availability']['message'] = (string) ($docAccess['message'] ?? '');
+            }
+            $payload['student_requirements'] = fetch_student_requirements_map([$eventId], $headers)[$eventId] ?? [];
         }
     }
 

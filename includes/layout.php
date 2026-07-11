@@ -119,9 +119,11 @@ function render_header(string $title, ?array $user): void
     if ($role === 'teacher' || $role === 'admin') {
         echo '<div class="sidebar-section">Management</div>';
 
-        echo '<a href="/manage_events.php" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage Events') ? 'active' : '') . '">';
+        echo '<a href="/manage_events.php" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage Events') ? 'active' : '') . '" id="manage-events-link">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75"/></svg>';
-        echo '<span class="sidebar-label">Manage Events</span></a>';
+        echo '<span class="sidebar-label">Manage Events</span>';
+        echo '<span id="manage-events-badge" class="manage-events-sidebar-badge ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-orange-500 text-white border border-orange-300 shadow-sm hidden">0</span>';
+        echo '</a>';
 
         if ($role === 'admin') {
             echo '<a href="/manage_applications.php" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
@@ -243,16 +245,30 @@ function render_header(string $title, ?array $user): void
                 </div>
             </div>
 
-            <!-- Trigger Button -->
-            <button id="notif-trigger" class="pointer-events-auto relative w-14 h-14 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center transform hover:-translate-y-1 group border-4 border-white/50">
-                <svg class="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-                </svg>
-                <!-- Badge -->
-                <div id="notif-badge" class="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center hidden shadow-sm">
-                    0
+            <!-- Bell stack: preview pops in directly above the bell -->
+            <div class="notif-bell-stack pointer-events-auto flex flex-col items-end">
+                <div id="notif-preview" class="notif-preview hidden w-[18rem] sm:w-[20rem] max-w-[calc(100vw-2rem)] mb-3">
+                    <div class="notif-preview-card rounded-2xl border border-emerald-200 bg-white shadow-2xl overflow-hidden">
+                        <div class="px-3.5 py-2.5 border-b border-emerald-100 bg-emerald-50/80">
+                            <div id="notif-preview-area" class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 truncate"></div>
+                        </div>
+                        <div class="px-3.5 py-2.5">
+                            <div id="notif-preview-title" class="text-[13px] font-bold text-zinc-900 leading-snug"></div>
+                            <div id="notif-preview-desc" class="text-[11px] text-zinc-600 leading-snug mt-1 line-clamp-3"></div>
+                        </div>
+                    </div>
+                    <span class="notif-preview-tail" aria-hidden="true"></span>
                 </div>
-            </button>
+
+                <button id="notif-trigger" class="notif-trigger relative w-14 h-14 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center transform hover:-translate-y-1 group border-4 border-white/50">
+                    <svg class="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                    </svg>
+                    <div id="notif-badge" class="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center hidden shadow-sm">
+                        0
+                    </div>
+                </button>
+            </div>
         </div>
 
         <script>
@@ -262,13 +278,82 @@ function render_header(string $title, ?array $user): void
             const list = document.getElementById("notif-list");
             const badge = document.getElementById("notif-badge");
             const markReadBtn = document.getElementById("notif-mark-read");
+            const preview = document.getElementById("notif-preview");
+            const previewArea = document.getElementById("notif-preview-area");
+            const previewTitle = document.getElementById("notif-preview-title");
+            const previewDesc = document.getElementById("notif-preview-desc");
             
             if(!trigger || !panel) return;
 
             let isPanelOpen = false;
             let loadedNotifications = [];
             let unreadCount = 0;
-            const readStorageKey = "pulse_notifs_read";
+            let knownNotificationIds = [];
+            let previewHideTimer = null;
+            let notifAudioReady = false;
+            const pulseUserId = String(window.PULSE_USER_ID || "default");
+            const readStorageKey = "pulse_notifs_read_" + pulseUserId;
+            const previewShownKey = "pulse_preview_shown_" + pulseUserId;
+            const pendingPreviewStorageKey = "pulse_pending_previews_" + pulseUserId;
+            let pendingPreviewQueue = [];
+
+            function ensureNotifAudioContext() {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return null;
+                if (!window.__pulseNotifAudioCtx) {
+                    window.__pulseNotifAudioCtx = new AudioCtx();
+                }
+                return window.__pulseNotifAudioCtx;
+            }
+
+            function unlockNotifAudio() {
+                const ctx = ensureNotifAudioContext();
+                requestSystemNotifPermission();
+                if (!ctx || notifAudioReady) return;
+                if (ctx.state === "suspended") {
+                    ctx.resume().then(() => { notifAudioReady = true; }).catch(() => {});
+                } else {
+                    notifAudioReady = true;
+                }
+            }
+
+            function playNotifSound() {
+                const ctx = ensureNotifAudioContext();
+                if (!ctx) return;
+                const startPlayback = () => {
+                    try {
+                        const now = ctx.currentTime;
+                        const playTone = (frequency, startAt, duration, volume) => {
+                            const oscillator = ctx.createOscillator();
+                            const gain = ctx.createGain();
+                            oscillator.type = "triangle";
+                            oscillator.frequency.setValueAtTime(frequency, startAt);
+                            gain.gain.setValueAtTime(0.0001, startAt);
+                            gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.012);
+                            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+                            oscillator.connect(gain);
+                            gain.connect(ctx.destination);
+                            oscillator.start(startAt);
+                            oscillator.stop(startAt + duration + 0.05);
+                        };
+                        playTone(784, now, 0.12, 0.14);
+                        playTone(988, now + 0.13, 0.12, 0.12);
+                        playTone(1175, now + 0.26, 0.18, 0.1);
+                    } catch (e) {
+                        // Ignore autoplay or audio API failures.
+                    }
+                };
+                if (ctx.state === "suspended") {
+                    ctx.resume().then(startPlayback).catch(() => {});
+                    return;
+                }
+                startPlayback();
+            }
+
+            document.addEventListener("click", unlockNotifAudio, { passive: true });
+            document.addEventListener("keydown", unlockNotifAudio, { passive: true });
+            document.addEventListener("pointerdown", unlockNotifAudio, { passive: true });
+            document.addEventListener("touchstart", unlockNotifAudio, { passive: true });
             
             function formatTimeAgo(isoString) {
                 const date = new Date(isoString);
@@ -286,12 +371,14 @@ function render_header(string $title, ?array $user): void
                 
                 let html = "";
                 data.forEach(item => {
+                    const areaLabel = item.area || "Notification";
                     html += `
                     <a href="${item.link || \'/notifications.php\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
                         <div class="mt-1 w-9 h-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
-                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" /></svg>
+                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
                         </div>
                         <div class="flex-1 min-w-0">
+                            <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-1 truncate">${areaLabel}</div>
                             <h4 class="text-[13px] font-bold text-zinc-900 truncate mb-0.5">${item.title}</h4>
                             <p class="text-[12px] text-zinc-600 leading-snug line-clamp-2">${item.description}</p>
                             <div class="text-[11px] text-zinc-400 mt-1.5 font-medium">${formatTimeAgo(item.created_at)}</div>
@@ -312,24 +399,191 @@ function render_header(string $title, ?array $user): void
                     badge.classList.add("hidden");
                 }
             }
-            
-            async function fetchNotifications() {
+
+            function getPreviewDedupeKey(item) {
+                if (!item) return "";
+                if (item.dedupe_key) return String(item.dedupe_key);
+                if (item.event_id && item.kind) return String(item.kind) + ":" + String(item.event_id);
+                return String(item.id || "");
+            }
+
+            function shouldShowNotificationPreview(item) {
+                const dedupeKey = getPreviewDedupeKey(item);
+                if (!dedupeKey) return false;
+                const now = Date.now();
+                let history = {};
                 try {
-                    const res = await fetch("/api/get_notifications.php?limit=10", { cache: "no-store" });
+                    history = JSON.parse(sessionStorage.getItem(previewShownKey) || "{}");
+                } catch (e) {
+                    history = {};
+                }
+                const lastShown = Number(history[dedupeKey] || 0);
+                if (lastShown > 0 && (now - lastShown) < 120000) {
+                    return false;
+                }
+                history[dedupeKey] = now;
+                Object.keys(history).forEach(function (key) {
+                    if ((now - Number(history[key] || 0)) > 900000) {
+                        delete history[key];
+                    }
+                });
+                sessionStorage.setItem(previewShownKey, JSON.stringify(history));
+                return true;
+            }
+
+            function loadPendingPreviewQueue() {
+                try {
+                    const parsed = JSON.parse(sessionStorage.getItem(pendingPreviewStorageKey) || "[]");
+                    pendingPreviewQueue = Array.isArray(parsed) ? parsed : [];
+                } catch (e) {
+                    pendingPreviewQueue = [];
+                }
+            }
+
+            function savePendingPreviewQueue() {
+                try {
+                    sessionStorage.setItem(pendingPreviewStorageKey, JSON.stringify(pendingPreviewQueue.slice(-5)));
+                } catch (e) {
+                    // Ignore storage failures.
+                }
+            }
+
+            function enqueuePendingPreview(item) {
+                if (!item) return;
+                const key = getPreviewDedupeKey(item);
+                if (!key) return;
+                if (pendingPreviewQueue.some((queued) => getPreviewDedupeKey(queued) === key)) return;
+                pendingPreviewQueue.push(item);
+                savePendingPreviewQueue();
+                if (trigger) trigger.classList.add("notif-bell-alert");
+            }
+
+            function requestSystemNotifPermission() {
+                if (!("Notification" in window)) return;
+                if (Notification.permission !== "default") return;
+                Notification.requestPermission().catch(function () {});
+            }
+
+            function maybeShowSystemNotification(item) {
+                if (!item || !("Notification" in window)) return;
+                if (Notification.permission !== "granted") return;
+                const tag = getPreviewDedupeKey(item) || String(item.id || "pulse-notif");
+                try {
+                    new Notification(item.title || "PulseCONNECT", {
+                        body: ((item.area ? item.area + " — " : "") + (item.description || "")).trim(),
+                        tag: tag,
+                    });
+                } catch (e) {
+                    // Ignore OS notification failures.
+                }
+            }
+
+            function flushPendingPreviews() {
+                if (document.visibilityState !== "visible" || pendingPreviewQueue.length === 0) return;
+                const queued = pendingPreviewQueue.slice();
+                pendingPreviewQueue = [];
+                savePendingPreviewQueue();
+                queued.forEach(function (item) {
+                    showNotificationPreview(item, { forceVisible: true });
+                });
+            }
+
+            function syncNotificationsOnFocus() {
+                flushPendingPreviews();
+                fetchNotifications(true);
+            }
+
+            function showNotificationPreview(item, options) {
+                options = options || {};
+                if (!preview || !previewTitle || !previewDesc || !item) return;
+                if (!options.forceVisible && document.visibilityState === "hidden") {
+                    enqueuePendingPreview(item);
+                    maybeShowSystemNotification(item);
+                    return;
+                }
+                if (!shouldShowNotificationPreview(item)) return;
+                if (previewArea) {
+                    previewArea.textContent = item.area || "Notification";
+                }
+                previewTitle.textContent = item.title || "New update";
+                previewDesc.textContent = item.description || "";
+                window.clearTimeout(previewHideTimer);
+                preview.classList.remove("hidden");
+                preview.classList.remove("notif-preview-visible");
+                window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
+                        preview.classList.add("notif-preview-visible");
+                    });
+                });
+                trigger.classList.add("notif-bell-alert");
+                playNotifSound();
+                previewHideTimer = window.setTimeout(() => {
+                    preview.classList.remove("notif-preview-visible");
+                    window.setTimeout(() => {
+                        preview.classList.add("hidden");
+                        trigger.classList.remove("notif-bell-alert");
+                    }, 380);
+                }, 6200);
+            }
+            
+            let notificationsInFlight = false;
+
+            async function fetchNotifications(isCatchUp) {
+                if (notificationsInFlight) {
+                    return;
+                }
+                notificationsInFlight = true;
+                const controller = new AbortController();
+                const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+                try {
+                    const res = await fetch("/api/get_notifications.php?limit=10&fresh=1&_=" + Date.now(), {
+                        cache: "no-store",
+                        signal: controller.signal,
+                    });
                     const data = await res.json();
                     if (data.ok) {
-                        loadedNotifications = data.notifications;
+                        const nextNotifications = data.notifications || [];
+                        const previousKnownIds = knownNotificationIds.slice();
+                        knownNotificationIds = nextNotifications.map((item) => item.id).filter(Boolean);
+                        const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
+                        const freshUnread = nextNotifications.filter((item) => {
+                            if (!item || !item.id) return false;
+                            if (previousKnownIds.includes(item.id)) return false;
+                            return !readIds.includes(item.id);
+                        });
+                        if (previousKnownIds.length > 0 && freshUnread.length > 0) {
+                            if (document.visibilityState === "hidden") {
+                                freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
+                                maybeShowSystemNotification(freshUnread[0]);
+                            } else if (isCatchUp) {
+                                freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
+                                flushPendingPreviews();
+                            } else {
+                                showNotificationPreview(freshUnread[0]);
+                            }
+                        }
+                        loadedNotifications = nextNotifications;
                         renderNotifications(loadedNotifications);
                         updateBadge();
                     }
                 } catch (e) {
                     console.error("Failed to load notifications", e);
+                } finally {
+                    window.clearTimeout(timeoutId);
+                    notificationsInFlight = false;
                 }
             }
             
             trigger.addEventListener("click", (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                unlockNotifAudio();
+                if (preview) {
+                    preview.classList.remove("notif-preview-visible");
+                    window.setTimeout(() => preview.classList.add("hidden"), 280);
+                    trigger.classList.remove("notif-bell-alert");
+                    window.clearTimeout(previewHideTimer);
+                }
                 isPanelOpen = !isPanelOpen;
                 if (isPanelOpen) {
                     panel.classList.remove("scale-95", "opacity-0", "invisible");
@@ -355,13 +609,24 @@ function render_header(string $title, ?array $user): void
                 updateBadge();
             });
             
-            fetchNotifications();
-            setInterval(fetchNotifications, 30000); // 30s polling
+            loadPendingPreviewQueue();
+            fetchNotifications(false);
+            setInterval(function () { fetchNotifications(false); }, 15000);
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    syncNotificationsOnFocus();
+                }
+            });
+            window.addEventListener("focus", syncNotificationsOnFocus);
+
+            window.showPulseNotifPreview = showNotificationPreview;
+            window.playPulseNotifSound = playNotifSound;
+            window.PulseFlushPendingNotifications = syncNotificationsOnFocus;
         });
         </script>';
     }
 
-    echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';</script>';
+    echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';window.PULSE_USER_ID=' . json_encode((string) ($user['id'] ?? '')) . ';</script>';
     echo '<main class="flex-1 p-5 lg:p-8 content-area">';
 }
 
@@ -420,13 +685,178 @@ function render_footer(): void
             }
         });
 
+        // Keep Manage Events sidebar badge updated without refresh.
+        var manageEventsBadgeEl = document.getElementById("manage-events-badge");
+        var manageEventsLinkEl = document.getElementById("manage-events-link");
+        var manageEventsBadgePolling = null;
+        var manageEventsBadgeInFlight = false;
+        var manageEventsSeenKey = "pulse_manage_events_seen_" + String(window.PULSE_USER_ID || "default");
+        var knownManageEventsSignalIds = [];
+
+        function isManageEventsPage() {
+            return window.location.pathname.indexOf("manage_events.php") !== -1;
+        }
+
+        function getManageEventsSeenIds() {
+            try {
+                var parsed = JSON.parse(localStorage.getItem(manageEventsSeenKey) || "[]");
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function markManageEventsSignalsSeen(signals) {
+            if (!Array.isArray(signals) || signals.length === 0) return;
+            var seen = getManageEventsSeenIds();
+            var changed = false;
+            signals.forEach(function (signal) {
+                if (!signal) return;
+                if (signal.id && !seen.includes(signal.id)) {
+                    seen.push(signal.id);
+                    changed = true;
+                }
+                if (signal.dedupe_key && !seen.includes(signal.dedupe_key)) {
+                    seen.push(signal.dedupe_key);
+                    changed = true;
+                }
+            });
+            if (changed) {
+                localStorage.setItem(manageEventsSeenKey, JSON.stringify(seen.slice(-300)));
+            }
+        }
+
+        window.markManageEventsSignalsSeen = markManageEventsSignalsSeen;
+        window.updateManageEventsBadgeFromSignals = updateManageEventsBadgeFromSignals;
+
+        function updateManageEventsBadgeFromSignals(signals) {
+            if (!manageEventsBadgeEl) return;
+
+            if (Array.isArray(signals)) {
+                knownManageEventsSignalIds = signals.map(function (signal) {
+                    return signal && signal.id ? signal.id : "";
+                }).filter(Boolean);
+            }
+
+            if (isManageEventsPage()) {
+                markManageEventsSignalsSeen(signals || []);
+            }
+
+            var seen = getManageEventsSeenIds();
+            var unseenKeys = {};
+            var unseen = Array.isArray(signals)
+                ? signals.filter(function (signal) {
+                    if (!signal || !signal.id) return false;
+                    if (seen.includes(signal.id)) return false;
+                    if (signal.dedupe_key && seen.includes(signal.dedupe_key)) return false;
+                    var groupKey = signal.dedupe_key || signal.id;
+                    if (unseenKeys[groupKey]) return false;
+                    unseenKeys[groupKey] = true;
+                    return true;
+                })
+                : [];
+
+            if (unseen.length <= 0) {
+                manageEventsBadgeEl.classList.add("hidden");
+                return;
+            }
+            manageEventsBadgeEl.classList.remove("hidden");
+            manageEventsBadgeEl.textContent = unseen.length > 99 ? "99+" : String(unseen.length);
+        }
+
+        async function refreshManageEventsBadge() {
+            if (!manageEventsBadgeEl || manageEventsBadgeInFlight) return;
+            manageEventsBadgeInFlight = true;
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+            try {
+                var resp = await fetch("/api/manage_events_live.php?lite=1", {
+                    cache: "no-store",
+                    credentials: "same-origin",
+                    signal: controller.signal,
+                });
+                if (!resp.ok) return;
+                var data = await resp.json();
+                if (!data || data.ok !== true) return;
+                if (isManageEventsPage()) {
+                    if (typeof window.syncManageEventsListFromLive === "function") {
+                        window.syncManageEventsListFromLive(data);
+                    } else if (data.list_hash) {
+                        var listContainer = document.getElementById("eventScrollContainer");
+                        if (listContainer) {
+                            var currentListHash = listContainer.getAttribute("data-live-list-hash") || "";
+                            if (currentListHash && currentListHash !== data.list_hash) {
+                                window.location.reload();
+                                return;
+                            }
+                        }
+                    }
+                }
+                updateManageEventsBadgeFromSignals(data.signals || []);
+            } catch (e) {
+                // Keep current badge state on transient network failures.
+            } finally {
+                window.clearTimeout(timeoutId);
+                manageEventsBadgeInFlight = false;
+            }
+        }
+
+        if (manageEventsBadgeEl) {
+            refreshManageEventsBadge();
+            manageEventsBadgePolling = window.setInterval(refreshManageEventsBadge, 10000);
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    refreshManageEventsBadge();
+                }
+            });
+            if (manageEventsLinkEl) {
+                manageEventsLinkEl.addEventListener("click", function () {
+                    fetch("/api/manage_events_live.php?lite=1", { cache: "no-store", credentials: "same-origin" })
+                        .then(function (resp) { return resp.json(); })
+                        .then(function (data) {
+                            if (data && data.ok) {
+                                markManageEventsSignalsSeen(data.signals || []);
+                                updateManageEventsBadgeFromSignals(data.signals || []);
+                            }
+                        })
+                        .catch(function () {});
+                });
+            }
+            if (isManageEventsPage()) {
+                window.setTimeout(function () {
+                    fetch("/api/manage_events_live.php?lite=1", { cache: "no-store", credentials: "same-origin" })
+                        .then(function (resp) { return resp.json(); })
+                        .then(function (data) {
+                            if (data && data.ok) {
+                                markManageEventsSignalsSeen(data.signals || []);
+                                updateManageEventsBadgeFromSignals(data.signals || []);
+                            }
+                        })
+                        .catch(function () {});
+                }, 200);
+            }
+            window.addEventListener("beforeunload", function () {
+                if (manageEventsBadgePolling) {
+                    window.clearInterval(manageEventsBadgePolling);
+                    manageEventsBadgePolling = null;
+                }
+            });
+        }
+
         // Keep Manage Application pending badge updated without refresh.
         var applicationsBadgeEl = document.getElementById("manage-applications-badge");
         var applicationsBadgePolling = null;
+        var applicationsBadgeInFlight = false;
         async function refreshManageApplicationsBadge() {
-            if (!applicationsBadgeEl) return;
+            if (!applicationsBadgeEl || applicationsBadgeInFlight) return;
+            applicationsBadgeInFlight = true;
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 8000);
             try {
-                var resp = await fetch("/api/manage_applications_pending_count.php", { cache: "no-store" });
+                var resp = await fetch("/api/manage_applications_pending_count.php", {
+                    cache: "no-store",
+                    signal: controller.signal,
+                });
                 if (!resp.ok) return;
                 var data = await resp.json();
                 if (!data || data.ok !== true) return;
@@ -440,11 +870,14 @@ function render_footer(): void
                 applicationsBadgeEl.textContent = count > 99 ? "99+" : String(count);
             } catch (e) {
                 // Keep current badge state on transient network failures.
+            } finally {
+                window.clearTimeout(timeoutId);
+                applicationsBadgeInFlight = false;
             }
         }
         if (applicationsBadgeEl) {
             refreshManageApplicationsBadge();
-            applicationsBadgePolling = window.setInterval(refreshManageApplicationsBadge, 10000);
+            applicationsBadgePolling = window.setInterval(refreshManageApplicationsBadge, 60000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     refreshManageApplicationsBadge();

@@ -199,5 +199,59 @@ function format_target_participant(string $eventFor): string
     return $courseLabel . ' - ' . implode(', ', $yearLabels);
 }
 
+/**
+ * @return array{ok:bool,event:?array,status:int,message:string}
+ */
+function fetch_event_row_by_id(
+    string $eventId,
+    array $headers,
+    string $select = 'id,title,start_at,end_at,created_by,status,grace_time'
+): array {
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return [
+            'ok' => false,
+            'event' => null,
+            'status' => 400,
+            'message' => 'Missing event_id.',
+        ];
+    }
 
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $select
+        . '&id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $res = supabase_request('GET', $url, $headers);
+
+    if (!($res['ok'] ?? false)) {
+        return [
+            'ok' => false,
+            'event' => null,
+            'status' => (int) ($res['status'] ?? 0) >= 400 ? (int) $res['status'] : 503,
+            'message' => build_error(
+                $res['body'] ?? null,
+                (int) ($res['status'] ?? 0),
+                $res['error'] ?? null,
+                'Could not load event.'
+            ),
+        ];
+    }
+
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    $event = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+    if ($event === null) {
+        return [
+            'ok' => false,
+            'event' => null,
+            'status' => 404,
+            'message' => 'Event not found.',
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'event' => $event,
+        'status' => 200,
+        'message' => '',
+    ];
+}
 

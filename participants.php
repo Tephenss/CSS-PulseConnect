@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
+require_once __DIR__ . '/includes/student_requirements.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -33,21 +34,26 @@ if ($eventId === '') {
 }
 
 // Load event details (for day tabs + teacher ownership check)
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,created_by,status,grace_time&'
-    . 'id=eq.' . rawurlencode($eventId) . '&limit=1';
+$eventLookup = fetch_event_row_by_id(
+    $eventId,
+    [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ]
+);
+if (!$eventLookup['ok']) {
+    $status = (int) ($eventLookup['status'] ?? 503);
+    http_response_code($status === 404 ? 404 : 503);
+    echo htmlspecialchars($eventLookup['message'] !== '' ? $eventLookup['message'] : 'Could not load event.');
+    exit;
+}
+$event = $eventLookup['event'];
 $headers = [
     'Accept: application/json',
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
-$eventRes = supabase_request('GET', $eventUrl, $headers);
-$eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : null;
-$event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
-if (!is_array($event)) {
-    http_response_code(404);
-    echo 'Event not found';
-    exit;
-}
 
 if ($role === 'teacher') {
     $isOwner = ((string) ($event['created_by'] ?? '') === $userId);
@@ -72,6 +78,8 @@ if ($role === 'teacher' && $participantTab === 'absence_reasons') {
     $participantTab = 'participants';
 }
 $backHref = $role === 'teacher' ? '/manage_events.php' : '/events.php';
+$hasStudentRequirements = event_has_student_requirements($eventId, $headers);
+$isEventCreator = $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId;
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
@@ -547,6 +555,8 @@ if ($usesSessions) {
           'uses_sessions' => $usesSessions,
           'event_status' => (string) ($event['status'] ?? ''),
           'return_to' => $returnTo,
+          'has_student_requirements' => $hasStudentRequirements,
+          'is_event_creator' => $isEventCreator,
       ]);
       ?>
 
@@ -1308,6 +1318,8 @@ render_event_tabs([
     'event_status' => (string) ($event['status'] ?? ''),
     'participant_day' => $activeDay,
     'return_to' => $returnTo,
+    'has_student_requirements' => $hasStudentRequirements,
+    'is_event_creator' => $isEventCreator,
 ]);
 ?>
 

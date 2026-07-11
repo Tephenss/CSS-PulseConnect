@@ -54,11 +54,42 @@ body.role-teacher {
   z-index: 30;
   pointer-events: none;
 }
+
+@keyframes anatomyAutoReveal {
+  0%, 88%, 100% {
+    opacity: 0;
+    visibility: hidden;
+    transform: scale(0.6) translateY(10px);
+  }
+  6%, 66% {
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.logo-container .hide-anatomy {
+  animation: anatomyAutoReveal 5s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
 a:hover .hide-anatomy,
 .logo-container:hover .hide-anatomy {
   opacity: 1;
   visibility: visible;
   transform: scale(1) translateY(0);
+  animation: none;
+}
+
+#sidebar.collapsed .hide-anatomy {
+  animation: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo-container .hide-anatomy {
+    animation: none;
+  }
 }
 
 /* Left side (BSIT) */
@@ -314,6 +345,22 @@ a:hover .hide-anatomy,
     border-radius: 0.65rem;
   }
 
+  #sidebar.collapsed .sidebar-link {
+    overflow: visible;
+  }
+
+  #sidebar.collapsed .manage-events-sidebar-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 9px;
+    line-height: 1;
+    margin-left: 0;
+  }
+
   /* Tooltip for collapsed links */
   #sidebar.collapsed .sidebar-link {
     position: relative;
@@ -347,4 +394,74 @@ a:hover .hide-anatomy,
   #sidebar.open { transform: translateX(0); }
   #sidebar-overlay.open { opacity: 1; pointer-events: auto; }
   .main-offset { margin-left: 0; }
+}
+
+/* ── Notification bell live preview (pop-in above bell) ── */
+.notif-bell-stack {
+  position: relative;
+}
+
+.notif-preview {
+  position: relative;
+  transform: translateY(12px) scale(0.88);
+  opacity: 0;
+  max-height: 0;
+  margin-bottom: 0 !important;
+  overflow: hidden;
+  pointer-events: none;
+  transition: transform 0.38s cubic-bezier(0.34, 1.45, 0.64, 1), opacity 0.3s ease, max-height 0.38s ease, margin 0.38s ease;
+  transform-origin: bottom right;
+}
+
+.notif-preview.notif-preview-visible {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+  max-height: 220px;
+  margin-bottom: 0.75rem !important;
+  overflow: visible;
+  pointer-events: auto;
+  animation: notifPreviewPop 0.5s cubic-bezier(0.34, 1.55, 0.64, 1);
+}
+
+.notif-preview-card {
+  box-shadow: 0 16px 40px rgba(16, 185, 129, 0.18), 0 4px 14px rgba(24, 24, 27, 0.12);
+}
+
+.notif-preview-tail {
+  position: absolute;
+  bottom: -5px;
+  right: 20px;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border-right: 1px solid #a7f3d0;
+  border-bottom: 1px solid #a7f3d0;
+  transform: rotate(45deg);
+  box-shadow: 2px 2px 4px rgba(16, 185, 129, 0.08);
+}
+
+@keyframes notifPreviewPop {
+  0% { transform: translateY(18px) scale(0.78); opacity: 0; }
+  55% { transform: translateY(-4px) scale(1.04); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.notif-trigger.notif-bell-alert {
+  animation: notifBellRing 0.85s ease-in-out 3;
+}
+
+@keyframes notifBellRing {
+  0% { transform: rotate(0deg); }
+  15% { transform: rotate(-12deg); }
+  30% { transform: rotate(10deg); }
+  45% { transform: rotate(-8deg); }
+  60% { transform: rotate(6deg); }
+  75% { transform: rotate(-4deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@media (max-width: 480px) {
+  .notif-preview {
+    width: min(18rem, calc(100vw - 2rem)) !important;
+  }
 }

@@ -69,6 +69,11 @@ function web_notification_hash_id(string $prefix, string $seed): string
     return $prefix . '-' . substr(sha1($seed), 0, 16);
 }
 
+function web_notification_dedupe_key(string $kind, string $eventId): string
+{
+    return $kind . ':' . $eventId;
+}
+
 function web_fetch_admin_notifications(array $headers): array
 {
     $notifications = [];
@@ -124,23 +129,16 @@ function web_fetch_admin_notifications(array $headers): array
         if ($proposalStage === 'under_review') {
             $notifications[] = [
                 'id' => web_notification_hash_id('admin-proposal-review', $eventId . '|' . ($requirementsSubmittedAt !== '' ? $requirementsSubmittedAt : $createdAt)),
-                'title' => 'Proposal Documents Submitted',
-                'description' => $creatorName . ' completed the requested documents for "' . $title . '". Review the uploads and approve when ready.',
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('proposal-review', $eventId),
+                'area' => 'Manage Events · Pending Proposals',
+                'title' => 'Teacher submitted proposal documents',
+                'description' => $creatorName . ' finished uploading files for "' . $title . '". Open Manage Events, go to Pending Proposals, then click Review Docs.',
                 'created_at' => $requirementsSubmittedAt !== '' ? $requirementsSubmittedAt : $createdAt,
                 'link' => '/manage_events.php',
                 'kind' => 'proposal-review',
             ];
-            continue;
         }
-
-        $notifications[] = [
-            'id' => web_notification_hash_id('admin-proposal', $eventId . '|' . $createdAt),
-            'title' => 'New Event Proposal',
-            'description' => $creatorName . ' submitted "' . $title . '" for review.',
-            'created_at' => $createdAt,
-            'link' => '/manage_events.php',
-            'kind' => 'proposal',
-        ];
     }
 
     $applicationsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
@@ -174,17 +172,20 @@ function web_fetch_admin_notifications(array $headers): array
         }
         $course = strtoupper(trim((string) ($student['course'] ?? '')));
         $studentNumber = trim((string) ($student['student_id'] ?? ''));
-        $descriptor = $course !== '' ? $course : 'student';
 
-        $description = $displayName . ' submitted a new mobile app registration request';
+        $who = $displayName;
         if ($studentNumber !== '') {
-            $description .= ' (' . $studentNumber . ')';
+            $who .= ' (' . $studentNumber . ')';
         }
-        $description .= ' for ' . $descriptor . '.';
+        if ($course !== '') {
+            $who .= ' · ' . $course;
+        }
+        $description = $who . ' registered on the mobile app. Open Manage Application to approve or reject this account.';
 
         $notifications[] = [
             'id' => web_notification_hash_id('admin-application', $studentId . '|' . $createdAt),
-            'title' => 'New App Registration',
+            'area' => 'Manage Application · Student Signups',
+            'title' => 'New mobile app registration',
             'description' => $description,
             'created_at' => $createdAt,
             'link' => '/manage_applications.php',
@@ -227,11 +228,15 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         }
 
         if ($status === 'pending' && $proposalStage === 'requirements_requested') {
+            $requestedAt = trim((string) ($event['requirements_requested_at'] ?? $updatedAt)) ?: $updatedAt;
             $notifications[] = [
-                'id' => web_notification_hash_id('teacher-proposal-docs', $eventId . '|' . $updatedAt),
-                'title' => 'Documents Requested',
-                'description' => 'The admin requested proposal documents for "' . $title . '". Open the Approval tab to upload the required files.',
-                'created_at' => trim((string) ($event['requirements_requested_at'] ?? $updatedAt)) ?: $updatedAt,
+                'id' => web_notification_hash_id('teacher-proposal-docs', $eventId . '|' . $requestedAt),
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('proposal-documents', $eventId),
+                'area' => 'Manage Events · Approval Tab',
+                'title' => 'Admin requested proposal documents',
+                'description' => 'Upload the required files for "' . $title . '". Go to Manage Events → Approval tab, then attach each requested document.',
+                'created_at' => $requestedAt,
                 'link' => '/manage_events.php',
                 'kind' => 'proposal-documents',
             ];
@@ -239,11 +244,15 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         }
 
         if ($status === 'pending' && $proposalStage === 'under_review') {
+            $submittedAt = trim((string) ($event['requirements_submitted_at'] ?? $updatedAt)) ?: $updatedAt;
             $notifications[] = [
-                'id' => web_notification_hash_id('teacher-proposal-under-review', $eventId . '|' . $updatedAt),
-                'title' => 'Proposal Under Review',
-                'description' => 'Your uploaded documents for "' . $title . '" are now waiting for final admin approval.',
-                'created_at' => trim((string) ($event['requirements_submitted_at'] ?? $updatedAt)) ?: $updatedAt,
+                'id' => web_notification_hash_id('teacher-proposal-under-review', $eventId . '|' . $submittedAt),
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('proposal-under-review', $eventId),
+                'area' => 'Manage Events · Approval Tab',
+                'title' => 'Documents sent — waiting for admin',
+                'description' => 'Your uploads for "' . $title . '" are under admin review. Check Manage Events → Approval tab for status updates.',
+                'created_at' => $submittedAt,
                 'link' => '/manage_events.php',
                 'kind' => 'proposal-under-review',
             ];
@@ -252,9 +261,12 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
 
         if ($status === 'approved') {
             $notifications[] = [
-                'id' => web_notification_hash_id('teacher-proposal-approved', $eventId . '|' . $updatedAt),
-                'title' => 'Proposal Approved',
-                'description' => 'Your event "' . $title . '" has been approved by the admin.',
+                'id' => web_notification_hash_id('teacher-proposal-approved', $eventId . '|approved'),
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('proposal-approved', $eventId),
+                'area' => 'Event Details',
+                'title' => 'Event proposal approved',
+                'description' => '"' . $title . '" was approved by the admin. Open Event Details to review info before it goes live.',
                 'created_at' => $updatedAt,
                 'link' => '/event_view.php?id=' . rawurlencode($eventId),
                 'kind' => 'proposal-approved',
@@ -264,9 +276,12 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
 
         if ($status === 'published') {
             $notifications[] = [
-                'id' => web_notification_hash_id('teacher-event-published', $eventId . '|' . $updatedAt),
-                'title' => 'Event Published',
-                'description' => '"' . $title . '" is now published and visible to its target participants.',
+                'id' => web_notification_hash_id('teacher-event-published', $eventId . '|published'),
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('event-published', $eventId),
+                'area' => 'Event Details · Published',
+                'title' => 'Your event is now live',
+                'description' => '"' . $title . '" is published. Students can now view and register on the mobile app.',
                 'created_at' => $updatedAt,
                 'link' => '/event_view.php?id=' . rawurlencode($eventId),
                 'kind' => 'event-published',
@@ -277,13 +292,61 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         $reason = web_notification_extract_reject_reason((string) ($event['description'] ?? ''));
         if ($reason !== '') {
             $notifications[] = [
-                'id' => web_notification_hash_id('teacher-proposal-review', $eventId . '|' . $updatedAt),
-                'title' => 'Proposal Review Required',
-                'description' => 'The admin requested changes for "' . $title . '". Reason: ' . $reason,
+                'id' => web_notification_hash_id('teacher-proposal-review', $eventId . '|reject'),
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('proposal-rejected', $eventId),
+                'area' => 'Event Details · Needs Changes',
+                'title' => 'Admin asked you to revise the proposal',
+                'description' => '"' . $title . '" needs changes. Open Event Details to read the admin note and edit the event. Reason: ' . $reason,
                 'created_at' => $updatedAt,
                 'link' => '/event_view.php?id=' . rawurlencode($eventId),
-                'kind' => 'proposal-review',
+                'kind' => 'proposal-rejected',
             ];
+        }
+    }
+
+    $peerPublishedUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,title,updated_at,created_by'
+        . '&status=eq.published'
+        . '&created_by=neq.' . rawurlencode($teacherId)
+        . '&order=updated_at.desc'
+        . '&limit=25';
+    $peerPublishedRes = supabase_request('GET', $peerPublishedUrl, $headers);
+    $peerPublishedEvents = $peerPublishedRes['ok'] ? json_decode((string) ($peerPublishedRes['body'] ?? ''), true) : [];
+    $peerPublishedEvents = is_array($peerPublishedEvents) ? $peerPublishedEvents : [];
+
+    foreach ($peerPublishedEvents as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $eventId = trim((string) ($event['id'] ?? ''));
+        $title = trim((string) ($event['title'] ?? 'Event'));
+        $updatedAt = trim((string) ($event['updated_at'] ?? gmdate('c')));
+        if ($eventId === '' || $updatedAt === '') {
+            continue;
+        }
+
+        $notifications[] = [
+            'id' => web_notification_hash_id('teacher-event-published-peer', $eventId . '|published'),
+            'event_id' => $eventId,
+            'dedupe_key' => web_notification_dedupe_key('event-published-peer', $eventId),
+            'area' => 'Manage Events · Active Tab',
+            'title' => 'New event published',
+            'description' => '"' . $title . '" is now live. Open Manage Events → Active tab to view event details.',
+            'created_at' => $updatedAt,
+            'link' => '/manage_events.php',
+            'kind' => 'event-published-peer',
+        ];
+    }
+
+    $ownedEventIds = [];
+    foreach ($events as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $ownedId = trim((string) ($event['id'] ?? ''));
+        if ($ownedId !== '') {
+            $ownedEventIds[$ownedId] = true;
         }
     }
 
@@ -313,11 +376,32 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         $event = $eventMap[$eventId] ?? [];
         $title = trim((string) ($event['title'] ?? 'Event'));
         $link = '/event_view.php?id=' . rawurlencode($eventId);
+        $eventStatus = strtolower(trim((string) ($event['status'] ?? '')));
+
+        if ($eventStatus === 'published') {
+            if (!empty($assignment['can_scan']) && !isset($ownedEventIds[$eventId])) {
+                $notifications[] = [
+                    'id' => web_notification_hash_id('teacher-qr', $eventId . '|' . $assignedAt . '|qr'),
+                    'event_id' => $eventId,
+                    'dedupe_key' => web_notification_dedupe_key('qr-access', $eventId),
+                    'area' => 'Event Details · QR Scanner',
+                    'title' => 'QR scanner access enabled',
+                    'description' => 'You can scan student attendance for "' . $title . '". Open the event, then use Scan QR from the event page.',
+                    'created_at' => $assignedAt,
+                    'link' => $link,
+                    'kind' => 'qr-access',
+                ];
+            }
+            continue;
+        }
 
         $notifications[] = [
             'id' => web_notification_hash_id('teacher-assigned', $eventId . '|' . $assignedAt . '|assigned'),
-            'title' => 'Assigned to Event',
-            'description' => 'You were assigned to "' . $title . '". Check the event details for updates.',
+            'event_id' => $eventId,
+            'dedupe_key' => web_notification_dedupe_key('assignment', $eventId),
+            'area' => 'Event Details · Assignment',
+            'title' => 'You were assigned to an event',
+            'description' => 'You are now part of "' . $title . '". Open Event Details for schedule, location, and updates.',
             'created_at' => $assignedAt,
             'link' => $link,
             'kind' => 'assignment',
@@ -326,8 +410,11 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         if (!empty($assignment['can_scan'])) {
             $notifications[] = [
                 'id' => web_notification_hash_id('teacher-qr', $eventId . '|' . $assignedAt . '|qr'),
-                'title' => 'QR Scanner Access Granted',
-                'description' => 'You can now scan attendance and manage assistants for "' . $title . '".',
+                'event_id' => $eventId,
+                'dedupe_key' => web_notification_dedupe_key('qr-access', $eventId),
+                'area' => 'Event Details · QR Scanner',
+                'title' => 'QR scanner access enabled',
+                'description' => 'You can scan student attendance for "' . $title . '". Open the event, then use Scan QR from the event page.',
                 'created_at' => $assignedAt,
                 'link' => $link,
                 'kind' => 'qr-access',

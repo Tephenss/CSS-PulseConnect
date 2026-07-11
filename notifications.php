@@ -52,6 +52,7 @@ render_header('Notifications', $user);
               ? date('M j, Y g:i A', $createdAtTs)
               : 'Unknown time';
           $title = trim((string) ($item['title'] ?? 'Notification'));
+          $area = trim((string) ($item['area'] ?? ''));
           $description = trim((string) ($item['description'] ?? ''));
           $link = trim((string) ($item['link'] ?? '/notifications.php'));
         ?>
@@ -63,6 +64,9 @@ render_header('Notifications', $user);
               </svg>
             </div>
             <div class="min-w-0 flex-1">
+              <?php if ($area !== ''): ?>
+                <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-1"><?= htmlspecialchars($area) ?></div>
+              <?php endif; ?>
               <div class="flex items-start justify-between gap-4">
                 <h4 class="text-sm font-bold text-zinc-900"><?= htmlspecialchars($title) ?></h4>
                 <span class="text-[11px] font-medium text-zinc-400 whitespace-nowrap"><?= htmlspecialchars($createdAtLabel) ?></span>

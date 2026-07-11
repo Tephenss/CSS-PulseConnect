@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/event_targeting.php';
 require_once __DIR__ . '/supabase.php';
+require_once __DIR__ . '/student_requirements.php';
 
 function registration_access_missing_table_message(string $message): bool
 {
@@ -484,6 +485,24 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
             'controlled_registration' => !event_registration_open_to_all($event),
             'message' => 'Registration is closed for this event.',
         ];
+    }
+
+    $studentId = trim((string) ($studentRow['id'] ?? ''));
+    if ($eventId !== '' && $studentId !== '') {
+        $docAccess = resolve_student_document_access($eventId, $studentId, $headers);
+        if (($docAccess['required'] ?? false) && !($docAccess['approved'] ?? false)) {
+            return [
+                'allowed' => false,
+                'target_allowed' => true,
+                'approval_required' => false,
+                'controlled_registration' => !event_registration_open_to_all($event),
+                'requirements_required' => true,
+                'requirements_complete' => (bool) ($docAccess['complete'] ?? false),
+                'requirements_status' => (string) ($docAccess['status'] ?? ''),
+                'requirements_decline_reason' => (string) ($docAccess['decline_reason'] ?? ''),
+                'message' => (string) ($docAccess['message'] ?? 'Submit and get your documents approved before registering.'),
+            ];
+        }
     }
 
     if (event_registration_open_to_all($event)) {
