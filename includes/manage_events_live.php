@@ -182,6 +182,26 @@ function manage_events_live_list_hash(array $user, array $events): string
     return substr(sha1(implode(',', $parts)), 0, 16);
 }
 
+function manage_events_live_visible_event_ids(array $user, array $events): array
+{
+    $ids = [];
+
+    foreach ($events as $event) {
+        if (!is_array($event) || !manage_events_live_event_visible_on_page($user, $event)) {
+            continue;
+        }
+
+        $eventId = trim((string) ($event['id'] ?? ''));
+        if ($eventId !== '') {
+            $ids[] = $eventId;
+        }
+    }
+
+    sort($ids);
+
+    return $ids;
+}
+
 function manage_events_live_revision(array $event, array $summary, array $requirements): string
 {
     $status = strtolower(trim((string) ($event['status'] ?? '')));
@@ -218,9 +238,9 @@ function manage_events_live_fetch_events(array $user, array $headers): array
 
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . rawurlencode($select);
     if ($role === 'admin') {
-        $url .= '&status=neq.archived&order=updated_at.desc';
+        $url .= '&status=neq.archived&order=updated_at.desc&limit=250';
     } elseif ($role === 'teacher' && $userId !== '') {
-        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc';
+        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc&limit=250';
     } else {
         return [];
     }
@@ -358,6 +378,7 @@ function manage_events_live_payload(array $user, bool $lite = false): array
     }
 
     $listHash = manage_events_live_list_hash($user, $events);
+    $visibleEventIds = manage_events_live_visible_event_ids($user, $events);
 
     if ($lite) {
         return [
@@ -367,6 +388,7 @@ function manage_events_live_payload(array $user, bool $lite = false): array
             'role' => $role,
             'signals' => $signals,
             'list_hash' => $listHash,
+            'event_ids' => $visibleEventIds,
         ];
     }
 
@@ -376,7 +398,7 @@ function manage_events_live_payload(array $user, bool $lite = false): array
     )));
     $requirementMap = fetch_proposal_requirements_map($eventIds, $headers);
     $submissionMap = fetch_proposal_submissions_map($eventIds, $headers);
-    $visibleSubmissionMap = fetch_proposal_submissions_map($eventIds, $headers, true);
+    $visibleSubmissionMap = filter_visible_proposal_submissions_map($submissionMap);
 
     $userId = trim((string) ($user['id'] ?? ''));
 
@@ -487,6 +509,7 @@ function manage_events_live_payload(array $user, bool $lite = false): array
         'role' => $role,
         'signals' => $signals,
         'list_hash' => $listHash,
+        'event_ids' => $visibleEventIds,
         'events' => $eventPayload,
     ];
 }

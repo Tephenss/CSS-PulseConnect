@@ -255,3 +255,33 @@ function fetch_event_row_by_id(
     ];
 }
 
+function pulse_auto_finish_published_events(array $headers, int $ttlSeconds = 300): void
+{
+    if (!function_exists('api_cache_read') || !function_exists('api_cache_write')) {
+        require_once __DIR__ . '/api_cache.php';
+    }
+
+    if (is_array(api_cache_read('auto_finish_published_events', $ttlSeconds))) {
+        return;
+    }
+
+    try {
+        $nowUtc = gmdate('c');
+        $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+            . '?status=eq.published'
+            . '&end_at=lt.' . rawurlencode($nowUtc);
+        $finishHeaders = array_merge($headers, [
+            'Content-Type: application/json',
+            'Prefer: return=minimal',
+        ]);
+        $finishPayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
+        if (is_string($finishPayload)) {
+            supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
+        }
+    } catch (Throwable $e) {
+        // Best-effort only.
+    }
+
+    api_cache_write('auto_finish_published_events', ['ok' => true, 'at' => gmdate('c')]);
+}
+

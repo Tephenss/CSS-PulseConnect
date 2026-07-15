@@ -19,7 +19,7 @@ if ($role === 'teacher') {
 
 $select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
-$url = $base . '&or=(status.eq.published,status.eq.finished)';
+$url = $base . '&or=(status.eq.published,status.eq.finished)&limit=200';
 
 $headers = [
   'Accept: application/json',
@@ -27,27 +27,8 @@ $headers = [
   'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-// Keep event status consistent across pages:
-// if a published event already ended, mark it finished in DB.
-try {
-  $nowUtc = gmdate('c');
-  $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?status=eq.published'
-    . '&end_at=lt.' . rawurlencode($nowUtc);
-  $finishHeaders = [
-    'Accept: application/json',
-    'Content-Type: application/json',
-    'Prefer: return=minimal',
-    'apikey: ' . SUPABASE_KEY,
-    'Authorization: Bearer ' . SUPABASE_KEY,
-  ];
-  $finishPayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
-  if (is_string($finishPayload)) {
-    supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
-  }
-} catch (Throwable $e) {
-  // Best-effort only. Listing should still render.
-}
+// Keep event status consistent across pages (throttled to reduce DB writes).
+pulse_auto_finish_published_events($headers);
 
 $events = [];
 $res = supabase_request('GET', $url, $headers);

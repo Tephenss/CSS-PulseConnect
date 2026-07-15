@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/student_requirements.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
 {
@@ -221,6 +222,31 @@ try {
 
 if (is_array($event) && $eventMode === 'seminar_based') {
     $event['sessions'] = fetch_event_sessions($eventId, $readHeaders);
+}
+
+$studentRequirementsProvided = array_key_exists('student_requirements', $data);
+if ($role === 'teacher' && $studentRequirementsProvided) {
+    $studentRequirements = is_array($data['student_requirements'] ?? null)
+        ? $data['student_requirements']
+        : [];
+
+    $studentSave = save_student_requirements(
+        $eventId,
+        $studentRequirements,
+        (string) ($user['id'] ?? ''),
+        student_requirement_headers()
+    );
+
+    if (!($studentSave['ok'] ?? false)) {
+        json_response([
+            'ok' => false,
+            'error' => (string) ($studentSave['error'] ?? 'Failed to save student requirements.'),
+        ], 500);
+    }
+
+    if (is_array($event)) {
+        $event['student_requirements'] = $studentSave['requirements'] ?? [];
+    }
 }
 
 json_response(['ok' => true, 'event' => $event], 200);

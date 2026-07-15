@@ -17,42 +17,8 @@ require_csrf_from_json($data);
 
 function proposal_requirements_send_notification(array $userIds, string $title, string $body, array $data = []): void
 {
-    if ($userIds === []) {
-        return;
-    }
-
-    require_once __DIR__ . '/../includes/fcm.php';
-
-    $inList = '(' . implode(',', array_map('rawurlencode', $userIds)) . ')';
-    $tokensRes = supabase_request(
-        'GET',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
-        ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
-    );
-
-    if (!$tokensRes['ok']) {
-        return;
-    }
-
-    $tokenRows = json_decode((string) ($tokensRes['body'] ?? ''), true);
-    if (!is_array($tokenRows)) {
-        return;
-    }
-
-    $tokens = [];
-    foreach ($tokenRows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $token = trim((string) ($row['token'] ?? ''));
-        if ($token !== '') {
-            $tokens[$token] = true;
-        }
-    }
-
-    if ($tokens !== []) {
-        send_fcm_notification(array_keys($tokens), $title, $body, $data);
-    }
+    require_once __DIR__ . '/../includes/user_notifications.php';
+    dispatch_user_notifications($userIds, $title, $body, $data);
 }
 
 $eventId = trim((string) ($data['event_id'] ?? ''));

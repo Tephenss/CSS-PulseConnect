@@ -501,33 +501,6 @@ function notify_student_requirement_review(string $studentId, string $title, str
         return;
     }
 
-    require_once __DIR__ . '/fcm.php';
-
-    $res = supabase_request(
-        'GET',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=eq.' . rawurlencode($studentId),
-        student_requirement_headers()
-    );
-
-    if (!$res['ok']) {
-        return;
-    }
-
-    $rows = json_decode((string) $res['body'], true);
-    $tokens = [];
-    if (is_array($rows)) {
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $token = trim((string) ($row['token'] ?? ''));
-            if ($token !== '') {
-                $tokens[$token] = true;
-            }
-        }
-    }
-
-    if ($tokens !== []) {
-        send_fcm_notification(array_keys($tokens), $title, $body, $data);
-    }
+    require_once __DIR__ . '/user_notifications.php';
+    dispatch_user_notifications([$studentId], $title, $body, $data);
 }

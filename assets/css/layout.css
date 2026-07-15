@@ -399,26 +399,25 @@ a:hover .hide-anatomy,
 /* ── Notification bell live preview (pop-in above bell) ── */
 .notif-bell-stack {
   position: relative;
+  overflow: visible;
+}
+
+#notif-system {
+  overflow: visible;
 }
 
 .notif-preview {
   position: relative;
   transform: translateY(12px) scale(0.88);
   opacity: 0;
-  max-height: 0;
-  margin-bottom: 0 !important;
-  overflow: hidden;
   pointer-events: none;
-  transition: transform 0.38s cubic-bezier(0.34, 1.45, 0.64, 1), opacity 0.3s ease, max-height 0.38s ease, margin 0.38s ease;
+  transition: transform 0.38s cubic-bezier(0.34, 1.45, 0.64, 1), opacity 0.3s ease;
   transform-origin: bottom right;
 }
 
 .notif-preview.notif-preview-visible {
   transform: translateY(0) scale(1);
   opacity: 1;
-  max-height: 220px;
-  margin-bottom: 0.75rem !important;
-  overflow: visible;
   pointer-events: auto;
   animation: notifPreviewPop 0.5s cubic-bezier(0.34, 1.55, 0.64, 1);
 }

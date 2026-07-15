@@ -20,13 +20,20 @@ $userId = trim((string) ($user['id'] ?? ''));
 $role = trim((string) ($user['role'] ?? ''));
 $cacheKey = 'notifications:' . $role . ':' . $userId . ':' . $limit;
 $skipCache = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
-$cached = $skipCache ? null : api_cache_read($cacheKey, 45);
-if (is_array($cached)) {
-    json_response($cached, 200);
+
+if (!$skipCache) {
+    $payload = api_cache_remember($cacheKey, 15, static function () use ($user, $limit): array {
+        $notifications = web_fetch_notifications_for_user($user, $limit);
+        return [
+            'ok' => true,
+            'notifications' => $notifications,
+            'count' => count($notifications),
+        ];
+    }, 20);
+    json_response($payload, 200);
 }
 
 $notifications = web_fetch_notifications_for_user($user, $limit);
-
 $payload = [
     'ok' => true,
     'notifications' => $notifications,

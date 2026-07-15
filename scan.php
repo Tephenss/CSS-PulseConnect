@@ -290,6 +290,9 @@ render_header('QR Scanner', $user);
         updateStatus(data.message || 'Attendance recorded', 'success');
         detailsEl.textContent = 'Success: ' + (data.message || 'Attendance recorded');
         detailsEl.className = 'mt-4 pt-4 border-t border-emerald-200 text-xs text-emerald-800 break-all font-mono leading-relaxed';
+        if (typeof drainScanWriteQueue === 'function') {
+          drainScanWriteQueue();
+        }
       } catch (e) {
         updateStatus((e && e.message) ? e.message : 'Scan failed', 'danger');
         detailsEl.textContent = 'Error: ' + ((e && e.message) ? e.message : 'Scan failed');
@@ -377,11 +380,28 @@ render_header('QR Scanner', $user);
       refreshContext();
     });
 
+    async function drainScanWriteQueue() {
+      try {
+        await fetch('/api/scan_queue_drain.php?limit=10&_=' + Date.now(), {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+      } catch (_) {
+        // Best-effort drain while teacher/admin keeps Scan open.
+      }
+    }
+
     refreshContext();
-    pollTimer = setInterval(refreshContext, 15000);
+    // Context API is TTL-cached (~8s); 20s poll keeps scanner state fresh without hammering DB.
+    pollTimer = setInterval(refreshContext, 20000);
+    drainScanWriteQueue();
+    const drainTimer = setInterval(drainScanWriteQueue, 30000);
 
     window.addEventListener('beforeunload', () => {
       if (pollTimer) clearInterval(pollTimer);
+      clearInterval(drainTimer);
       ensureScannerStopped();
     });
   }

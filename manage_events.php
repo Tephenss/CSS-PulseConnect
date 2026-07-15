@@ -37,14 +37,15 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
 {
   $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $selectColumns;
   if ($role === 'admin') {
-    return $base . '&status=neq.archived&order=created_at.desc';
+    return $base . '&status=neq.archived&order=created_at.desc&limit=250';
   }
 
   // Teacher sees their own events OR any published events.
-  return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc';
+  return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc&limit=250';
 }
 
 $eventSelectVariants = [
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
@@ -62,26 +63,8 @@ $headers = [
   'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-// Auto-finish events that have already ended.
-try {
-  $nowUtc = gmdate('c');
-  $archiveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?status=eq.published'
-    . '&end_at=lt.' . rawurlencode($nowUtc);
-  $archiveHeaders = [
-    'Accept: application/json',
-    'Content-Type: application/json',
-    'Prefer: return=minimal',
-    'apikey: ' . SUPABASE_KEY,
-    'Authorization: Bearer ' . SUPABASE_KEY,
-  ];
-  $archivePayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
-  if (is_string($archivePayload)) {
-    supabase_request('PATCH', $archiveUrl, $archiveHeaders, $archivePayload);
-  }
-} catch (Throwable $e) {
-  // Best-effort only; keep page rendering even if auto-archive fails.
-}
+// Auto-finish events that have already ended (throttled to reduce DB writes).
+pulse_auto_finish_published_events($headers);
 
 $events = [];
 foreach ($eventSelectVariants as $selectColumns) {
@@ -106,6 +89,7 @@ $proposalRequirementMap = [];
 $proposalSubmissionMap = [];
 $proposalVisibleSubmissionMap = [];
 $proposalSummaryMap = [];
+$studentRequirementMap = [];
 if (!empty($events)) {
   $eventIds = array_values(array_filter(array_map(
     static fn(array $event): string => trim((string) ($event['id'] ?? '')),
@@ -115,7 +99,8 @@ if (!empty($events)) {
   $proposalHeaders = proposal_requirement_headers();
   $proposalRequirementMap = fetch_proposal_requirements_map($eventIds, $proposalHeaders);
   $proposalSubmissionMap = fetch_proposal_submissions_map($eventIds, $proposalHeaders);
-  $proposalVisibleSubmissionMap = fetch_proposal_submissions_map($eventIds, $proposalHeaders, true);
+  $proposalVisibleSubmissionMap = filter_visible_proposal_submissions_map($proposalSubmissionMap);
+  $studentRequirementMap = fetch_student_requirements_map($eventIds, student_requirement_headers());
 
   foreach ($eventIds as $eventId) {
     $proposalSummaryMap[$eventId] = build_proposal_requirement_summary(
@@ -578,6 +563,34 @@ render_header('Manage Events', $user);
 
         <!-- Step 1: Info -->
         <div id="step1" class="space-y-4">
+          <div>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Cover Image</label>
+            <p class="text-[11px] text-zinc-500 mb-2">
+              Mobile Event Details header background. Must be <strong>16:9 landscape</strong>
+              (e.g. 1600×900) · JPG, PNG, or WEBP · max 5MB.
+            </p>
+            <input type="hidden" id="cover_image_url" value="" />
+            <div id="coverPreviewWrap" class="relative mb-2 hidden overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 aspect-[16/9]">
+              <img id="coverPreviewImg" src="" alt="Cover preview" class="absolute inset-0 h-full w-full object-cover" />
+              <div id="coverPreviewLoading" class="absolute inset-0 hidden items-center justify-center bg-zinc-100/90">
+                <div class="flex flex-col items-center gap-2">
+                  <span class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-orange-400 border-t-transparent"></span>
+                  <span class="text-[11px] font-medium text-zinc-600">Checking image…</span>
+                </div>
+              </div>
+              <button type="button" id="btnClearCover" class="absolute right-2 top-2 rounded-lg bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm hover:bg-white">
+                Remove
+              </button>
+            </div>
+            <p id="coverAspectHint" class="mb-2 hidden text-[11px] font-medium text-rose-600"></p>
+            <label for="cover_file" class="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 transition hover:border-orange-400 hover:bg-orange-50/40">
+              <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+              </svg>
+              <span id="coverFileLabel">Upload cover image (16:9)</span>
+            </label>
+            <input id="cover_file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" />
+          </div>
           <div>
             <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Title</label>
             <div class="field-icon-wrap">
@@ -1708,6 +1721,16 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           $proposalSubmissions = $proposalSubmissionMap[$eid] ?? [];
           $proposalVisibleSubmissions = $proposalVisibleSubmissionMap[$eid] ?? [];
           $proposalSummary = $proposalSummaryMap[$eid] ?? ['total' => 0, 'submitted' => 0, 'complete' => false, 'percent' => 0];
+          $studentRequirements = $studentRequirementMap[$eid] ?? [];
+          $studentRequirementsPayload = array_values(array_map(
+            static function (array $row): array {
+              return [
+                'code' => (string) ($row['code'] ?? ''),
+                'label' => (string) ($row['label'] ?? ''),
+              ];
+            },
+            array_filter($studentRequirements, 'is_array')
+          ));
           $proposalSubmissionsVisible = $proposalVisibleSubmissions;
           $proposalSummaryVisible = $proposalSummary;
           $proposalStage = manage_events_live_effective_stage($status, $proposalStage, $proposalRequirements);
@@ -1793,6 +1816,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
             data-registration_close_weeks="<?= htmlspecialchars((string) ($e['registration_close_weeks'] ?? '1')) ?>"
             data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
+            data-student_requirements="<?= htmlspecialchars((string) (json_encode($studentRequirementsPayload, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
             data-can_edit="<?= $canEdit ? '1' : '0' ?>"
             data-proposal-stage="<?= htmlspecialchars($proposalStage) ?>"
             data-proposal-revision="<?= htmlspecialchars($liveRevision) ?>"
@@ -2009,7 +2033,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                     data-proposal_stage="<?= htmlspecialchars($proposalStage) ?>"
                     data-proposal_requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
                     data-proposal_submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
-                    data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>">View/Edit</button>
+                    data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
+                    data-student_requirements="<?= htmlspecialchars((string) (json_encode($studentRequirementsPayload, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>">View/Edit</button>
                 <?php endif; ?>
 
               </div>
@@ -3183,6 +3208,37 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     if (otherList) otherList.innerHTML = '';
   }
 
+  function applyStudentRequirementsForm(requirements) {
+    resetStudentRequirementsForm();
+    const rows = Array.isArray(requirements) ? requirements : [];
+    const otherList = document.getElementById('studentRequirementOtherList');
+
+    rows.forEach((item) => {
+      const code = String(item?.code || '').trim().toUpperCase();
+      const label = String(item?.label || '').trim();
+      if (!code && !label) return;
+
+      if (code === 'OTHER' || !code) {
+        if (!label || !otherList) return;
+        otherList.appendChild(createStudentRequirementOtherRow(label));
+        return;
+      }
+
+      const checkbox = document.querySelector(
+        `#studentRequirementsSection .student-req-checkbox[data-code="${CSS.escape(code)}"]`
+      );
+      if (checkbox) {
+        checkbox.checked = true;
+        return;
+      }
+
+      // Unknown preset → treat as custom "other"
+      if (label && otherList) {
+        otherList.appendChild(createStudentRequirementOtherRow(label));
+      }
+    });
+  }
+
   function createStudentRequirementOtherRow(value = '') {
     const row = document.createElement('div');
     row.className = 'student-req-other-item flex items-center gap-2';
@@ -3237,6 +3293,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       'select',
       'textarea',
       'button.structure-option',
+      '#btnClearCover',
       '.target-year-checkbox',
       '#sttBtn',
       '#mainUndoBtn',
@@ -3261,7 +3318,186 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         element.classList.toggle('cursor-not-allowed', eventModalReadOnly);
       }
     });
+
+    const coverLabel = document.querySelector('label[for="cover_file"]');
+    if (coverLabel) {
+      coverLabel.classList.toggle('pointer-events-none', eventModalReadOnly);
+      coverLabel.classList.toggle('opacity-60', eventModalReadOnly);
+    }
   }
+
+  const coverFileInput = document.getElementById('cover_file');
+  const coverImageUrlInput = document.getElementById('cover_image_url');
+  const coverPreviewWrap = document.getElementById('coverPreviewWrap');
+  const coverPreviewImg = document.getElementById('coverPreviewImg');
+  const coverPreviewLoading = document.getElementById('coverPreviewLoading');
+  const coverFileLabel = document.getElementById('coverFileLabel');
+  const coverAspectHint = document.getElementById('coverAspectHint');
+  let coverFilePending = null;
+  let coverObjectUrl = '';
+  // Matches mobile Event Details header (~full width × 220px) ≈ 16:9
+  const COVER_TARGET_RATIO = 16 / 9;
+  const COVER_RATIO_TOLERANCE = 0.08;
+
+  function revokeCoverObjectUrl() {
+    if (coverObjectUrl) {
+      URL.revokeObjectURL(coverObjectUrl);
+      coverObjectUrl = '';
+    }
+  }
+
+  function setCoverLoading(isLoading) {
+    if (!coverPreviewLoading) return;
+    coverPreviewLoading.classList.toggle('hidden', !isLoading);
+    coverPreviewLoading.classList.toggle('flex', !!isLoading);
+  }
+
+  function setCoverAspectHint(message) {
+    if (!coverAspectHint) return;
+    const text = String(message || '').trim();
+    coverAspectHint.textContent = text;
+    coverAspectHint.classList.toggle('hidden', text === '');
+  }
+
+  function setCoverPreview(url, { fromFile = false } = {}) {
+    const next = String(url || '').trim();
+    if (!coverPreviewWrap || !coverPreviewImg) return;
+    if (!next) {
+      coverPreviewWrap.classList.add('hidden');
+      coverPreviewImg.removeAttribute('src');
+      setCoverLoading(false);
+      if (coverFileLabel) coverFileLabel.textContent = 'Upload cover image (16:9)';
+      return;
+    }
+    coverPreviewWrap.classList.remove('hidden');
+    coverPreviewImg.src = next;
+    if (coverFileLabel) {
+      coverFileLabel.textContent = fromFile ? 'Replace cover image' : 'Change cover image';
+    }
+  }
+
+  function resetCoverPicker() {
+    revokeCoverObjectUrl();
+    coverFilePending = null;
+    if (coverFileInput) coverFileInput.value = '';
+    if (coverImageUrlInput) coverImageUrlInput.value = '';
+    setCoverAspectHint('');
+    setCoverLoading(false);
+    setCoverPreview('');
+  }
+
+  function readImageDimensions(file) {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const width = Number(img.naturalWidth || 0);
+        const height = Number(img.naturalHeight || 0);
+        URL.revokeObjectURL(objectUrl);
+        if (!width || !height) {
+          reject(new Error('Unable to read image dimensions.'));
+          return;
+        }
+        resolve({ width, height });
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Unable to read the selected image.'));
+      };
+      img.src = objectUrl;
+    });
+  }
+
+  function validateCoverAspectRatio(width, height) {
+    const ratio = width / height;
+    const delta = Math.abs(ratio - COVER_TARGET_RATIO);
+    if (delta > COVER_RATIO_TOLERANCE) {
+      return {
+        ok: false,
+        message: `Cover must be 16:9 landscape (≈1.78:1). Yours is ${width}×${height} (${ratio.toFixed(2)}:1). Crop to 16:9 (e.g. 1600×900) so it fits the app header.`,
+      };
+    }
+    return { ok: true, message: '' };
+  }
+
+  async function uploadEventCover(eventId) {
+    const id = String(eventId || '').trim();
+    if (!id || !coverFilePending) return '';
+
+    const formData = new FormData();
+    formData.append('event_id', id);
+    formData.append('csrf_token', window.CSRF_TOKEN || '');
+    formData.append('cover_file', coverFilePending);
+
+    const uploadRes = await fetch('/api/event_cover_upload.php', {
+      method: 'POST',
+      body: formData,
+    });
+    const uploadData = await uploadRes.json();
+    if (!uploadData.ok) {
+      throw new Error(uploadData.error || 'Failed to upload cover image.');
+    }
+    const uploadedUrl = String(uploadData.cover_image_url || '').trim();
+    if (coverImageUrlInput) coverImageUrlInput.value = uploadedUrl;
+    coverFilePending = null;
+    if (coverFileInput) coverFileInput.value = '';
+    revokeCoverObjectUrl();
+    setCoverPreview(uploadedUrl);
+    return uploadedUrl;
+  }
+
+  coverFileInput?.addEventListener('change', async () => {
+    const file = coverFileInput.files && coverFileInput.files[0] ? coverFileInput.files[0] : null;
+    if (!file) return;
+
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(file.type)) {
+      alert('Cover image must be JPG, PNG, or WEBP.');
+      coverFileInput.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Cover image must be 5MB or smaller.');
+      coverFileInput.value = '';
+      return;
+    }
+
+    setCoverAspectHint('');
+    revokeCoverObjectUrl();
+    coverFilePending = null;
+    coverPreviewWrap?.classList.remove('hidden');
+    setCoverLoading(true);
+
+    try {
+      const { width, height } = await readImageDimensions(file);
+      const aspect = validateCoverAspectRatio(width, height);
+      if (!aspect.ok) {
+        setCoverLoading(false);
+        setCoverPreview('');
+        coverFileInput.value = '';
+        setCoverAspectHint(aspect.message);
+        alert(aspect.message);
+        return;
+      }
+
+      coverFilePending = file;
+      coverObjectUrl = URL.createObjectURL(file);
+      setCoverPreview(coverObjectUrl, { fromFile: true });
+      setCoverLoading(false);
+      setCoverAspectHint('');
+    } catch (err) {
+      setCoverLoading(false);
+      setCoverPreview('');
+      coverFileInput.value = '';
+      const message = err?.message || 'Unable to validate the cover image.';
+      setCoverAspectHint(message);
+      alert(message);
+    }
+  });
+
+  document.getElementById('btnClearCover')?.addEventListener('click', () => {
+    resetCoverPicker();
+  });
 
   function openEventModalFromDataset(source, readOnly = false) {
     if (!source) return;
@@ -3269,6 +3505,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     document.getElementById('mode').value = 'edit';
     document.getElementById('event_id').value = source.dataset.id || '';
     document.getElementById('title').value = source.dataset.title || '';
+    resetCoverPicker();
+    const existingCover = String(source.dataset.cover_image_url || '').trim();
+    if (coverImageUrlInput) coverImageUrlInput.value = existingCover;
+    setCoverPreview(existingCover);
+    let existingStudentRequirements = [];
+    try {
+      existingStudentRequirements = JSON.parse(source.dataset.student_requirements || '[]');
+    } catch (err) {
+      existingStudentRequirements = [];
+    }
+    applyStudentRequirementsForm(existingStudentRequirements);
     document.getElementById('location').value = source.dataset.locationFull || source.dataset.location || '';
     const rawDescription = source.dataset.description || '';
     const cleanedDescription = String(rawDescription)
@@ -3563,6 +3810,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     document.getElementById('event_id').value = '';
 
     document.getElementById('title').value = '';
+    resetCoverPicker();
     document.getElementById('location').value = '';
     document.getElementById('description').value = '';
     setPickerValue(startAtInput, '');
@@ -3794,6 +4042,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
       if (teacherProposalMode && mode === 'create') {
         payload.proposal_requirements = teacherProposalPayload.requirements;
+      }
+
+      // Always save student docs package on create AND edit/resubmit
+      if (teacherProposalMode) {
         payload.student_requirements = collectStudentRequirements();
       }
 
@@ -3844,6 +4096,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const data = await res.json();
       if (!data.ok) {
         throw new Error(data.error || 'Request failed.');
+      }
+
+      const savedEventId = mode === 'edit'
+        ? String(payload.event_id || document.getElementById('event_id').value || '').trim()
+        : String((data.event && data.event.id) || '').trim();
+
+      if (coverFilePending && savedEventId) {
+        msg.textContent = 'Uploading cover image...';
+        await uploadEventCover(savedEventId);
       }
 
       if (teacherProposalMode && mode === 'create') {
@@ -4846,51 +5107,78 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   };
   let manageEventsLiveInFlight = false;
   let manageEventsLiveReloadScheduled = false;
+  let manageEventsLiveIntervalId = null;
+  let manageEventsDeferredReloadId = null;
+  const manageEventsPageLoadedAt = Date.now();
+  const MANAGE_EVENTS_RELOAD_GRACE_MS = 2500;
+  const MANAGE_EVENTS_RELOAD_DEBOUNCE_MS = 8000;
 
   function isManageEventsBusy() {
     return window.pulseManageEventsBusy === true;
   }
 
+  function getManageEventsDomIds() {
+    return Array.from(document.querySelectorAll('.event-card[data-id]'))
+      .map((card) => String(card.dataset.id || '').trim())
+      .filter(Boolean);
+  }
+
   function scheduleManageEventsListReload() {
     if (isManageEventsBusy()) return;
     if (manageEventsLiveReloadScheduled) return;
+
+    const elapsed = Date.now() - manageEventsPageLoadedAt;
+    if (elapsed < MANAGE_EVENTS_RELOAD_GRACE_MS) {
+      if (!manageEventsDeferredReloadId) {
+        manageEventsDeferredReloadId = window.setTimeout(() => {
+          manageEventsDeferredReloadId = null;
+          scheduleManageEventsListReload();
+        }, MANAGE_EVENTS_RELOAD_GRACE_MS - elapsed + 50);
+      }
+      return;
+    }
+
+    try {
+      const lastReload = Number(sessionStorage.getItem('pulseManageEventsReloadAt') || 0);
+      if (Date.now() - lastReload < MANAGE_EVENTS_RELOAD_DEBOUNCE_MS) {
+        return;
+      }
+    } catch (e) {
+      // Ignore storage errors.
+    }
+
     manageEventsLiveReloadScheduled = true;
     window.setTimeout(() => {
       if (isManageEventsBusy()) {
         manageEventsLiveReloadScheduled = false;
         return;
       }
+      try {
+        sessionStorage.setItem('pulseManageEventsReloadAt', String(Date.now()));
+      } catch (e) {
+        // Ignore storage errors.
+      }
       window.location.reload();
-    }, 350);
-  }
-
-  function countPendingCardsInDom() {
-    return Array.from(document.querySelectorAll('.event-card[data-id]'))
-      .filter((card) => (card.dataset.status || '').toLowerCase() === 'pending').length;
+    }, 400);
   }
 
   function syncManageEventsListFromLive(data) {
     if (!data || isManageEventsBusy()) return false;
 
     const container = document.getElementById('eventScrollContainer');
-    const currentHash = container ? (container.dataset.liveListHash || '') : '';
     const nextHash = data.list_hash || '';
+    const apiIds = Array.isArray(data.event_ids)
+      ? data.event_ids.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    const domIds = new Set(getManageEventsDomIds());
+    const missingInDom = apiIds.some((id) => !domIds.has(id));
 
-    const pendingCount = Number(data.pending_count || 0);
-    const pendingInDom = countPendingCardsInDom();
-    const missingPendingCards = Number.isFinite(pendingCount) && pendingCount > pendingInDom;
-
-    if (nextHash && currentHash && nextHash !== currentHash) {
+    if (missingInDom) {
       scheduleManageEventsListReload();
       return true;
     }
 
-    if (missingPendingCards) {
-      scheduleManageEventsListReload();
-      return true;
-    }
-
-    if (nextHash && container && !currentHash) {
+    if (nextHash && container) {
       container.dataset.liveListHash = nextHash;
     }
 
@@ -5119,13 +5407,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return true;
   }
 
-  async function refreshManageEventsLive() {
+  async function refreshManageEventsLive(forceFresh) {
     if (manageEventsLiveInFlight || isManageEventsBusy()) return;
     manageEventsLiveInFlight = true;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 12000);
     try {
-      const res = await fetch('/api/manage_events_live.php?_=' + Date.now(), {
+      // Periodic polls use API TTL cache; visibility/resume can force fresh.
+      const freshParam = forceFresh ? '&fresh=1' : '';
+      const res = await fetch('/api/manage_events_live.php?_=' + Date.now() + freshParam, {
         cache: 'no-store',
         credentials: 'same-origin',
         signal: controller.signal,
@@ -5134,10 +5424,6 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       if (!res.ok) return;
       const data = await res.json();
       if (!data || data.ok !== true) return;
-
-      if (syncManageEventsListFromLive(data)) {
-        return;
-      }
 
       updatePendingTabBadge(Number(data.pending_count || 0));
       updateApprovalTabBadge(Number(data.approval_count || 0));
@@ -5156,6 +5442,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         }
       });
 
+      if (syncManageEventsListFromLive(data)) {
+        return;
+      }
+
       if (changed && typeof window.refreshEventVisibility === 'function') {
         window.refreshEventVisibility();
       }
@@ -5169,14 +5459,31 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   window.refreshManageEventsLive = refreshManageEventsLive;
   window.syncManageEventsListFromLive = syncManageEventsListFromLive;
-  window.setTimeout(refreshManageEventsLive, 300);
-  window.setInterval(refreshManageEventsLive, 5000);
+
+  function scheduleManageEventsLivePolling() {
+    if (manageEventsLiveIntervalId) {
+      window.clearInterval(manageEventsLiveIntervalId);
+    }
+    const intervalMs = document.visibilityState === 'visible' ? 15000 : 60000;
+    manageEventsLiveIntervalId = window.setInterval(refreshManageEventsLive, intervalMs);
+  }
+
+  window.setTimeout(function () { refreshManageEventsLive(true); }, 800);
+  scheduleManageEventsLivePolling();
+  let manageEventsVisibilityRefreshId = null;
   document.addEventListener('visibilitychange', () => {
+    scheduleManageEventsLivePolling();
     if (document.visibilityState === 'visible') {
-      refreshManageEventsLive();
-      if (typeof window.PulseFlushPendingNotifications === 'function') {
-        window.PulseFlushPendingNotifications();
+      if (manageEventsVisibilityRefreshId) {
+        window.clearTimeout(manageEventsVisibilityRefreshId);
       }
+      manageEventsVisibilityRefreshId = window.setTimeout(() => {
+        manageEventsVisibilityRefreshId = null;
+        refreshManageEventsLive(true);
+        if (typeof window.PulseFlushPendingNotifications === 'function') {
+          window.PulseFlushPendingNotifications();
+        }
+      }, 350);
     }
   });
 })();

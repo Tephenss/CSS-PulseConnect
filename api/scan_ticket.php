@@ -10,15 +10,28 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/scan_context.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/scan_write_queue.php';
 
 $user = require_role(['teacher', 'admin']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
+$userId = trim((string) ($user['id'] ?? ''));
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('scan_ticket:' . $userId . ':' . $clientIp, 30, 10)) {
+    json_response(['ok' => false, 'error' => 'Too many scan attempts. Please wait a moment.'], 429);
+}
+
 $token = isset($data['token']) ? (string) $data['token'] : '';
 
 if ($token === '' || !preg_match('/^[a-f0-9]{32}$/', $token)) {
     json_response(['ok' => false, 'error' => 'Invalid Ticket'], 400);
+}
+
+$dedupeKey = 'scan_ticket:' . $userId . ':' . $token;
+if (!api_request_dedupe_first($dedupeKey, 2)) {
+    json_response(['ok' => false, 'error' => 'Duplicate scan ignored. Please wait before scanning again.'], 409);
 }
 
 $headers = [
@@ -129,16 +142,35 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
         'Prefer: return=representation',
     ];
     $writeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,last_scanned_at';
-    $writeRes = supabase_request('POST', $writeUrl, $writeHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
-    if (!$writeRes['ok']) {
-        json_response(['ok' => false, 'error' => build_error($writeRes['body'] ?? null, (int) ($writeRes['status'] ?? 0), $writeRes['error'] ?? null, 'Seminar scan update failed')], 500);
+    $writeOutcome = scan_write_attempt_or_queue([
+        'type' => 'session_attendance_insert',
+        'method' => 'POST',
+        'url' => $writeUrl,
+        'headers' => $writeHeaders,
+        'body' => json_encode($payload, JSON_UNESCAPED_SLASHES),
+        'meta' => [
+            'ticket_id' => $ticketId,
+            'session_id' => $sessionId,
+            'event_id' => $eventId,
+        ],
+    ]);
+    if (($writeOutcome['ok'] ?? false) !== true) {
+        json_response(['ok' => false, 'error' => (string) ($writeOutcome['error'] ?? 'Seminar scan update failed')], 500);
     }
 
-    $writeRows = json_decode((string) $writeRes['body'], true);
+    $writeRows = $writeOutcome['body'] ?? null;
     $attendance = is_array($writeRows) && isset($writeRows[0]) ? $writeRows[0] : null;
     $sessionName = trim((string) ($sessionContext['display_name'] ?? $sessionContext['title'] ?? 'Seminar'));
     $message = 'Checked in for ' . ($sessionName !== '' ? $sessionName : 'Seminar');
-    json_response(['ok' => true, 'message' => $message, 'attendance' => $attendance], 200);
+    if (($writeOutcome['queued'] ?? false) === true) {
+        $message .= ' (queued for sync)';
+    }
+    json_response([
+        'ok' => true,
+        'message' => $message,
+        'attendance' => $attendance,
+        'queued' => (bool) ($writeOutcome['queued'] ?? false),
+    ], 200);
 }
 
 // Load attendance row
@@ -190,13 +222,31 @@ $patchHeaders = [
     'Prefer: return=representation',
 ];
 
-$patchRes = supabase_request('PATCH', $patchUrl, $patchHeaders, json_encode($update, JSON_UNESCAPED_SLASHES));
-if (!$patchRes['ok']) {
-    json_response(['ok' => false, 'error' => build_error($patchRes['body'] ?? null, (int) ($patchRes['status'] ?? 0), $patchRes['error'] ?? null, 'Scan update failed')], 500);
+$patchOutcome = scan_write_attempt_or_queue([
+    'type' => 'attendance_patch',
+    'method' => 'PATCH',
+    'url' => $patchUrl,
+    'headers' => $patchHeaders,
+    'body' => json_encode($update, JSON_UNESCAPED_SLASHES),
+    'meta' => [
+        'ticket_id' => $ticketId,
+        'attendance_id' => $attId,
+        'event_id' => $eventId,
+    ],
+]);
+if (($patchOutcome['ok'] ?? false) !== true) {
+    json_response(['ok' => false, 'error' => (string) ($patchOutcome['error'] ?? 'Scan update failed')], 500);
 }
 
-$rows = json_decode((string) $patchRes['body'], true);
-$updated = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
-
-json_response(['ok' => true, 'message' => $message, 'attendance' => $updated], 200);
+$patchRows = $patchOutcome['body'] ?? null;
+$attendance = is_array($patchRows) && isset($patchRows[0]) ? $patchRows[0] : array_merge($att, $update);
+if (($patchOutcome['queued'] ?? false) === true) {
+    $message .= ' (queued for sync)';
+}
+json_response([
+    'ok' => true,
+    'message' => $message,
+    'attendance' => $attendance,
+    'queued' => (bool) ($patchOutcome['queued'] ?? false),
+], 200);
 

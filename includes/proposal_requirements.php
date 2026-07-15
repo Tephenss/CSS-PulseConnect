@@ -195,6 +195,28 @@ function fetch_proposal_submissions_map(array $eventIds, array $headers, ?bool $
     return $map;
 }
 
+function filter_visible_proposal_submissions_map(array $submissionMap): array
+{
+    $visible = [];
+    foreach ($submissionMap as $eventId => $submissions) {
+        if (!is_array($submissions)) {
+            continue;
+        }
+        $filtered = [];
+        foreach ($submissions as $requirementId => $row) {
+            if (!is_array($row) || empty($row['admin_visible'])) {
+                continue;
+            }
+            $filtered[$requirementId] = $row;
+        }
+        if ($filtered !== []) {
+            $visible[$eventId] = $filtered;
+        }
+    }
+
+    return $visible;
+}
+
 function build_proposal_requirement_summary(array $requirements, array $submissionMap): array
 {
     $total = count($requirements);

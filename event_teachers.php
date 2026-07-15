@@ -100,40 +100,8 @@ function load_all_teachers(array $headers): array
 
 function send_qr_assignment_notification(array $teacherIds, string $eventId, string $eventTitle): void
 {
-    if (empty($teacherIds)) {
-        return;
-    }
-
-    require_once __DIR__ . '/includes/fcm.php';
-
-    $inList = '(' . implode(',', array_map('rawurlencode', $teacherIds)) . ')';
-    $tokensRes = supabase_request('GET',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
-        ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
-    );
-
-    if (!$tokensRes['ok']) {
-        return;
-    }
-
-    $tokenRows = json_decode((string) $tokensRes['body'], true);
-    $tokens = [];
-    if (is_array($tokenRows)) {
-        foreach ($tokenRows as $row) {
-            $token = trim((string) ($row['token'] ?? ''));
-            if ($token !== '') {
-                $tokens[$token] = true;
-            }
-        }
-    }
-
-    if (empty($tokens)) {
-        return;
-    }
-
-    $title = 'QR Scanner Access Granted';
-    $body = 'You can now scan attendance and manage assistants for "' . $eventTitle . '".';
-    send_fcm_notification(array_keys($tokens), $title, $body, [
+    require_once __DIR__ . '/includes/user_notifications.php';
+    dispatch_user_notifications($teacherIds, 'QR Scanner Access Granted', 'You can now scan attendance and manage assistants for "' . $eventTitle . '".', [
         'event_id' => $eventId,
         'type' => 'teacher_qr_assigned',
     ]);
@@ -141,40 +109,8 @@ function send_qr_assignment_notification(array $teacherIds, string $eventId, str
 
 function send_teacher_event_assignment_notification(array $teacherIds, string $eventId, string $eventTitle): void
 {
-    if (empty($teacherIds)) {
-        return;
-    }
-
-    require_once __DIR__ . '/includes/fcm.php';
-
-    $inList = '(' . implode(',', array_map('rawurlencode', $teacherIds)) . ')';
-    $tokensRes = supabase_request('GET',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
-        ['apikey: ' . SUPABASE_KEY, 'Authorization: Bearer ' . SUPABASE_KEY]
-    );
-
-    if (!$tokensRes['ok']) {
-        return;
-    }
-
-    $tokenRows = json_decode((string) $tokensRes['body'], true);
-    $tokens = [];
-    if (is_array($tokenRows)) {
-        foreach ($tokenRows as $row) {
-            $token = trim((string) ($row['token'] ?? ''));
-            if ($token !== '') {
-                $tokens[$token] = true;
-            }
-        }
-    }
-
-    if (empty($tokens)) {
-        return;
-    }
-
-    $title = 'Event Assignment';
-    $body = 'You were assigned to "' . $eventTitle . '". Check your event list for details.';
-    send_fcm_notification(array_keys($tokens), $title, $body, [
+    require_once __DIR__ . '/includes/user_notifications.php';
+    dispatch_user_notifications($teacherIds, 'Event Assignment', 'You were assigned to "' . $eventTitle . '". Check your event list for details.', [
         'event_id' => $eventId,
         'type' => 'teacher_event_assigned',
     ]);

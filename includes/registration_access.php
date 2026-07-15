@@ -382,7 +382,7 @@ function notify_users_for_registration_access(array $userIds, string $title, str
         return;
     }
 
-    require_once __DIR__ . '/fcm.php';
+    require_once __DIR__ . '/user_notifications.php';
 
     $inList = '(' . implode(',', array_map('rawurlencode', $userIds)) . ')';
     $res = supabase_request(
@@ -412,6 +412,8 @@ function notify_users_for_registration_access(array $userIds, string $title, str
             }
         }
     }
+
+    persist_user_notifications($userIds, $title, $body, $data);
 
     if ($tokens !== []) {
         send_fcm_notification(array_keys($tokens), $title, $body, $data);

@@ -15,7 +15,7 @@ $role = (string) ($user['role'] ?? 'teacher');
 // Load events to show on homepage (students see published only).
 $select = 'select=id,title,description,location,start_at,end_at,status';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
-$url = $role === 'student' ? $base . '&status=eq.published' : $base . '&status=neq.archived';
+$url = $role === 'student' ? $base . '&status=eq.published&limit=100' : $base . '&status=neq.archived&limit=100';
 
 $headers = [
   'Accept: application/json',

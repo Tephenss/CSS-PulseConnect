@@ -7,6 +7,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -17,6 +18,11 @@ $fullName = trim((string) ($data['full_name'] ?? ''));
 
 if ($userId === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Invalid request.'], 400);
+}
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('mobile_email_verify:' . $userId . ':' . $clientIp, 6, 300)) {
+    json_response(['ok' => false, 'error' => 'Too many verification emails. Please wait a few minutes.'], 429);
 }
 
 $lookupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS

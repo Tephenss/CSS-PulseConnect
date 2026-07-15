@@ -465,7 +465,8 @@ function send_notification_to_users(array $userIds, string $title, string $body,
         ];
     }
 
-    require_once __DIR__ . '/../includes/fcm.php';
+    require_once __DIR__ . '/../includes/user_notifications.php';
+    persist_user_notifications($userIds, $title, $body, $data);
 
     $inList = '(' . implode(',', array_map('rawurlencode', $userIds)) . ')';
     $tokensRes = supabase_request('GET',

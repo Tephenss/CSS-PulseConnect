@@ -7,25 +7,6 @@ function render_header(string $title, ?array $user): void
 {
     $role = $user && isset($user['role']) ? (string) $user['role'] : null;
     $pendingAppCount = 0;
-    if ($role === 'admin' && function_exists('supabase_request') && defined('SUPABASE_URL') && defined('SUPABASE_KEY') && defined('SUPABASE_TABLE_USERS')) {
-        $countUrl = rtrim((string) SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-            . '?select=id'
-            . '&role=eq.student'
-            . '&registration_source=eq.app'
-            . '&account_status=eq.pending';
-        $countHeaders = [
-            'Accept: application/json',
-            'apikey: ' . SUPABASE_KEY,
-            'Authorization: Bearer ' . SUPABASE_KEY,
-        ];
-        $countRes = supabase_request('GET', $countUrl, $countHeaders);
-        if (is_array($countRes) && !empty($countRes['ok'])) {
-            $countRows = json_decode((string) ($countRes['body'] ?? '[]'), true);
-            if (is_array($countRows)) {
-                $pendingAppCount = count($countRows);
-            }
-        }
-    }
     $csrf = csrf_ensure_token();
     $fullName = htmlspecialchars((string) ($user['full_name'] ?? 'User'));
     $initials = '';
@@ -290,12 +271,17 @@ function render_header(string $title, ?array $user): void
             let unreadCount = 0;
             let knownNotificationIds = [];
             let previewHideTimer = null;
+            let previewShownTimer = null;
+            let currentPreviewItem = null;
             let notifAudioReady = false;
             const pulseUserId = String(window.PULSE_USER_ID || "default");
             const readStorageKey = "pulse_notifs_read_" + pulseUserId;
             const previewShownKey = "pulse_preview_shown_" + pulseUserId;
             const pendingPreviewStorageKey = "pulse_pending_previews_" + pulseUserId;
+            const polledNotificationIdsKey = "pulse_notifs_polled_" + pulseUserId;
             let pendingPreviewQueue = [];
+            let polledNotificationIds = [];
+            let notificationsBootstrapped = false;
 
             function ensureNotifAudioContext() {
                 const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -354,6 +340,15 @@ function render_header(string $title, ?array $user): void
             document.addEventListener("keydown", unlockNotifAudio, { passive: true });
             document.addEventListener("pointerdown", unlockNotifAudio, { passive: true });
             document.addEventListener("touchstart", unlockNotifAudio, { passive: true });
+            document.addEventListener("click", function (e) {
+                const link = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+                if (!link || link.target === "_blank") return;
+                const href = String(link.getAttribute("href") || "");
+                if (!href || href.charAt(0) === "#" || href.indexOf("javascript:") === 0) return;
+                if (currentPreviewItem && preview && !preview.classList.contains("hidden")) {
+                    queueInterruptedPreview();
+                }
+            }, true);
             
             function formatTimeAgo(isoString) {
                 const date = new Date(isoString);
@@ -418,8 +413,18 @@ function render_header(string $title, ?array $user): void
                     history = {};
                 }
                 const lastShown = Number(history[dedupeKey] || 0);
-                if (lastShown > 0 && (now - lastShown) < 120000) {
-                    return false;
+                return !(lastShown > 0 && (now - lastShown) < 120000);
+            }
+
+            function markNotificationPreviewShown(item) {
+                const dedupeKey = getPreviewDedupeKey(item);
+                if (!dedupeKey) return;
+                const now = Date.now();
+                let history = {};
+                try {
+                    history = JSON.parse(sessionStorage.getItem(previewShownKey) || "{}");
+                } catch (e) {
+                    history = {};
                 }
                 history[dedupeKey] = now;
                 Object.keys(history).forEach(function (key) {
@@ -428,7 +433,49 @@ function render_header(string $title, ?array $user): void
                     }
                 });
                 sessionStorage.setItem(previewShownKey, JSON.stringify(history));
-                return true;
+            }
+
+            function clearNotificationPreviewShown(item) {
+                const dedupeKey = getPreviewDedupeKey(item);
+                if (!dedupeKey) return;
+                try {
+                    const history = JSON.parse(sessionStorage.getItem(previewShownKey) || "{}");
+                    delete history[dedupeKey];
+                    sessionStorage.setItem(previewShownKey, JSON.stringify(history));
+                } catch (e) {
+                    // Ignore storage failures.
+                }
+            }
+
+            function loadPolledNotificationIds() {
+                try {
+                    const parsed = JSON.parse(sessionStorage.getItem(polledNotificationIdsKey) || "[]");
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function savePolledNotificationIds(ids) {
+                try {
+                    sessionStorage.setItem(polledNotificationIdsKey, JSON.stringify(ids.slice(-80)));
+                } catch (e) {
+                    // Ignore storage failures.
+                }
+            }
+
+            function rememberPolledNotificationIds(ids) {
+                if (!Array.isArray(ids) || ids.length === 0) return;
+                let changed = false;
+                ids.forEach(function (id) {
+                    if (id && !polledNotificationIds.includes(id)) {
+                        polledNotificationIds.push(id);
+                        changed = true;
+                    }
+                });
+                if (changed) {
+                    savePolledNotificationIds(polledNotificationIds);
+                }
             }
 
             function loadPendingPreviewQueue() {
@@ -453,6 +500,7 @@ function render_header(string $title, ?array $user): void
                 const key = getPreviewDedupeKey(item);
                 if (!key) return;
                 if (pendingPreviewQueue.some((queued) => getPreviewDedupeKey(queued) === key)) return;
+                clearNotificationPreviewShown(item);
                 pendingPreviewQueue.push(item);
                 savePendingPreviewQueue();
                 if (trigger) trigger.classList.add("notif-bell-alert");
@@ -480,12 +528,24 @@ function render_header(string $title, ?array $user): void
 
             function flushPendingPreviews() {
                 if (document.visibilityState !== "visible" || pendingPreviewQueue.length === 0) return;
-                const queued = pendingPreviewQueue.slice();
-                pendingPreviewQueue = [];
+                if (currentPreviewItem) return;
+                const item = pendingPreviewQueue.shift();
                 savePendingPreviewQueue();
-                queued.forEach(function (item) {
-                    showNotificationPreview(item, { forceVisible: true });
-                });
+                showNotificationPreview(item, { forceVisible: true, skipDedupe: true });
+            }
+
+            function queueInterruptedPreview() {
+                if (!currentPreviewItem || !preview) return;
+                const interrupted = currentPreviewItem;
+                const wasOpen = !preview.classList.contains("hidden");
+                if (!wasOpen) return;
+                window.clearTimeout(previewHideTimer);
+                window.clearTimeout(previewShownTimer);
+                preview.classList.remove("notif-preview-visible");
+                preview.classList.add("hidden");
+                if (trigger) trigger.classList.remove("notif-bell-alert");
+                currentPreviewItem = null;
+                enqueuePendingPreview(interrupted);
             }
 
             function syncNotificationsOnFocus() {
@@ -501,18 +561,28 @@ function render_header(string $title, ?array $user): void
                     maybeShowSystemNotification(item);
                     return;
                 }
-                if (!shouldShowNotificationPreview(item)) return;
+                if (!options.skipDedupe && !shouldShowNotificationPreview(item)) {
+                    if (pendingPreviewQueue.length > 0) {
+                        window.setTimeout(flushPendingPreviews, 300);
+                    }
+                    return;
+                }
+                currentPreviewItem = item;
                 if (previewArea) {
                     previewArea.textContent = item.area || "Notification";
                 }
                 previewTitle.textContent = item.title || "New update";
                 previewDesc.textContent = item.description || "";
                 window.clearTimeout(previewHideTimer);
+                window.clearTimeout(previewShownTimer);
                 preview.classList.remove("hidden");
                 preview.classList.remove("notif-preview-visible");
                 window.requestAnimationFrame(() => {
                     window.requestAnimationFrame(() => {
                         preview.classList.add("notif-preview-visible");
+                        previewShownTimer = window.setTimeout(() => {
+                            markNotificationPreviewShown(item);
+                        }, 700);
                     });
                 });
                 trigger.classList.add("notif-bell-alert");
@@ -522,6 +592,10 @@ function render_header(string $title, ?array $user): void
                     window.setTimeout(() => {
                         preview.classList.add("hidden");
                         trigger.classList.remove("notif-bell-alert");
+                        currentPreviewItem = null;
+                        if (pendingPreviewQueue.length > 0) {
+                            window.setTimeout(flushPendingPreviews, 350);
+                        }
                     }, 380);
                 }, 6200);
             }
@@ -536,22 +610,34 @@ function render_header(string $title, ?array $user): void
                 const controller = new AbortController();
                 const timeoutId = window.setTimeout(() => controller.abort(), 8000);
                 try {
-                    const res = await fetch("/api/get_notifications.php?limit=10&fresh=1&_=" + Date.now(), {
+                    // Periodic polls use TTL cache; catch-up (focus/visible) can force fresh.
+                    const freshParam = isCatchUp ? "&fresh=1" : "";
+                    const res = await fetch("/api/get_notifications.php?limit=10" + freshParam + "&_=" + Date.now(), {
                         cache: "no-store",
                         signal: controller.signal,
                     });
                     const data = await res.json();
                     if (data.ok) {
                         const nextNotifications = data.notifications || [];
-                        const previousKnownIds = knownNotificationIds.slice();
-                        knownNotificationIds = nextNotifications.map((item) => item.id).filter(Boolean);
+                        const nextIds = nextNotifications.map((item) => item.id).filter(Boolean);
                         const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
+
+                        if (!notificationsBootstrapped) {
+                            notificationsBootstrapped = true;
+                            polledNotificationIds = loadPolledNotificationIds();
+                            if (polledNotificationIds.length === 0 && nextIds.length > 0) {
+                                rememberPolledNotificationIds(nextIds);
+                            }
+                        }
+
                         const freshUnread = nextNotifications.filter((item) => {
                             if (!item || !item.id) return false;
-                            if (previousKnownIds.includes(item.id)) return false;
-                            return !readIds.includes(item.id);
+                            if (polledNotificationIds.includes(item.id)) return false;
+                            if (readIds.includes(item.id)) return false;
+                            return true;
                         });
-                        if (previousKnownIds.length > 0 && freshUnread.length > 0) {
+
+                        if (freshUnread.length > 0) {
                             if (document.visibilityState === "hidden") {
                                 freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
                                 maybeShowSystemNotification(freshUnread[0]);
@@ -560,8 +646,17 @@ function render_header(string $title, ?array $user): void
                                 flushPendingPreviews();
                             } else {
                                 showNotificationPreview(freshUnread[0]);
+                                freshUnread.slice(1).forEach(function (item) { enqueuePendingPreview(item); });
+                            }
+                            rememberPolledNotificationIds(freshUnread.map((item) => item.id));
+                        } else {
+                            const unseenIds = nextIds.filter((id) => !polledNotificationIds.includes(id));
+                            if (unseenIds.length > 0) {
+                                rememberPolledNotificationIds(unseenIds);
                             }
                         }
+
+                        knownNotificationIds = nextIds;
                         loadedNotifications = nextNotifications;
                         renderNotifications(loadedNotifications);
                         updateBadge();
@@ -583,6 +678,8 @@ function render_header(string $title, ?array $user): void
                     window.setTimeout(() => preview.classList.add("hidden"), 280);
                     trigger.classList.remove("notif-bell-alert");
                     window.clearTimeout(previewHideTimer);
+                    window.clearTimeout(previewShownTimer);
+                    currentPreviewItem = null;
                 }
                 isPanelOpen = !isPanelOpen;
                 if (isPanelOpen) {
@@ -610,14 +707,21 @@ function render_header(string $title, ?array $user): void
             });
             
             loadPendingPreviewQueue();
-            fetchNotifications(false);
+            polledNotificationIds = loadPolledNotificationIds();
+            if (pendingPreviewQueue.length > 0) {
+                window.setTimeout(flushPendingPreviews, 500);
+            }
+            fetchNotifications(true);
             setInterval(function () { fetchNotifications(false); }, 15000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     syncNotificationsOnFocus();
+                } else if (currentPreviewItem) {
+                    enqueuePendingPreview(currentPreviewItem);
                 }
             });
             window.addEventListener("focus", syncNotificationsOnFocus);
+            window.addEventListener("pagehide", queueInterruptedPreview);
 
             window.showPulseNotifPreview = showNotificationPreview;
             window.playPulseNotifSound = playNotifSound;
@@ -691,10 +795,57 @@ function render_footer(): void
         var manageEventsBadgePolling = null;
         var manageEventsBadgeInFlight = false;
         var manageEventsSeenKey = "pulse_manage_events_seen_" + String(window.PULSE_USER_ID || "default");
-        var knownManageEventsSignalIds = [];
+        var manageEventsPolledSignalIdsKey = "pulse_manage_events_polled_" + String(window.PULSE_USER_ID || "default");
+        var polledManageEventsSignalIds = [];
+        var manageEventsSignalsBootstrapped = false;
 
         function isManageEventsPage() {
             return window.location.pathname.indexOf("manage_events.php") !== -1;
+        }
+
+        function loadPolledManageEventsSignalIds() {
+            try {
+                var parsed = JSON.parse(sessionStorage.getItem(manageEventsPolledSignalIdsKey) || "[]");
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function savePolledManageEventsSignalIds(ids) {
+            try {
+                sessionStorage.setItem(manageEventsPolledSignalIdsKey, JSON.stringify(ids.slice(-120)));
+            } catch (e) {
+                // Ignore storage failures.
+            }
+        }
+
+        function rememberPolledManageEventsSignalIds(ids) {
+            if (!Array.isArray(ids) || ids.length === 0) return;
+            var changed = false;
+            ids.forEach(function (id) {
+                if (id && polledManageEventsSignalIds.indexOf(id) === -1) {
+                    polledManageEventsSignalIds.push(id);
+                    changed = true;
+                }
+            });
+            if (changed) {
+                savePolledManageEventsSignalIds(polledManageEventsSignalIds);
+            }
+        }
+
+        function signalToPreviewItem(signal) {
+            if (!signal) return null;
+            return {
+                id: signal.id || "",
+                area: signal.area || "Manage Events",
+                title: signal.title || "New event update",
+                description: signal.description || "",
+                dedupe_key: signal.dedupe_key || "",
+                event_id: signal.event_id || "",
+                kind: signal.kind || "",
+                link: "/manage_events.php",
+            };
         }
 
         function getManageEventsSeenIds() {
@@ -732,12 +883,6 @@ function render_footer(): void
         function updateManageEventsBadgeFromSignals(signals) {
             if (!manageEventsBadgeEl) return;
 
-            if (Array.isArray(signals)) {
-                knownManageEventsSignalIds = signals.map(function (signal) {
-                    return signal && signal.id ? signal.id : "";
-                }).filter(Boolean);
-            }
-
             if (isManageEventsPage()) {
                 markManageEventsSignalsSeen(signals || []);
             }
@@ -764,13 +909,53 @@ function render_footer(): void
             manageEventsBadgeEl.textContent = unseen.length > 99 ? "99+" : String(unseen.length);
         }
 
-        async function refreshManageEventsBadge() {
+        function handleFreshManageEventsSignals(signals) {
+            if (!Array.isArray(signals) || signals.length === 0) return;
+
+            var signalIds = signals.map(function (signal) {
+                return signal && signal.id ? signal.id : "";
+            }).filter(Boolean);
+
+            if (!manageEventsSignalsBootstrapped) {
+                manageEventsSignalsBootstrapped = true;
+                polledManageEventsSignalIds = loadPolledManageEventsSignalIds();
+                if (polledManageEventsSignalIds.length === 0 && signalIds.length > 0) {
+                    rememberPolledManageEventsSignalIds(signalIds);
+                    return;
+                }
+            }
+
+            var freshSignals = signals.filter(function (signal) {
+                if (!signal || !signal.id) return false;
+                return polledManageEventsSignalIds.indexOf(signal.id) === -1;
+            });
+
+            if (freshSignals.length > 0) {
+                rememberPolledManageEventsSignalIds(freshSignals.map(function (signal) { return signal.id; }));
+                if (!isManageEventsPage() && typeof window.showPulseNotifPreview === "function") {
+                    var previewItem = signalToPreviewItem(freshSignals[0]);
+                    if (previewItem) {
+                        window.showPulseNotifPreview(previewItem);
+                    }
+                }
+            } else if (signalIds.length > 0) {
+                var unseenIds = signalIds.filter(function (id) {
+                    return polledManageEventsSignalIds.indexOf(id) === -1;
+                });
+                if (unseenIds.length > 0) {
+                    rememberPolledManageEventsSignalIds(unseenIds);
+                }
+            }
+        }
+
+        async function refreshManageEventsBadge(forceFresh) {
             if (!manageEventsBadgeEl || manageEventsBadgeInFlight) return;
             manageEventsBadgeInFlight = true;
             const controller = new AbortController();
             const timeoutId = window.setTimeout(() => controller.abort(), 8000);
             try {
-                var resp = await fetch("/api/manage_events_live.php?lite=1", {
+                var freshParam = forceFresh ? "&fresh=1" : "";
+                var resp = await fetch("/api/manage_events_live.php?lite=1" + freshParam + "&_=" + Date.now(), {
                     cache: "no-store",
                     credentials: "same-origin",
                     signal: controller.signal,
@@ -778,20 +963,7 @@ function render_footer(): void
                 if (!resp.ok) return;
                 var data = await resp.json();
                 if (!data || data.ok !== true) return;
-                if (isManageEventsPage()) {
-                    if (typeof window.syncManageEventsListFromLive === "function") {
-                        window.syncManageEventsListFromLive(data);
-                    } else if (data.list_hash) {
-                        var listContainer = document.getElementById("eventScrollContainer");
-                        if (listContainer) {
-                            var currentListHash = listContainer.getAttribute("data-live-list-hash") || "";
-                            if (currentListHash && currentListHash !== data.list_hash) {
-                                window.location.reload();
-                                return;
-                            }
-                        }
-                    }
-                }
+                handleFreshManageEventsSignals(data.signals || []);
                 updateManageEventsBadgeFromSignals(data.signals || []);
             } catch (e) {
                 // Keep current badge state on transient network failures.
@@ -801,17 +973,22 @@ function render_footer(): void
             }
         }
 
-        if (manageEventsBadgeEl) {
-            refreshManageEventsBadge();
-            manageEventsBadgePolling = window.setInterval(refreshManageEventsBadge, 10000);
+        function initManageEventsBadgePolling() {
+            if (!manageEventsBadgeEl) return;
+            polledManageEventsSignalIds = loadPolledManageEventsSignalIds();
+            // Initial + focus use fresh; periodic polls rely on API TTL cache.
+            refreshManageEventsBadge(true);
+            manageEventsBadgePolling = window.setInterval(function () {
+                refreshManageEventsBadge(false);
+            }, 15000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
-                    refreshManageEventsBadge();
+                    refreshManageEventsBadge(true);
                 }
             });
             if (manageEventsLinkEl) {
                 manageEventsLinkEl.addEventListener("click", function () {
-                    fetch("/api/manage_events_live.php?lite=1", { cache: "no-store", credentials: "same-origin" })
+                    fetch("/api/manage_events_live.php?lite=1&fresh=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
                         .then(function (resp) { return resp.json(); })
                         .then(function (data) {
                             if (data && data.ok) {
@@ -824,7 +1001,8 @@ function render_footer(): void
             }
             if (isManageEventsPage()) {
                 window.setTimeout(function () {
-                    fetch("/api/manage_events_live.php?lite=1", { cache: "no-store", credentials: "same-origin" })
+                    // Already on manage events page — TTL cache is fine for mark-seen bootstrap.
+                    fetch("/api/manage_events_live.php?lite=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
                         .then(function (resp) { return resp.json(); })
                         .then(function (data) {
                             if (data && data.ok) {
@@ -841,6 +1019,14 @@ function render_footer(): void
                     manageEventsBadgePolling = null;
                 }
             });
+        }
+
+        if (manageEventsBadgeEl) {
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", initManageEventsBadgePolling);
+            } else {
+                initManageEventsBadgePolling();
+            }
         }
 
         // Keep Manage Application pending badge updated without refresh.
