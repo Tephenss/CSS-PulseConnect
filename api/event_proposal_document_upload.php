@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/../includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
@@ -104,6 +105,12 @@ if (!in_array($mimeType, $allowedMimeTypes, true)) {
     json_response(['ok' => false, 'error' => 'Only PDF, DOC, DOCX, JPG, PNG, or WEBP files are allowed.'], 400);
 }
 
+$maxBytes = 10 * 1024 * 1024;
+$fileSize = (int) ($upload['size'] ?? 0);
+if ($fileSize <= 0 || $fileSize > $maxBytes) {
+    json_response(['ok' => false, 'error' => 'Each proposal file must be 10MB or smaller.'], 400);
+}
+
 $fileBytes = file_get_contents($tmpName);
 if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded file.'], 400);
@@ -120,7 +127,11 @@ $storageHeaders = [
 ];
 $storageRes = supabase_request('POST', $storageUrl, $storageHeaders, $fileBytes);
 if (!$storageRes['ok']) {
-    json_response(['ok' => false, 'error' => build_error($storageRes['body'] ?? null, (int) ($storageRes['status'] ?? 0), $storageRes['error'] ?? null, 'Failed to upload the proposal document')], 500);
+    $storageError = build_error($storageRes['body'] ?? null, (int) ($storageRes['status'] ?? 0), $storageRes['error'] ?? null, 'Failed to upload the proposal document');
+    if (str_contains(strtolower($storageError), 'maximum allowed size')) {
+        $storageError = 'File is too large. Each proposal file must be 10MB or smaller.';
+    }
+    json_response(['ok' => false, 'error' => $storageError], 500);
 }
 
 $originalName = trim((string) ($upload['name'] ?? ''));

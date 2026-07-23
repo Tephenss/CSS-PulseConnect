@@ -96,3 +96,83 @@ body {
   background: rgba(209, 250, 229, 0.8);
   color: #065f46;
 }
+
+/* Shiny title — matches app ShinyText (LTR highlight sweep) */
+.pc-shiny-title {
+  display: inline-block;
+  max-width: 100%;
+  background-image: linear-gradient(
+    90deg,
+    var(--pc-shiny-base, #7f1d1d) 0%,
+    var(--pc-shiny-base, #7f1d1d) 38%,
+    var(--pc-shiny-highlight, #ffffff) 50%,
+    var(--pc-shiny-base, #7f1d1d) 62%,
+    var(--pc-shiny-base, #7f1d1d) 100%
+  );
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: pcShineSweep 2.5s linear infinite;
+}
+
+.pc-shiny-title.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+}
+
+.pc-shiny-title--on-dark {
+  --pc-shiny-base: #b5b5b5;
+  --pc-shiny-highlight: #ffffff;
+  filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.55));
+}
+
+.pc-shiny-title--on-light {
+  --pc-shiny-base: #7f1d1d;
+  --pc-shiny-highlight: #fdba74;
+}
+
+@keyframes pcShineSweep {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Event card — fixed corner radius (never changes on hover) */
+.pc-event-card {
+  border-radius: 1rem !important;
+  transition: box-shadow 0.3s ease;
+}
+
+.pc-event-card:hover {
+  border-radius: 1rem !important;
+  transform: none;
+}
+
+.pc-event-card .pc-event-card-cover {
+  border-radius: 1rem 1rem 0 0;
+  overflow: hidden;
+}
+
+.pc-event-card .pc-event-card-cover img {
+  transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-shiny-title {
+    animation: none;
+    background-image: none;
+    color: var(--pc-shiny-base, #7f1d1d);
+    -webkit-text-fill-color: var(--pc-shiny-base, #7f1d1d);
+  }
+
+  .pc-shiny-title--on-dark {
+    color: #fff;
+    -webkit-text-fill-color: #fff;
+  }
+}

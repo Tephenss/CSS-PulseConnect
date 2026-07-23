@@ -45,7 +45,7 @@ function render_header(string $title, ?array $user): void
 
     // Logo area
     echo '<div class="sidebar-header px-2 pt-8 pb-6 flex flex-col items-center justify-center flex-shrink-0 min-w-0 transition-all">';
-    echo '  <a href="/home.php" class="flex flex-col items-center text-center gap-3 group min-w-0">';
+    echo '  <a href="/home" class="flex flex-col items-center text-center gap-3 group min-w-0">';
     echo '    <div class="p-3 bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 shadow-lg group-hover:bg-white/10 transition-colors duration-300">';
     echo '      <div class="sidebar-logo w-16 h-16 flex-shrink-0 flex items-center justify-center floating-logo relative transition-all duration-300 logo-container">';
     echo '        <div class="hide-anatomy anatomy-left"><div class="anatomy-bracket-left"></div><div class="anatomy-diagonal-left"></div><span class="anatomy-text-left">BSIT</span></div>';
@@ -69,29 +69,27 @@ function render_header(string $title, ?array $user): void
 
     // Dashboard
     $isActive = str_contains($title, 'Homepage') || str_contains($title, 'Dashboard');
-    echo '<a href="/home.php" data-tooltip="Dashboard" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
+    echo '<a href="/home" data-tooltip="Dashboard" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
     echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>';
     echo '<span class="sidebar-label">Dashboard</span></a>';
 
-    // Events (teacher flow is merged under Manage Events).
-    if ($role !== 'teacher') {
-        $isActive = str_contains($title, 'Events') && !str_contains($title, 'Manage');
-        echo '<a href="/events.php" data-tooltip="Events" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
-        echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
-        echo '<span class="sidebar-label">Events</span></a>';
-    }
+    // Events browse (published / finished) — available to teacher & admin
+    $isActive = str_contains($title, 'Events') && !str_contains($title, 'Manage');
+    echo '<a href="/events" data-tooltip="Events" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
+    echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
+    echo '<span class="sidebar-label">Events</span></a>';
 
     // Student-only links
     if ($role === 'student') {
-        echo '<a href="/my_tickets.php" data-tooltip="My Tickets" class="sidebar-link ' . (str_contains($title, 'ticket') ? 'active' : '') . '">';
+        echo '<a href="/my_tickets" data-tooltip="My Tickets" class="sidebar-link ' . (str_contains($title, 'ticket') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a2.999 2.999 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a2.999 2.999 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg>';
         echo '<span class="sidebar-label">My Tickets</span></a>';
 
-        echo '<a href="/my_certificates.php" data-tooltip="My Certificates" class="sidebar-link ' . (str_contains($title, 'certificate') ? 'active' : '') . '">';
+        echo '<a href="/my_certificates" data-tooltip="My Certificates" class="sidebar-link ' . (str_contains($title, 'certificate') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>';
         echo '<span class="sidebar-label">My Certificates</span></a>';
 
-        echo '<a href="/student_calendar.php" data-tooltip="Calendar" class="sidebar-link ' . (str_contains($title, 'Calendar') ? 'active' : '') . '">';
+        echo '<a href="/student_calendar" data-tooltip="Calendar" class="sidebar-link ' . (str_contains($title, 'Calendar') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
         echo '<span class="sidebar-label">Calendar</span></a>';
     }
@@ -100,14 +98,14 @@ function render_header(string $title, ?array $user): void
     if ($role === 'teacher' || $role === 'admin') {
         echo '<div class="sidebar-section">Management</div>';
 
-        echo '<a href="/manage_events.php" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage Events') ? 'active' : '') . '" id="manage-events-link">';
+        echo '<a href="/manage_events" data-tooltip="Manage Events" class="sidebar-link ' . (str_contains($title, 'Manage Events') ? 'active' : '') . '" id="manage-events-link">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75"/></svg>';
         echo '<span class="sidebar-label">Manage Events</span>';
         echo '<span id="manage-events-badge" class="manage-events-sidebar-badge ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-orange-500 text-white border border-orange-300 shadow-sm hidden">0</span>';
         echo '</a>';
 
         if ($role === 'admin') {
-            echo '<a href="/manage_applications.php" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
+            echo '<a href="/manage_applications" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
             echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m3.75 9v6m3-3H9m-3.75 6.75h13.5A2.25 2.25 0 0021 18.75V8.25A2.25 2.25 0 0018.75 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21z"/></svg>';
             echo '<span class="sidebar-label">Manage Application</span>';
             $badge = $pendingAppCount > 99 ? '99+' : (string) $pendingAppCount;
@@ -116,7 +114,7 @@ function render_header(string $title, ?array $user): void
             echo '</a>';
         }
 
-        $calHref = $role === 'admin' ? '/admin_calendar.php' : '/teacher_calendar.php';
+        $calHref = $role === 'admin' ? '/admin_calendar' : '/teacher_calendar';
         echo '<a href="' . $calHref . '" data-tooltip="Calendar" class="sidebar-link ' . (str_contains($title, 'Calendar') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
         echo '<span class="sidebar-label">Calendar</span></a>';
@@ -126,23 +124,23 @@ function render_header(string $title, ?array $user): void
     if ($role === 'admin') {
         echo '<div class="sidebar-section">Admin</div>';
 
-        echo '<a href="/admin_sections.php" data-tooltip="Sections" class="sidebar-link ' . (str_contains($title, 'Sections') ? 'active' : '') . '">';
+        echo '<a href="/admin_sections" data-tooltip="Sections" class="sidebar-link ' . (str_contains($title, 'Sections') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>';
         echo '<span class="sidebar-label">Sections</span></a>';
 
-        echo '<a href="/admin_archive.php" data-tooltip="Archive" class="sidebar-link ' . (str_contains($title, 'Archive') ? 'active' : '') . '">';
+        echo '<a href="/admin_archive" data-tooltip="Archive" class="sidebar-link ' . (str_contains($title, 'Archive') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H2.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/></svg>';
         echo '<span class="sidebar-label">Archive</span></a>';
 
-        echo '<a href="/admin_analytics.php" data-tooltip="Analytics" class="sidebar-link ' . (str_contains($title, 'Analytics') ? 'active' : '') . '">';
+        echo '<a href="/admin_analytics" data-tooltip="Analytics" class="sidebar-link ' . (str_contains($title, 'Analytics') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>';
         echo '<span class="sidebar-label">Analytics</span></a>';
 
-        echo '<a href="/admin_certificates.php" data-tooltip="Cert Templates" class="sidebar-link ' . (str_contains($title, 'Certificates') || str_contains($title, 'Cert') ? 'active' : '') . '">';
+        echo '<a href="/admin_certificates" data-tooltip="Cert Templates" class="sidebar-link ' . (str_contains($title, 'Certificates') || str_contains($title, 'Cert') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>';
         echo '<span class="sidebar-label">Cert Templates</span></a>';
 
-        echo '<a href="/admin_users.php" data-tooltip="Users &amp; Roles" class="sidebar-link ' . (str_contains($title, 'Users') ? 'active' : '') . '">';
+        echo '<a href="/admin_users" data-tooltip="Users &amp; Roles" class="sidebar-link ' . (str_contains($title, 'Users') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>';
         echo '<span class="sidebar-label">Users &amp; Roles</span></a>';
     }
@@ -163,7 +161,7 @@ function render_header(string $title, ?array $user): void
     echo '      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>';
     echo '    </button>';
     echo '  </div>';
-    echo '  <a href="/logout.php" class="mt-1 flex items-center justify-center gap-2 w-full px-2 py-2 text-xs font-medium text-red-400 hover:bg-red-900/80 hover:text-red-300 rounded-lg transition sidebar-logo-text" title="Logout">';
+    echo '  <a href="/logout" class="mt-1 flex items-center justify-center gap-2 w-full px-2 py-2 text-xs font-medium text-red-400 hover:bg-red-900/80 hover:text-red-300 rounded-lg transition sidebar-logo-text" title="Logout">';
     echo '    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/></svg>';
     echo '    Sign out';
     echo '  </a>';
@@ -222,7 +220,7 @@ function render_header(string $title, ?array $user): void
                 </div>
                 
                 <div class="px-5 py-3 border-t border-zinc-100 bg-zinc-50 rounded-b-2xl">
-                    <a href="/notifications.php" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
+                    <a href="/notifications" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
                 </div>
             </div>
 
@@ -368,7 +366,7 @@ function render_header(string $title, ?array $user): void
                 data.forEach(item => {
                     const areaLabel = item.area || "Notification";
                     html += `
-                    <a href="${item.link || \'/notifications.php\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
+                    <a href="${item.link || \'/notifications\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
                         <div class="mt-1 w-9 h-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
                             <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
                         </div>
@@ -800,7 +798,7 @@ function render_footer(): void
         var manageEventsSignalsBootstrapped = false;
 
         function isManageEventsPage() {
-            return window.location.pathname.indexOf("manage_events.php") !== -1;
+            return window.location.pathname.indexOf("manage_events") !== -1;
         }
 
         function loadPolledManageEventsSignalIds() {
@@ -844,7 +842,7 @@ function render_footer(): void
                 dedupe_key: signal.dedupe_key || "",
                 event_id: signal.event_id || "",
                 kind: signal.kind || "",
-                link: "/manage_events.php",
+                link: "/manage_events",
             };
         }
 

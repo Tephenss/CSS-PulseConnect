@@ -4,7 +4,8 @@ declare(strict_types=1);
 ini_set('display_errors', '0');
 ini_set('html_errors', '0');
 
-session_start();
+require_once __DIR__ . '/../includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
@@ -91,6 +92,7 @@ $status = $role === 'admin' ? 'approved' : 'pending';
 $isFreeEvent = true;
 $registrationLimit = null;
 $registrationCloseWeeks = null;
+$eventFee = null;
 
 if ($role === 'teacher') {
     if (array_key_exists('is_free_event', $data)) {
@@ -107,6 +109,37 @@ if ($role === 'teacher') {
         if ($data['registration_close_weeks'] !== null && $data['registration_close_weeks'] !== '' && $registrationCloseWeeks === null) {
             json_response(['ok' => false, 'error' => 'Registration close limit must be between 1 and 4 weeks.'], 400);
         }
+    }
+    if ($registrationCloseWeeks !== null) {
+        $maxCloseWeeks = max_registration_close_weeks_for_start($start);
+        if ($maxCloseWeeks < 1) {
+            json_response([
+                'ok' => false,
+                'error' => 'Registration close limit is not available when the event starts in less than 1 week. Move the start date later, or leave the close limit unset.',
+            ], 400);
+        }
+        if ($registrationCloseWeeks > $maxCloseWeeks) {
+            json_response([
+                'ok' => false,
+                'error' => 'Registration close limit cannot be more than '
+                    . $maxCloseWeeks . ' week' . ($maxCloseWeeks === 1 ? '' : 's')
+                    . ' before this event start (based on today’s date).',
+            ], 400);
+        }
+    }
+    if (array_key_exists('event_fee', $data)) {
+        if ($data['event_fee'] !== null && $data['event_fee'] !== '') {
+            $eventFee = normalize_event_fee($data['event_fee']);
+            if ($eventFee === null || $eventFee <= 0) {
+                json_response(['ok' => false, 'error' => 'Enter a valid event fee greater than 0.'], 400);
+            }
+        }
+    }
+    if (!$isFreeEvent && ($eventFee === null || $eventFee <= 0)) {
+        json_response(['ok' => false, 'error' => 'Paid events require a settlement amount for students.'], 400);
+    }
+    if ($isFreeEvent) {
+        $eventFee = null;
     }
 }
 
@@ -126,6 +159,7 @@ $payload = [
 
 if ($role === 'teacher') {
     $payload['is_free_event'] = $isFreeEvent;
+    $payload['event_fee'] = $eventFee;
     if ($registrationLimit !== null) {
         $payload['registration_limit'] = $registrationLimit;
     }
@@ -151,16 +185,28 @@ if (!$res['ok'] && is_missing_column_error($res, 'event_mode')) {
     $payloadWithStructure['event_structure'] = mode_to_structure($eventMode, $sessions);
     $res = supabase_request('POST', $url, $headers, json_encode([$payloadWithStructure], JSON_UNESCAPED_SLASHES));
 }
-if (!$res['ok'] && (is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks'))) {
+if (!$res['ok'] && (is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks') || is_missing_column_error($res, 'event_fee'))) {
     if ($role === 'teacher' && $registrationLimit !== null && is_missing_column_error($res, 'registration_limit')) {
         json_response([
             'ok' => false,
             'error' => 'Student limit could not be saved. Run supabase/APPLY_REGISTRATION_FIXES.sql in Supabase SQL Editor first.',
         ], 500);
     }
+    if ($role === 'teacher' && $registrationCloseWeeks !== null && is_missing_column_error($res, 'registration_close_weeks')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Registration close limit could not be saved. Run supabase/APPLY_REGISTRATION_FIXES.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+    if ($role === 'teacher' && $eventFee !== null && is_missing_column_error($res, 'event_fee')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Event fee could not be saved. Run supabase/migrations/045_event_fee.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
 
     $retryPayload = $payloadWithMode;
-    unset($retryPayload['is_free_event'], $retryPayload['registration_limit'], $retryPayload['registration_close_weeks']);
+    unset($retryPayload['is_free_event'], $retryPayload['registration_limit'], $retryPayload['registration_close_weeks'], $retryPayload['event_fee']);
     if (!isset($retryPayload['event_mode'])) {
         $retryPayload['event_structure'] = mode_to_structure($eventMode, $sessions);
     }

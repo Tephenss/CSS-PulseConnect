@@ -1,21 +1,25 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/email_notifications.php';
+require_once __DIR__ . '/includes/device_trust.php';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
 
+$webTrustKey = device_trust_ip_key();
+
 // If already logged in, go to dashboard.
 if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
-    header('Location: home.php');
+    header('Location: /home');
     return;
 }
 
@@ -31,6 +35,10 @@ $challenge = (isset($_SESSION['admin_login_challenge']) && is_array($_SESSION['a
     ? $_SESSION['admin_login_challenge']
     : null;
 $isVerificationStep = isset($_GET['step']) && (string) $_GET['step'] === 'verify';
+
+if (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1') {
+    $info = 'Verification required again — new day (12:00 AM Manila) or new network/IP detected.';
+}
 
 function admin_login_headers(): array
 {
@@ -217,14 +225,20 @@ function admin_login_delete_code(string $userId): void
     );
 }
 
-function admin_login_issue_challenge(array $user, ?string &$error, ?string &$info): bool
+function admin_login_issue_challenge(
+    array $user,
+    ?string &$error,
+    ?string &$info,
+    string $role = 'admin',
+    string $gateReason = ''
+): bool
 {
     $userId = trim((string) ($user['id'] ?? ''));
     $email = trim((string) ($user['email'] ?? ''));
     $fullName = admin_login_resolve_full_name($user);
 
     if ($userId === '' || $email === '') {
-        $error = 'Missing admin account details. Please try again.';
+        $error = 'Missing account details. Please try again.';
         return false;
     }
 
@@ -234,7 +248,11 @@ function admin_login_issue_challenge(array $user, ?string &$error, ?string &$inf
         return false;
     }
 
-    $sent = send_admin_login_verification_email($email, $fullName, $code);
+    if ($role === 'teacher') {
+        $sent = send_teacher_login_verification_email($email, $fullName, $code);
+    } else {
+        $sent = send_admin_login_verification_email($email, $fullName, $code);
+    }
     if (!$sent) {
         $smtpDebug = function_exists('smtp_get_last_error') ? smtp_get_last_error() : '';
         $error = $smtpDebug !== ''
@@ -245,14 +263,20 @@ function admin_login_issue_challenge(array $user, ?string &$error, ?string &$inf
 
     $_SESSION['admin_login_challenge'] = [
         'id' => $userId,
-        'full_name' => $fullName !== '' ? $fullName : 'Admin',
+        'full_name' => $fullName !== '' ? $fullName : ($role === 'teacher' ? 'Teacher' : 'Admin'),
         'email' => $email,
-        'role' => 'admin',
+        'role' => $role,
         'issued_at' => time(),
+        'gate_reason' => $gateReason,
     ];
 
     $maskedEmail = preg_replace('/(^.).*(@.*$)/', '$1••••$2', $email) ?: $email;
     $info = 'A 6-digit verification code was sent to ' . $maskedEmail . '.';
+    if ($gateReason === 'new_ip') {
+        $info .= ' New network/IP detected — verify once to trust this connection.';
+    } elseif ($gateReason === 'daily') {
+        $info .= ' Daily verification resets at 12:00 AM (Manila).';
+    }
     return true;
 }
 
@@ -262,11 +286,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         unset($_SESSION['admin_login_challenge']);
         $challenge = null;
         if (!empty($_GET)) {
-            header('Location: login.php');
+            header('Location: /login');
             exit;
         }
     } elseif ($challenge === null && $isVerificationStep) {
-        header('Location: login.php');
+        header('Location: /login');
         exit;
     }
 }
@@ -296,7 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ], $error, $info);
                 $challenge = $_SESSION['admin_login_challenge'] ?? $challenge;
                 if ($error === null) {
-                    header('Location: login.php?step=verify');
+                    header('Location: /login?step=verify');
                     exit;
                 }
             }
@@ -320,13 +344,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $error = 'Invalid verification code.';
                         } else {
                             admin_login_delete_code((string) ($challenge['id'] ?? ''));
-                            admin_login_store_daily_verification((string) ($challenge['id'] ?? ''));
-                            admin_login_establish_user_session(
-                                (string) ($challenge['id'] ?? ''),
-                                (string) ($challenge['full_name'] ?? 'Admin'),
-                                (string) ($challenge['email'] ?? '')
+                            $verifiedUserId = (string) ($challenge['id'] ?? '');
+                            admin_login_store_daily_verification($verifiedUserId);
+                            device_trust_upsert(
+                                $verifiedUserId,
+                                $webTrustKey,
+                                'web',
+                                'ip:' . device_trust_client_ip()
                             );
-                            header('Location: home.php');
+                            admin_login_establish_user_session(
+                                $verifiedUserId,
+                                (string) ($challenge['full_name'] ?? 'Admin'),
+                                (string) ($challenge['email'] ?? ''),
+                                (string) ($challenge['role'] ?? 'admin')
+                            );
+                            header('Location: /home');
                             exit;
                         }
                     }
@@ -372,30 +404,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         } else {
                             $role = isset($user['role']) ? (string) $user['role'] : 'student';
 
-                            if ($role === 'teacher') {
+                            if ($role === 'teacher' || $role === 'admin') {
                                 $userId = trim((string) ($user['id'] ?? ''));
                                 $fullName = admin_login_resolve_full_name($user);
                                 $userEmail = trim((string) ($user['email'] ?? ''));
-                                admin_login_establish_user_session($userId, $fullName, $userEmail, 'teacher');
-                                header('Location: home.php');
-                                exit;
-                            } elseif ($role !== 'admin') {
-                                $error = 'Students must use the mobile app to login.';
+
+                                $verifiedToday = admin_login_has_valid_daily_verification($userId);
+                                $trustedIp = device_trust_is_trusted($userId, $webTrustKey);
+
+                                // Same day + same IP → skip OTP (any browser on that IP is fine).
+                                // New day (12AM Manila) OR new IP → verify again.
+                                if ($verifiedToday && $trustedIp) {
+                                    device_trust_touch($userId, $webTrustKey);
+                                    admin_login_establish_user_session($userId, $fullName, $userEmail, $role);
+                                    header('Location: /home');
+                                    exit;
+                                }
+
+                                $gateReason = !$trustedIp ? 'new_ip' : 'daily';
+                                if (admin_login_issue_challenge($user, $error, $info, $role, $gateReason)) {
+                                    header('Location: /login?step=verify');
+                                    exit;
+                                }
                             } else {
-                                $userId = trim((string) ($user['id'] ?? ''));
-                                $fullName = admin_login_resolve_full_name($user);
-                                $userEmail = trim((string) ($user['email'] ?? ''));
-
-                                if (admin_login_has_valid_daily_verification($userId)) {
-                                    admin_login_establish_user_session($userId, $fullName, $userEmail);
-                                    header('Location: home.php');
-                                    exit;
-                                }
-
-                                if (admin_login_issue_challenge($user, $error, $info)) {
-                                    header('Location: login.php?step=verify');
-                                    exit;
-                                }
+                                $error = 'Students must use the mobile app to login.';
                             }
                         }
                     }
@@ -407,6 +439,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 $isVerificationMode = $challenge !== null && $isVerificationStep;
+$roleLabel = ($challenge && ($challenge['role'] ?? '') === 'teacher') ? 'teacher' : 'admin';
+$roleLabelCap = ucfirst($roleLabel);
+$gateReason = is_array($challenge) ? strtolower(trim((string) ($challenge['gate_reason'] ?? ''))) : '';
+$gateReasonMessage = match ($gateReason) {
+    'new_ip' => 'New network/IP detected — verify once to trust this connection.',
+    'daily' => 'Daily security check — verification resets every day at 12:00 AM (Manila).',
+    default => 'Enter the 6-digit code sent to your email to continue.',
+};
 ?>
 
 <!doctype html>
@@ -459,11 +499,11 @@ $isVerificationMode = $challenge !== null && $isVerificationStep;
                         <?= $isVerificationMode ? 'Verification required' : 'Welcome back' ?>
                     </div>
                     <h2 class="text-3xl font-semibold mt-3">
-                        <?= $isVerificationMode ? 'Verify admin login' : 'Log in' ?>
+                        <?= $isVerificationMode ? "Verify {$roleLabel} login" : 'Log in' ?>
                     </h2>
                     <p class="text-zinc-400 mt-2 text-sm">
                         <?= $isVerificationMode
-                            ? 'Enter the 6-digit code sent to your admin email to continue.'
+                            ? "Enter the 6-digit code sent to your {$roleLabel} email to continue."
                             : 'Use your email and password to continue.' ?>
                     </p>
                 </div>
@@ -486,9 +526,12 @@ $isVerificationMode = $challenge !== null && $isVerificationStep;
                     <?php if ($isVerificationMode): ?>
                         <input type="hidden" name="auth_step" value="verify_code" />
                         <div class="mb-4 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3">
-                            <div class="text-[11px] uppercase tracking-[0.26em] text-zinc-500">Admin email</div>
+                            <div class="text-[11px] uppercase tracking-[0.26em] text-zinc-500"><?= $roleLabelCap ?> email</div>
                             <div class="mt-1 text-sm font-semibold text-zinc-100">
                                 <?= htmlspecialchars((string) ($challenge['email'] ?? '')) ?>
+                            </div>
+                            <div class="mt-2 text-xs leading-relaxed text-zinc-400">
+                                <?= htmlspecialchars($gateReasonMessage) ?>
                             </div>
                         </div>
 

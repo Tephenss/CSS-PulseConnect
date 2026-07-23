@@ -19,6 +19,10 @@ function is_event_sessions_missing_column_error(array $response): bool
 function event_sessions_supported_columns(array $headers): array
 {
     static $cached = null;
+    if (!empty($GLOBALS['__pulseconnect_event_sessions_columns_reset'])) {
+        $cached = null;
+        unset($GLOBALS['__pulseconnect_event_sessions_columns_reset']);
+    }
     if (is_array($cached)) {
         return $cached;
     }
@@ -32,18 +36,28 @@ function event_sessions_supported_columns(array $headers): array
         }
     }
 
-    $fullSelect = 'id,event_id,title,start_at,end_at,scan_window_minutes,attendance_window_minutes,sort_order,session_no,topic,description,location,updated_at';
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
-        . '?select=' . $fullSelect
-        . '&limit=1';
-    $res = supabase_request('GET', $url, $headers);
-    if ($res['ok']) {
-        $supported = array_values(array_filter(array_map(
-            static fn (string $column): string => trim($column),
-            explode(',', $fullSelect)
-        )));
-    } else {
-        $supported = ['id', 'event_id', 'title', 'start_at', 'end_at', 'sort_order', 'session_no'];
+    $required = ['id', 'event_id', 'title', 'start_at'];
+    $optional = [
+        'end_at',
+        'scan_window_minutes',
+        'attendance_window_minutes',
+        'sort_order',
+        'session_no',
+        'topic',
+        'description',
+        'location',
+        'updated_at',
+    ];
+
+    $supported = $required;
+    foreach ($optional as $column) {
+        $probeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=' . rawurlencode($column)
+            . '&limit=1';
+        $probe = supabase_request('GET', $probeUrl, $headers);
+        if (!empty($probe['ok'])) {
+            $supported[] = $column;
+        }
     }
 
     $cached = array_values(array_unique($supported));
@@ -54,6 +68,17 @@ function event_sessions_supported_columns(array $headers): array
     }
 
     return $cached;
+}
+
+function clear_event_sessions_supported_columns_cache(): void
+{
+    $GLOBALS['__pulseconnect_event_sessions_columns_reset'] = true;
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        unset(
+            $_SESSION['event_sessions_supported_columns'],
+            $_SESSION['event_sessions_supported_columns_cached_at']
+        );
+    }
 }
 
 function normalize_event_mode(?string $rawMode): string
@@ -208,6 +233,7 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
         return;
     }
 
+    clear_event_sessions_supported_columns_cache();
     $supportedColumns = event_sessions_supported_columns($headers);
     $hasEndAt = in_array('end_at', $supportedColumns, true);
     $hasScanWindow = in_array('scan_window_minutes', $supportedColumns, true);
@@ -218,6 +244,12 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
     $hasDescription = in_array('description', $supportedColumns, true);
     $hasLocation = in_array('location', $supportedColumns, true);
     $hasUpdatedAt = in_array('updated_at', $supportedColumns, true);
+
+    if (!$hasEndAt) {
+        throw new RuntimeException(
+            "Seminar sessions need an 'end_at' column. Run supabase/migrations/046_event_sessions_end_at.sql in the Supabase SQL Editor, then try again."
+        );
+    }
 
     $payload = [];
     foreach (array_values($sessions) as $index => $session) {
@@ -257,12 +289,19 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
         $payload[] = $row;
     }
 
-    $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions?select=id,event_id,title,start_at';
+    $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions?select=id,event_id,title,start_at,end_at';
     $createHeaders = $headers;
     $createHeaders[] = 'Content-Type: application/json';
     $createHeaders[] = 'Prefer: return=representation';
     $createRes = supabase_request('POST', $createUrl, $createHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
     if (!$createRes['ok']) {
+        $body = strtolower((string) ($createRes['body'] ?? ''));
+        if (str_contains($body, 'end_at') && str_contains($body, 'schema cache')) {
+            clear_event_sessions_supported_columns_cache();
+            throw new RuntimeException(
+                "Seminar sessions need an 'end_at' column. Run supabase/migrations/046_event_sessions_end_at.sql in the Supabase SQL Editor, then try again."
+            );
+        }
         throw new RuntimeException(build_error($createRes['body'] ?? null, (int) ($createRes['status'] ?? 0), $createRes['error'] ?? null, 'Failed to save seminar sessions'));
     }
 }

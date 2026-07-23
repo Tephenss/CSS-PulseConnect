@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -12,8 +13,9 @@ require_once __DIR__ . '/includes/event_targeting.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/student_requirements.php';
+require_once __DIR__ . '/includes/registration_access.php';
 
-$user = require_role(['teacher']);
+$user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
 
@@ -26,7 +28,7 @@ if ($eventId === '') {
 
 $headers = student_requirement_headers();
 $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?select=id,title,status,created_by,start_at,end_at'
+    . '?select=id,title,status,created_by,start_at,end_at,is_free_event,event_fee,allow_registration'
     . '&id=eq.' . rawurlencode($eventId)
     . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
@@ -39,7 +41,8 @@ if (!is_array($event)) {
     exit;
 }
 
-if ((string) ($event['created_by'] ?? '') !== $userId) {
+$isCreator = (string) ($event['created_by'] ?? '') === $userId;
+if ($role === 'teacher' && !$isCreator) {
     http_response_code(403);
     echo 'Only the event creator can review student documents.';
     exit;
@@ -54,9 +57,11 @@ if ($requirements === []) {
 
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = count($sessions) > 0;
-$backHref = '/manage_events.php';
+$backHref = event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null);
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
+$isEventCreator = $role === 'admin' || $isCreator;
+$isPaidEvent = !event_is_free_registration_event($event);
 
 $submissionsMap = fetch_student_submissions_map([$eventId], $headers)[$eventId] ?? [];
 $documentsMap = fetch_student_documents_map([$eventId], $headers)[$eventId] ?? [];
@@ -135,23 +140,13 @@ foreach ($reviewRows as $row) {
 }
 
 render_header('Document Review', $user);
-?>
 
-<div class="mb-4">
-  <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
-    <div class="flex items-center gap-3">
-      <a href="<?= htmlspecialchars($backHref) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-        <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-      </a>
-      <div>
-        <h2 class="text-xl md:text-2xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars((string) ($event['title'] ?? 'Event')) ?></h2>
-        <p class="text-sm text-zinc-500 mt-1">Review student document submissions before they can register.</p>
-      </div>
-    </div>
-  </div>
-</div>
+render_event_page_header([
+    'back_href' => $backHref,
+    'title' => (string) ($event['title'] ?? 'Event'),
+    'subtitle' => 'Review student document submissions before they can register.',
+]);
 
-<?php
 render_event_tabs([
     'event_id' => $eventId,
     'current_tab' => 'document_review',
@@ -160,7 +155,8 @@ render_event_tabs([
     'event_status' => (string) ($event['status'] ?? ''),
     'return_to' => $returnTo,
     'has_student_requirements' => true,
-    'is_event_creator' => true,
+    'is_event_creator' => $isEventCreator,
+    'is_paid_event' => $isPaidEvent,
 ]);
 ?>
 
@@ -198,10 +194,21 @@ foreach ($reviewRows as $row) {
         }
         $reqId = trim((string) ($requirement['id'] ?? ''));
         $doc = $documentsByRequirement[$reqId] ?? null;
+        $mime = is_array($doc) ? strtolower(trim((string) ($doc['mime_type'] ?? ''))) : '';
+        $fileUrl = is_array($doc) ? (string) ($doc['file_url'] ?? '') : '';
+        if ($mime === '' && $fileUrl !== '') {
+            $path = strtolower((string) parse_url($fileUrl, PHP_URL_PATH));
+            if (str_ends_with($path, '.pdf')) {
+                $mime = 'application/pdf';
+            } elseif (preg_match('/\.(jpe?g|png|webp|gif)$/', $path)) {
+                $mime = 'image/' . (str_ends_with($path, '.jpg') || str_ends_with($path, '.jpeg') ? 'jpeg' : (str_ends_with($path, '.png') ? 'png' : (str_ends_with($path, '.webp') ? 'webp' : 'gif')));
+            }
+        }
         $docItems[] = [
             'label' => (string) ($requirement['label'] ?? 'Requirement'),
             'file_name' => is_array($doc) ? (string) ($doc['file_name'] ?? 'View document') : '',
-            'file_url' => is_array($doc) ? (string) ($doc['file_url'] ?? '') : '',
+            'file_url' => $fileUrl,
+            'mime_type' => $mime,
             'uploaded' => is_array($doc),
         ];
     }
@@ -395,6 +402,24 @@ foreach ($reviewRows as $row) {
   </div>
 </div>
 
+<div id="docFilePreviewModal" class="fixed inset-0 z-[70] hidden items-center justify-center p-3 sm:p-6 bg-black/70 backdrop-blur-sm">
+  <div class="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-200 shrink-0 bg-zinc-50">
+      <div class="min-w-0">
+        <div id="docFilePreviewLabel" class="text-[11px] font-bold uppercase tracking-wide text-zinc-500 truncate"></div>
+        <div id="docFilePreviewName" class="text-sm font-bold text-zinc-900 truncate"></div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <a id="docFilePreviewOpenTab" href="#" target="_blank" rel="noopener" class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Open tab</a>
+        <button type="button" id="btnCloseDocFilePreview" class="flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-white" title="Close">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="docFilePreviewBody" class="flex-1 overflow-auto bg-zinc-100 min-h-[50vh] flex items-center justify-center p-2"></div>
+  </div>
+</div>
+
 <script>
   const EVENT_ID = <?= json_encode($eventId, JSON_UNESCAPED_SLASHES) ?>;
   const REVIEW_DATA = <?= json_encode($reviewModalData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
@@ -464,21 +489,21 @@ foreach ($reviewRows as $row) {
       return;
     }
 
-    reviewModalDocuments.innerHTML = documents.map((doc) => {
+    reviewModalDocuments.innerHTML = documents.map((doc, index) => {
       const label = escapeHtml(doc.label || 'Requirement');
       if (doc.uploaded && doc.file_url) {
         const fileName = escapeHtml(doc.file_name || 'View document');
         return `
-          <a href="${escapeHtml(doc.file_url)}" target="_blank" rel="noopener"
-            class="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 hover:bg-sky-50 hover:border-sky-200 transition">
+          <button type="button" class="btn-preview-doc w-full text-left flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 hover:bg-sky-50 hover:border-sky-200 transition" data-doc-index="${index}">
             <span class="flex items-center justify-center w-8 h-8 rounded-lg border border-sky-200 bg-sky-100 text-sky-700 shrink-0">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H13.5m-3 7.5v7.5m3-7.5H18"/></svg>
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             </span>
             <span class="min-w-0">
               <span class="block text-[11px] font-bold uppercase tracking-wide text-zinc-500">${label}</span>
               <span class="block text-sm font-semibold text-sky-700 truncate">${fileName}</span>
+              <span class="block text-[11px] text-zinc-400">Tap to preview</span>
             </span>
-          </a>`;
+          </button>`;
       }
       return `
         <div class="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 opacity-70">
@@ -489,7 +514,55 @@ foreach ($reviewRows as $row) {
           </span>
         </div>`;
     }).join('');
+
+    reviewModalDocuments.querySelectorAll('.btn-preview-doc').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.docIndex || -1);
+        const doc = documents[idx];
+        if (doc) openFilePreview(doc);
+      });
+    });
   }
+
+  const fileModal = document.getElementById('docFilePreviewModal');
+  const fileBody = document.getElementById('docFilePreviewBody');
+  const fileLabel = document.getElementById('docFilePreviewLabel');
+  const fileNameEl = document.getElementById('docFilePreviewName');
+  const fileOpenTab = document.getElementById('docFilePreviewOpenTab');
+
+  function openFilePreview(doc) {
+    const url = String(doc?.file_url || '').trim();
+    if (!url || !fileModal || !fileBody) return;
+    const mime = String(doc?.mime_type || '').toLowerCase();
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+
+    if (fileLabel) fileLabel.textContent = doc.label || 'Document';
+    if (fileNameEl) fileNameEl.textContent = doc.file_name || 'Preview';
+    if (fileOpenTab) fileOpenTab.href = url;
+
+    if (isImage) {
+      fileBody.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(doc.file_name || 'Document')}" class="max-h-[75vh] max-w-full object-contain rounded-lg shadow-sm bg-white" />`;
+    } else if (isPdf) {
+      fileBody.innerHTML = `<iframe src="${escapeHtml(url)}" title="${escapeHtml(doc.file_name || 'PDF')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>`;
+    } else {
+      fileBody.innerHTML = `<div class="text-center p-8"><p class="text-sm text-zinc-600 mb-3">Preview not available for this file type.</p><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="inline-flex rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700">Open file</a></div>`;
+    }
+    fileModal.classList.remove('hidden');
+    fileModal.classList.add('flex');
+  }
+
+  function closeFilePreview() {
+    if (!fileModal) return;
+    fileModal.classList.add('hidden');
+    fileModal.classList.remove('flex');
+    if (fileBody) fileBody.innerHTML = '';
+  }
+
+  document.getElementById('btnCloseDocFilePreview')?.addEventListener('click', closeFilePreview);
+  fileModal?.addEventListener('click', (event) => {
+    if (event.target === fileModal) closeFilePreview();
+  });
 
   function openReviewModal(studentId) {
     const data = REVIEW_DATA[studentId];

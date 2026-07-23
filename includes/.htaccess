@@ -1,4 +1,11 @@
-# Completely secure this configuration folder from external access
-<FilesMatch "\.(json|php|txt|log|env)$">
-    Require all denied
-</FilesMatch>
+# Deny all direct HTTP access to includes/ (PHP require/include still works).
+Options -Indexes
+
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>

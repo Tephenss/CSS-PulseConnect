@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -45,6 +46,8 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
 }
 
 $eventSelectVariants = [
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
+  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
   'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
@@ -475,6 +478,18 @@ render_header('Manage Events', $user);
     border: 1px solid #fed7aa;
     color: #c2410c;
   }
+
+  @keyframes wizardStepErrorFlash {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-4px); }
+    40% { transform: translateX(4px); }
+    60% { transform: translateX(-3px); }
+    80% { transform: translateX(3px); }
+  }
+
+  #wizardFooterStatus.wizard-step-error-flash {
+    animation: wizardStepErrorFlash 0.45s ease-in-out;
+  }
 </style>
 
 
@@ -635,7 +650,9 @@ render_header('Manage Events', $user);
               <select id="target_course" name="target_course"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
                 <option value="ALL" selected>All Courses</option>
-                <option value="BSIT">BSIT</option>
+                <option value="BSIT">BSIT (All)</option>
+                <option value="BSIT-SD">BSIT-SD</option>
+                <option value="BSIT-BA">BSIT-BA</option>
                 <option value="BSCS">BSCS</option>
               </select>
             </div>
@@ -666,7 +683,6 @@ render_header('Manage Events', $user);
             </div>
           </div>
 
-          <?php if ($role === 'teacher'): ?>
           <div>
             <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Registration Type</label>
             <div class="space-y-2">
@@ -686,6 +702,17 @@ render_header('Manage Events', $user);
               </label>
             </div>
 
+            <div id="event_fee_wrap" class="mt-3 hidden">
+              <label for="event_fee" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Settlement Amount (₱)</label>
+              <div class="relative">
+                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">₱</span>
+                <input type="number" id="event_fee" name="event_fee" min="1" step="0.01" inputmode="decimal"
+                  class="w-full rounded-xl bg-white border border-zinc-200 py-3 pl-8 pr-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition"
+                  placeholder="e.g. 250.00" />
+              </div>
+              <p class="mt-1 text-[11px] text-zinc-500">Full amount students must settle for this event. Shown in the app and used on the Payments tab.</p>
+            </div>
+
             <div class="mt-3">
               <label for="registration_limit" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Student Limit</label>
               <input type="number" id="registration_limit" name="registration_limit" min="1" max="9999" step="1" inputmode="numeric" pattern="[0-9]*"
@@ -694,7 +721,6 @@ render_header('Manage Events', $user);
               <p class="mt-1 text-[11px] text-zinc-500">Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).</p>
             </div>
           </div>
-          <?php endif; ?>
 
           <div class="pt-2">
             <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide">Event Structure</label>
@@ -857,12 +883,17 @@ render_header('Manage Events', $user);
             </div>
 
             <div id="seminar2Editor" class="hidden rounded-xl border border-orange-200 bg-white p-4 space-y-3">
-              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
+                <p id="seminar2LockHint" class="hidden text-[11px] font-medium text-amber-700">
+                  Fill Seminar 1 title, start, and end first. Dates before Seminar 1 end are disabled.
+                </p>
+              </div>
               <div>
                 <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
                 <input id="seminar2_title" type="text"
                   class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400"
-                  placeholder="Seminar 2 title" />
+                  placeholder="Seminar 2 title" disabled />
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
@@ -879,18 +910,16 @@ render_header('Manage Events', $user);
             </div>
           </div>
 
-          <?php if ($role === 'teacher'): ?>
           <div>
             <label for="registration_close_weeks" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Registration Close Limit</label>
             <select id="registration_close_weeks" name="registration_close_weeks"
               class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
-              <option value="1" selected>1 week before event</option>
-              <option value="2">2 weeks before event</option>
-              <option value="3">3 weeks before event</option>
-              <option value="4">4 weeks before event</option>
+              <option value="">Select event start date first</option>
             </select>
+            <p id="registrationCloseWeeksHint" class="mt-1.5 text-[11px] text-zinc-500 leading-relaxed">
+              Options update from the event start date vs today (maximum 4 weeks before start, and never before today).
+            </p>
           </div>
-          <?php endif; ?>
         </div>
 
         <?php if ($role === 'teacher'): ?>
@@ -1001,7 +1030,9 @@ render_header('Manage Events', $user);
     </div>
 
     <!-- Footer -->
-    <div class="px-5 sm:px-6 py-4 border-t border-zinc-200 flex items-center justify-between gap-3">
+    <div class="px-5 sm:px-6 py-4 border-t border-zinc-200 space-y-3">
+      <div id="wizardFooterStatus" class="hidden rounded-xl border px-3.5 py-2.5 text-sm font-semibold" role="status" aria-live="polite"></div>
+      <div class="flex items-center justify-between gap-3">
       <button type="button" id="btnBack"
         class="rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-2.5 text-sm text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 transition font-medium disabled:opacity-30 disabled:cursor-not-allowed"
         disabled>
@@ -1031,6 +1062,7 @@ render_header('Manage Events', $user);
             Save Event
           </span>
         </button>
+      </div>
       </div>
     </div>
 
@@ -1665,8 +1697,26 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           class="appearance-none block w-full px-4 py-2.5 pr-10 border border-zinc-200 rounded-xl text-[13px] text-zinc-700 focus:outline-none focus:ring-2 focus:ring-orange-500/10 focus:border-orange-500 transition-all bg-white shadow-sm cursor-pointer ring-inset font-medium">
           <option value="all">All Event Types</option>
           <?php
-          $types = array_unique(array_filter(array_map(fn($e) => (string) ($e['event_type'] ?? ''), $events)));
-          sort($types);
+          // Always show the create-form types (admin + teacher), plus any legacy values in data.
+          $knownEventTypes = [
+            'Event',
+            'Seminar',
+            'Off-Campus Activity',
+            'Sports Event',
+            'Other',
+          ];
+          $typesFromEvents = array_values(array_unique(array_filter(array_map(
+            static fn($e) => trim((string) ($e['event_type'] ?? '')),
+            $events
+          ))));
+          $types = [];
+          foreach (array_merge($knownEventTypes, $typesFromEvents) as $type) {
+            $type = trim((string) $type);
+            if ($type === '' || in_array($type, $types, true)) {
+              continue;
+            }
+            $types[] = $type;
+          }
           foreach ($types as $type):
             ?>
             <option value="<?= htmlspecialchars($type) ?>"><?= htmlspecialchars($type) ?></option>
@@ -1794,7 +1844,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           $formattedDate = format_date_local($rawDate);
           ?>
           <div
-            class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?> <?= $role === 'teacher' ? 'cursor-pointer' : '' ?>"
+            class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?>"
             data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
             data-type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
             data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
@@ -1813,6 +1863,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
             data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
             data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
+            data-event_fee="<?= htmlspecialchars((string) ($e['event_fee'] ?? '')) ?>"
             data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
             data-registration_close_weeks="<?= htmlspecialchars((string) ($e['registration_close_weeks'] ?? '1')) ?>"
             data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
@@ -1820,8 +1871,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-can_edit="<?= $canEdit ? '1' : '0' ?>"
             data-proposal-stage="<?= htmlspecialchars($proposalStage) ?>"
             data-proposal-revision="<?= htmlspecialchars($liveRevision) ?>"
-            data-live-updated-at="<?= htmlspecialchars((string) ($e['updated_at'] ?? '')) ?>"
-            tabindex="<?= $role === 'teacher' ? '0' : '-1' ?>">
+            data-live-updated-at="<?= htmlspecialchars((string) ($e['updated_at'] ?? '')) ?>">
             <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
               <!-- Event Info -->
@@ -1972,26 +2022,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
               <div class="event-admin-actions flex gap-1.5 flex-wrap items-center lg:flex-shrink-0 pl-0 sm:pl-[52px] lg:pl-0">
                 <?php if ($role === 'admin'): ?>
                   <?php if ($status === 'pending'): ?>
-                    <button
-                      class="btnReject rounded-lg border border-red-200 bg-red-50 px-4 py-1.5 text-[13px] text-red-700 hover:bg-red-100 transition font-bold"
-                      data-id="<?= htmlspecialchars($eid) ?>"
-                      data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Reject</button>
                     <?php $approveReady = $proposalStage === 'under_review'; ?>
-                    <button
-                      class="btnApprove rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm<?= $approveReady ? '' : ' opacity-50 cursor-not-allowed' ?>"
-                      data-id="<?= htmlspecialchars($eid) ?>"
-                      data-status="approved"
-                      data-label="Approve"
-                      data-approve-ready="<?= $approveReady ? '1' : '0' ?>"
-                      <?= $approveReady ? '' : 'disabled title="Waiting for the teacher to submit documents for review."' ?>>Approve</button>
                     <button
                       class="btnRequirements rounded-lg border border-orange-200 bg-orange-50 px-4 py-1.5 text-[13px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-sm"
                       data-id="<?= htmlspecialchars($eid) ?>"
                       data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
                       data-stage="<?= htmlspecialchars($proposalStage) ?>"
+                      data-approve-ready="<?= $approveReady ? '1' : '0' ?>"
                       data-requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
                       data-submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
-                      data-summary="<?= htmlspecialchars((string) json_encode($proposalSummaryVisible, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>">
+                      data-summary="<?= htmlspecialchars((string) json_encode($proposalSummaryVisible, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
+                      data-student-requirements="<?= htmlspecialchars((string) (json_encode($studentRequirementsPayload, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>">
                       <?= $proposalRequirements === []
                         ? 'Send Req'
                         : ($proposalStage === 'under_review' ? 'Review Docs' : 'View') ?>
@@ -2022,6 +2063,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                     data-status="<?= htmlspecialchars($status) ?>"
                     data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
                     data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
+                    data-location-full="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
                     data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
                     data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
                     data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
@@ -2030,6 +2072,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                     data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                     data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
                     data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+                    data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
+                    data-event_fee="<?= htmlspecialchars((string) ($e['event_fee'] ?? '')) ?>"
+                    data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
+                    data-registration_close_weeks="<?= htmlspecialchars((string) ($e['registration_close_weeks'] ?? '1')) ?>"
                     data-proposal_stage="<?= htmlspecialchars($proposalStage) ?>"
                     data-proposal_requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
                     data-proposal_submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
@@ -2202,6 +2248,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
     <div class="modal-body px-5 py-5 sm:px-6">
       <input type="hidden" id="proposalRequirementsEventId" value="" />
+      <input type="hidden" id="proposalRequirementsEventTitle" value="" />
+      <input type="hidden" id="proposalRequirementsApproveReady" value="0" />
 
       <div class="hidden rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -2275,6 +2323,23 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         </div>
         <div id="proposalRequirementsUploads" class="mt-4 space-y-3"></div>
       </div>
+
+      <div class="mt-5 rounded-2xl border border-sky-200 bg-sky-50/40 p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="text-sm font-semibold text-zinc-900">Student requirements</div>
+              <span class="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700">For students</span>
+            </div>
+            <div class="mt-1 text-xs text-zinc-500">Documents demanded from students before they can register for this event.</div>
+          </div>
+          <div id="proposalStudentRequirementsSummary"
+            class="rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-bold text-sky-700">
+            None
+          </div>
+        </div>
+        <div id="proposalStudentRequirementsList" class="mt-4 space-y-2"></div>
+      </div>
     </div>
 
     <div class="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-5 py-4 sm:px-6">
@@ -2282,12 +2347,48 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         class="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100">
         Close
       </button>
-      <button type="button" id="btnSaveProposalRequirements"
-        hidden
-        class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-orange-600/20 transition hover:from-orange-500 hover:to-red-500">
-        Send Requirements
-      </button>
+      <div class="flex items-center gap-2">
+        <div id="proposalReviewActions" class="hidden items-center gap-2">
+          <button type="button" id="btnRejectFromReview"
+            class="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700 transition hover:bg-red-100">
+            Reject
+          </button>
+          <button type="button" id="btnApproveFromReview"
+            class="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled title="Waiting for the teacher to submit documents for review.">
+            Approve
+          </button>
+        </div>
+        <button type="button" id="btnSaveProposalRequirements"
+          hidden
+          class="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-orange-600/20 transition hover:from-orange-500 hover:to-red-500">
+          Send Requirements
+        </button>
+      </div>
     </div>
+  </div>
+</div>
+
+<!-- ═══════════  PROPOSAL FILE PREVIEW MODAL  ═══════════ -->
+<div id="proposalFilePreviewModal" class="fixed inset-0 z-[120] hidden items-center justify-center p-3 sm:p-6 bg-black/70 backdrop-blur-sm">
+  <div class="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-200 shrink-0 bg-zinc-50">
+      <div class="min-w-0">
+        <div id="proposalFilePreviewLabel" class="text-[11px] font-bold uppercase tracking-wide text-zinc-500 truncate"></div>
+        <div id="proposalFilePreviewName" class="text-sm font-bold text-zinc-900 truncate"></div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <a id="proposalFilePreviewOpenTab" href="#" target="_blank" rel="noopener"
+          class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Open tab</a>
+        <button type="button" id="btnCloseProposalFilePreview"
+          class="flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-white" title="Close">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="proposalFilePreviewBody" class="flex-1 overflow-auto bg-zinc-100 min-h-[50vh] flex items-center justify-center p-2"></div>
   </div>
 </div>
 
@@ -2352,6 +2453,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   const proposalRequirementsProgressPercent = document.getElementById('proposalRequirementsProgressPercent');
   const proposalRequirementsUploadSummary = document.getElementById('proposalRequirementsUploadSummary');
   const proposalRequirementsUploads = document.getElementById('proposalRequirementsUploads');
+  const proposalStudentRequirementsList = document.getElementById('proposalStudentRequirementsList');
+  const proposalStudentRequirementsSummary = document.getElementById('proposalStudentRequirementsSummary');
   const proposalRequirementsEditorSection = document.getElementById('proposalRequirementsEditorSection');
   const proposalRequirementsAdditionalSection = document.getElementById('proposalRequirementsAdditionalSection');
   const proposalRequirementsList = document.getElementById('proposalRequirementsList');
@@ -2383,7 +2486,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     stage: 'pending_requirements',
     requirements: [],
     submissions: [],
-    summary: { total: 0, submitted: 0, percent: 0 }
+    summary: { total: 0, submitted: 0, percent: 0 },
+    studentRequirements: []
   };
 
   function openModal(el) { el.classList.add('active'); document.body.style.overflow = 'hidden'; }
@@ -2416,6 +2520,76 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
   }
+
+  const proposalFilePreviewModal = document.getElementById('proposalFilePreviewModal');
+  const proposalFilePreviewBody = document.getElementById('proposalFilePreviewBody');
+  const proposalFilePreviewLabel = document.getElementById('proposalFilePreviewLabel');
+  const proposalFilePreviewName = document.getElementById('proposalFilePreviewName');
+  const proposalFilePreviewOpenTab = document.getElementById('proposalFilePreviewOpenTab');
+
+  function openProposalFilePreview({ url, label = '', fileName = '', mimeType = '' } = {}) {
+    const fileUrl = String(url || '').trim();
+    if (!fileUrl || !proposalFilePreviewModal || !proposalFilePreviewBody) return;
+
+    const mime = String(mimeType || '').toLowerCase();
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(fileUrl);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(fileUrl);
+    const isDoc = /\.(docx?|DOCX?)(\?|$)/i.test(fileUrl)
+      || mime.includes('msword')
+      || mime.includes('officedocument.wordprocessingml');
+
+    if (proposalFilePreviewLabel) proposalFilePreviewLabel.textContent = label || 'Proposal document';
+    if (proposalFilePreviewName) {
+      proposalFilePreviewName.textContent = fileName || (isPdf ? 'PDF preview' : (isImage ? 'Image preview' : 'File preview'));
+    }
+    if (proposalFilePreviewOpenTab) proposalFilePreviewOpenTab.href = fileUrl;
+
+    if (isImage) {
+      proposalFilePreviewBody.innerHTML = `<img src="${escapeHtml(fileUrl)}" alt="${escapeHtml(fileName || label || 'Document')}" class="max-h-[75vh] max-w-full object-contain rounded-lg shadow-sm bg-white" />`;
+    } else if (isPdf) {
+      proposalFilePreviewBody.innerHTML = `<iframe src="${escapeHtml(fileUrl)}" title="${escapeHtml(fileName || 'PDF')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>`;
+    } else if (isDoc) {
+      // Office docs: embed via Microsoft Office Online viewer when URL is publicly reachable.
+      const officeViewer = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
+      proposalFilePreviewBody.innerHTML = `
+        <iframe src="${escapeHtml(officeViewer)}" title="${escapeHtml(fileName || 'Document')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>
+        <p class="mt-2 text-center text-[11px] text-zinc-500">If the preview is blank (local/private URL), use Open tab.</p>`;
+    } else {
+      proposalFilePreviewBody.innerHTML = `
+        <div class="text-center p-8">
+          <p class="text-sm text-zinc-600 mb-3">Inline preview is not available for this file type.</p>
+          <a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener"
+            class="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Open in new tab</a>
+        </div>`;
+    }
+
+    proposalFilePreviewModal.classList.remove('hidden');
+    proposalFilePreviewModal.classList.add('flex');
+  }
+
+  function closeProposalFilePreview() {
+    if (!proposalFilePreviewModal) return;
+    proposalFilePreviewModal.classList.add('hidden');
+    proposalFilePreviewModal.classList.remove('flex');
+    if (proposalFilePreviewBody) proposalFilePreviewBody.innerHTML = '';
+    if (proposalFilePreviewOpenTab) proposalFilePreviewOpenTab.href = '#';
+  }
+
+  document.getElementById('btnCloseProposalFilePreview')?.addEventListener('click', closeProposalFilePreview);
+  proposalFilePreviewModal?.addEventListener('click', (e) => {
+    if (e.target === proposalFilePreviewModal) closeProposalFilePreview();
+  });
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-proposal-file-preview]');
+    if (!btn) return;
+    e.preventDefault();
+    openProposalFilePreview({
+      url: btn.getAttribute('data-file-url') || '',
+      label: btn.getAttribute('data-file-label') || '',
+      fileName: btn.getAttribute('data-file-name') || '',
+      mimeType: btn.getAttribute('data-file-mime') || '',
+    });
+  });
 
   function proposalRequirementCodeFromLabel(label, index) {
     const parts = String(label || '').trim().split(/\s+/).filter(Boolean);
@@ -2470,6 +2644,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const label = String(requirement?.label || code).trim() || code;
       const submission = requirementId ? submissionsByRequirement[requirementId] : null;
       const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
+      const fileName = String(submission?.file_name || '').trim();
+      const mimeType = String(submission?.mime_type || '').trim();
       const uploadedAt = String(submission?.updated_at || submission?.uploaded_at || '').trim();
       const uploadedText = uploadedAt ? new Date(uploadedAt).toLocaleString() : '';
 
@@ -2486,7 +2662,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           </div>
           <div class="mt-3">
             ${fileUrl
-              ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
+              ? `<button type="button"
+                  data-proposal-file-preview
+                  data-file-url="${escapeHtml(fileUrl)}"
+                  data-file-label="${escapeHtml(label)}"
+                  data-file-name="${escapeHtml(fileName || label)}"
+                  data-file-mime="${escapeHtml(mimeType)}"
+                  class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</button>`
               : `<span class="inline-flex rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-500">Pending upload</span>`}
           </div>
         </div>
@@ -2495,6 +2677,52 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     });
 
     proposalRequirementsUploadSummary.textContent = `${proposalRequirementState.summary.submitted || 0}/${proposalRequirementState.summary.total || 0} uploaded`;
+  }
+
+  function renderProposalStudentRequirements() {
+    if (!proposalStudentRequirementsList || !proposalStudentRequirementsSummary) return;
+    proposalStudentRequirementsList.innerHTML = '';
+
+    const items = Array.isArray(proposalRequirementState.studentRequirements)
+      ? proposalRequirementState.studentRequirements
+      : [];
+    const cleaned = items
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const code = String(item.code || '').trim();
+        const label = String(item.label || code || '').trim();
+        if (!label) return null;
+        return { code, label };
+      })
+      .filter(Boolean);
+
+    if (!cleaned.length) {
+      proposalStudentRequirementsSummary.textContent = 'None';
+      proposalStudentRequirementsList.innerHTML = `
+        <div class="rounded-2xl border border-dashed border-sky-200 bg-white px-4 py-5 text-center text-sm text-zinc-500">
+          No student documents were demanded for this event. Students can register without uploading docs.
+        </div>
+      `;
+      return;
+    }
+
+    proposalStudentRequirementsSummary.textContent = `${cleaned.length} required`;
+    cleaned.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-start gap-3 rounded-2xl border border-sky-200 bg-white px-4 py-3';
+      row.innerHTML = `
+        <span class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-sky-200 bg-sky-50 text-[11px] font-black text-sky-700">✓</span>
+        <div class="min-w-0">
+          <div class="text-sm font-semibold text-zinc-900">${escapeHtml(item.label)}</div>
+          <div class="mt-0.5 text-xs text-zinc-500">
+            ${item.code && item.code !== 'OTHER'
+              ? `Preset • ${escapeHtml(item.code)}`
+              : 'Custom requirement students must upload on the app'}
+          </div>
+        </div>
+      `;
+      proposalStudentRequirementsList.appendChild(row);
+    });
   }
 
   function renderProposalProgress() {
@@ -2552,10 +2780,43 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return requirements;
   }
 
+  function syncProposalReviewActions() {
+    const actions = document.getElementById('proposalReviewActions');
+    const approveBtn = document.getElementById('btnApproveFromReview');
+    const rejectBtn = document.getElementById('btnRejectFromReview');
+    if (!actions) return;
+
+    const saving = btnSaveProposalRequirements && !btnSaveProposalRequirements.hidden;
+    // While composing a new requirements request, hide approve/reject.
+    if (saving) {
+      actions.classList.add('hidden');
+      actions.classList.remove('flex');
+      return;
+    }
+
+    actions.classList.remove('hidden');
+    actions.classList.add('flex');
+
+    const ready = (document.getElementById('proposalRequirementsApproveReady')?.value || '0') === '1'
+      || String(proposalRequirementState.stage || '').toLowerCase() === 'under_review';
+    if (approveBtn) {
+      approveBtn.disabled = !ready;
+      approveBtn.title = ready
+        ? 'Approve this proposal'
+        : 'Waiting for the teacher to submit documents for review.';
+      approveBtn.classList.toggle('opacity-50', !ready);
+      approveBtn.classList.toggle('cursor-not-allowed', !ready);
+    }
+    if (rejectBtn) rejectBtn.disabled = false;
+  }
+
   function openProposalRequirementsModal(button) {
     if (!proposalRequirementsModal) return;
     proposalRequirementsEventId.value = button.dataset.id || '';
-    proposalRequirementsTitle.textContent = `Proposal documents • ${button.dataset.title || 'Pending proposal'}`;
+    const title = button.dataset.title || 'Pending proposal';
+    const titleInput = document.getElementById('proposalRequirementsEventTitle');
+    if (titleInput) titleInput.value = title;
+    proposalRequirementsTitle.textContent = `Proposal documents • ${title}`;
     proposalRequirementsEditorSection?.classList.add('hidden');
     proposalRequirementsAdditionalSection?.classList.add('hidden');
     if (btnSaveProposalRequirements) btnSaveProposalRequirements.hidden = true;
@@ -2563,11 +2824,26 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       stage: button.dataset.stage || 'pending_requirements',
       requirements: safeJsonParse(button.dataset.requirements, []),
       submissions: safeJsonParse(button.dataset.submissions, []),
-      summary: safeJsonParse(button.dataset.summary, { total: 0, submitted: 0, percent: 0 })
+      summary: safeJsonParse(button.dataset.summary, { total: 0, submitted: 0, percent: 0 }),
+      studentRequirements: (() => {
+        const fromBtn = safeJsonParse(button.dataset.studentRequirements, null);
+        if (Array.isArray(fromBtn)) return fromBtn;
+        const card = button.closest('.event-card');
+        return safeJsonParse(card?.dataset?.student_requirements || card?.dataset?.studentRequirements || '[]', []);
+      })()
     };
+    const approveReadyInput = document.getElementById('proposalRequirementsApproveReady');
+    if (approveReadyInput) {
+      approveReadyInput.value = (button.dataset.approveReady === '1'
+        || String(proposalRequirementState.stage || '').toLowerCase() === 'under_review')
+        ? '1'
+        : '0';
+    }
     populateProposalRequirementEditor(proposalRequirementState.requirements);
     renderProposalProgress();
     renderProposalUploads();
+    renderProposalStudentRequirements();
+    syncProposalReviewActions();
     proposalRequirementsModal.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
@@ -2579,6 +2855,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (proposalFilePreviewModal && !proposalFilePreviewModal.classList.contains('hidden')) {
+        closeProposalFilePreview();
+        return;
+      }
       closeModal(eventModal);
       closeModal(archiveModal);
       closePublishTeacherAssignmentModal();
@@ -2652,6 +2932,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   const seminar1EndInput = document.getElementById('seminar1_end_local');
   const seminar2StartInput = document.getElementById('seminar2_start_local');
   const seminar2EndInput = document.getElementById('seminar2_end_local');
+  const registrationCloseWeeksSelect = document.getElementById('registration_close_weeks');
+  const registrationCloseWeeksHint = document.getElementById('registrationCloseWeeksHint');
   const teacherProposalRequirementsList = document.getElementById('teacherProposalRequirementsList');
   const btnAddTeacherProposalRequirement = document.getElementById('btnAddTeacherProposalRequirement');
   const teacherProposalCreateSection = document.getElementById('teacherProposalCreateSection');
@@ -2739,6 +3021,83 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     d.setDate(d.getDate() + 1);
     d.setHours(7, 0, 0, 0);
     return d;
+  }
+
+  function getEventStartForCloseLimit() {
+    const mode = eventModeInput?.value || 'simple';
+    if (mode === 'seminar_based') {
+      return parseLocalDate((seminar1StartInput?.value || '').trim());
+    }
+    return parseLocalDate((startAtInput?.value || '').trim());
+  }
+
+  function maxRegistrationCloseWeeksFromStart(startDate) {
+    if (!startDate || Number.isNaN(startDate.getTime())) return null;
+    const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.floor((startDay.getTime() - today.getTime()) / 86400000);
+    if (diffDays < 7) return 0;
+    return Math.min(4, Math.floor(diffDays / 7));
+  }
+
+  function refreshRegistrationCloseOptions(preferredValue) {
+    if (!registrationCloseWeeksSelect) return;
+
+    const start = getEventStartForCloseLimit();
+    const prevRaw = preferredValue != null
+      ? String(preferredValue)
+      : String(registrationCloseWeeksSelect.value || '');
+    const preferred = Number.parseInt(prevRaw, 10);
+    const maxWeeks = start ? maxRegistrationCloseWeeksFromStart(start) : null;
+
+    registrationCloseWeeksSelect.innerHTML = '';
+
+    if (maxWeeks === null) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Select event start date first';
+      registrationCloseWeeksSelect.appendChild(opt);
+      registrationCloseWeeksSelect.disabled = true;
+      if (registrationCloseWeeksHint) {
+        registrationCloseWeeksHint.textContent =
+          'Options update after you set the event start date (max 4 weeks before start, and never before today).';
+      }
+      return;
+    }
+
+    if (maxWeeks < 1) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Not available for this start date';
+      registrationCloseWeeksSelect.appendChild(opt);
+      registrationCloseWeeksSelect.disabled = true;
+      if (registrationCloseWeeksHint) {
+        registrationCloseWeeksHint.textContent =
+          'Start date is less than 1 week away, so a weeks-based close limit cannot be used. Move the start later, or leave this unset.';
+      }
+      return;
+    }
+
+    registrationCloseWeeksSelect.disabled = false;
+    for (let weeks = 1; weeks <= maxWeeks; weeks += 1) {
+      const opt = document.createElement('option');
+      opt.value = String(weeks);
+      opt.textContent = `${weeks} week${weeks === 1 ? '' : 's'} before event`;
+      registrationCloseWeeksSelect.appendChild(opt);
+    }
+
+    if (Number.isFinite(preferred) && preferred >= 1 && preferred <= maxWeeks) {
+      registrationCloseWeeksSelect.value = String(preferred);
+    } else {
+      registrationCloseWeeksSelect.value = '1';
+    }
+
+    if (registrationCloseWeeksHint) {
+      registrationCloseWeeksHint.textContent = maxWeeks < 4
+        ? `Based on today’s date and the event start, only up to ${maxWeeks} week${maxWeeks === 1 ? '' : 's'} before the event is available (maximum 4).`
+        : 'Registration can close up to 4 weeks before the event start.';
+    }
   }
 
   function isBeforeAllowedScheduleTime(date) {
@@ -2844,6 +3203,69 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
   }
 
+  function isSeminar1Complete() {
+    const title = (document.getElementById('seminar1_title')?.value || '').trim();
+    const start = parseLocalDate((seminar1StartInput?.value || '').trim());
+    const end = parseLocalDate((seminar1EndInput?.value || '').trim());
+    return title !== '' && !!start && !!end && end > start;
+  }
+
+  function syncSeminar2Gate(clearWhenLocked = true) {
+    const seminar2Title = document.getElementById('seminar2_title');
+    const lockHint = document.getElementById('seminar2LockHint');
+    const isTwoSeminars = (eventModeInput?.value || 'simple') === 'seminar_based'
+      && (Number.parseInt(seminarCountInput?.value || '0', 10) || 0) === 2;
+
+    if (!isTwoSeminars) {
+      lockHint?.classList.add('hidden');
+      return;
+    }
+
+    const ready = isSeminar1Complete();
+    const seminar1End = parseLocalDate((seminar1EndInput?.value || '').trim());
+
+    if (seminar2Title) {
+      seminar2Title.disabled = !ready;
+      seminar2Title.classList.toggle('bg-zinc-50', !ready);
+      seminar2Title.classList.toggle('text-zinc-500', !ready);
+      seminar2Title.classList.toggle('cursor-not-allowed', !ready);
+      seminar2Title.classList.toggle('bg-white', ready);
+      seminar2Title.classList.toggle('text-zinc-900', ready);
+      if (!ready && clearWhenLocked) seminar2Title.value = '';
+    }
+
+    seminar2Editor?.classList.toggle('opacity-70', !ready);
+    lockHint?.classList.toggle('hidden', ready);
+
+    if (!ready) {
+      setPickerDisabled(seminar2StartInput, true);
+      setEndLocked(seminar2EndInput, true, clearWhenLocked);
+      if (clearWhenLocked) setPickerValue(seminar2StartInput, '');
+      setPickerMin(seminar2StartInput, null);
+      return;
+    }
+
+    // Seminar 2 cannot start before Seminar 1 ends (past dates/times disabled in picker).
+    const createFloor = earliestAllowedCreateDateTime();
+    const mode = document.getElementById('mode')?.value || 'create';
+    let minStart = seminar1End;
+    if (mode === 'create' && createFloor && seminar1End && createFloor > seminar1End) {
+      minStart = createFloor;
+    } else if (mode === 'create' && createFloor && !seminar1End) {
+      minStart = createFloor;
+    }
+    setPickerMin(seminar2StartInput, minStart);
+    setPickerDisabled(seminar2StartInput, false);
+
+    const s2Start = parseLocalDate((seminar2StartInput?.value || '').trim());
+    if (s2Start && minStart && s2Start < minStart) {
+      setPickerValue(seminar2StartInput, '');
+      setEndLocked(seminar2EndInput, true, true);
+    } else {
+      updateEndMin(seminar2StartInput, seminar2EndInput);
+    }
+  }
+
   function enforceSimpleEndDefaults() {
     if (isApplyingSimpleEndDefault) return;
     if (!startAtInput || !endAtInput) return;
@@ -2886,6 +3308,20 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           onOpen: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
           onMonthChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
           onYearChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
+          onChange: () => {
+            if (input === startAtInput || input === seminar1StartInput) {
+              refreshRegistrationCloseOptions();
+            }
+            if (input === seminar1StartInput || input === seminar1EndInput) {
+              if (input === seminar1StartInput) {
+                updateEndMin(seminar1StartInput, seminar1EndInput);
+              }
+              syncSeminar2Gate(true);
+            }
+            if (input === seminar2StartInput) {
+              updateEndMin(seminar2StartInput, seminar2EndInput);
+            }
+          },
         });
       });
   }
@@ -2948,9 +3384,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       setEndLocked(endAtInput, false, false);
       setPickerMax(endAtInput, null);
       updateEndMin(startAtInput, endAtInput);
+      updateEndMin(seminar1StartInput, seminar1EndInput);
+      syncSeminar2Gate(false);
     } else {
       enforceSimpleEndDefaults();
     }
+    refreshRegistrationCloseOptions();
 
     updateStructureOptionUI();
   }
@@ -3076,6 +3515,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const submission = requirementId ? submissionsByRequirement[requirementId] : null;
       const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
       const fileName = String(submission?.file_name || '').trim();
+      const mimeType = String(submission?.mime_type || '').trim();
 
       const row = document.createElement('div');
       row.className = 'rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm';
@@ -3094,7 +3534,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             </div>
           </div>
           ${fileUrl
-            ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</a>`
+            ? `<button type="button"
+                data-proposal-file-preview
+                data-file-url="${escapeHtml(fileUrl)}"
+                data-file-label="${escapeHtml(label)}"
+                data-file-name="${escapeHtml(fileName || label)}"
+                data-file-mime="${escapeHtml(mimeType)}"
+                class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</button>`
             : `<span class="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-500">Missing upload</span>`}
         </div>
         <label class="mt-3 block text-xs font-medium text-zinc-600">Replace file (optional)</label>
@@ -3146,6 +3592,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       if (!file) {
         throw new Error(`Upload the file for "${label}".`);
       }
+      validateProposalFile(file, label);
 
       requirements.push({
         code: code === 'ADDITIONAL' ? `DOC${index + 1}` : code,
@@ -3169,6 +3616,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const input = row.querySelector('.proposal-edit-file-input');
       const file = input?.files?.[0] || null;
       if (requirementId && file) {
+        const label = String(row.querySelector('.text-sm.font-bold')?.textContent || 'requirement').trim();
+        validateProposalFile(file, label);
         replacements.push({ requirementId, file });
       }
     });
@@ -3502,53 +3951,64 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   function openEventModalFromDataset(source, readOnly = false) {
     if (!source) return;
 
+    // Prefer button dataset; fall back to parent event card for older markup.
+    const card = source.closest?.('.event-card') || null;
+    const ds = (key) => {
+      const fromBtn = source.dataset?.[key];
+      if (fromBtn != null && String(fromBtn).trim() !== '') return fromBtn;
+      const fromCard = card?.dataset?.[key];
+      return fromCard != null ? fromCard : '';
+    };
+
     document.getElementById('mode').value = 'edit';
-    document.getElementById('event_id').value = source.dataset.id || '';
-    document.getElementById('title').value = source.dataset.title || '';
+    document.getElementById('event_id').value = ds('id') || '';
+    document.getElementById('title').value = ds('title') || '';
     resetCoverPicker();
-    const existingCover = String(source.dataset.cover_image_url || '').trim();
+    const existingCover = String(ds('cover_image_url') || '').trim();
     if (coverImageUrlInput) coverImageUrlInput.value = existingCover;
     setCoverPreview(existingCover);
     let existingStudentRequirements = [];
     try {
-      existingStudentRequirements = JSON.parse(source.dataset.student_requirements || '[]');
+      existingStudentRequirements = JSON.parse(ds('student_requirements') || '[]');
     } catch (err) {
       existingStudentRequirements = [];
     }
     applyStudentRequirementsForm(existingStudentRequirements);
-    document.getElementById('location').value = source.dataset.locationFull || source.dataset.location || '';
-    const rawDescription = source.dataset.description || '';
+    document.getElementById('location').value = ds('locationFull') || ds('location') || '';
+    const rawDescription = ds('description') || '';
     const cleanedDescription = String(rawDescription)
       .replace(/\[REJECT_REASON:[^\]]*\]\s*/gi, '')
       .trim();
     document.getElementById('description').value = cleanedDescription;
 
-    if (document.getElementById('event_type')) document.getElementById('event_type').value = source.dataset.event_type || 'Event';
-    const decodedTarget = decodeTargetParticipant(source.dataset.event_for || 'All');
+    if (document.getElementById('event_type')) document.getElementById('event_type').value = ds('event_type') || 'Event';
+    const decodedTarget = decodeTargetParticipant(ds('event_for') || 'All');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
     setSelectedTargetYears(decodedTarget.years || ['ALL']);
-    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = source.dataset.grace_time || '15';
-    setRegistrationType((source.dataset.is_free_event ?? '1') !== '0' ? 'free' : 'paid');
+    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = ds('grace_time') || '15';
+    setRegistrationType((ds('is_free_event') || '1') !== '0' ? 'free' : 'paid');
+    const feeInput = document.getElementById('event_fee');
+    if (feeInput) {
+      feeInput.value = String(ds('event_fee') || '').trim();
+    }
+    syncEventFeeVisibility();
     const registrationLimitInput = document.getElementById('registration_limit');
     if (registrationLimitInput) {
-      registrationLimitInput.value = source.dataset.registration_limit || '';
+      registrationLimitInput.value = ds('registration_limit') || '';
     }
-    const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
-    if (registrationCloseWeeksInput) {
-      registrationCloseWeeksInput.value = source.dataset.registration_close_weeks || '1';
-    }
+    const preferredCloseWeeks = ds('registration_close_weeks') || '1';
 
-    setPickerValue(startAtInput, source.dataset.start_at ? toLocalInput(source.dataset.start_at) : '');
-    setPickerValue(endAtInput, source.dataset.end_at ? toLocalInput(source.dataset.end_at) : '');
+    setPickerValue(startAtInput, ds('start_at') ? toLocalInput(ds('start_at')) : '');
+    setPickerValue(endAtInput, ds('end_at') ? toLocalInput(ds('end_at')) : '');
 
     let sessions = [];
     try {
-      sessions = sanitizeSessions(JSON.parse(source.dataset.sessions || '[]'));
+      sessions = sanitizeSessions(JSON.parse(ds('sessions') || '[]'));
     } catch (err) {
       sessions = [];
     }
 
-    const dataMode = (source.dataset.event_mode || '').trim();
+    const dataMode = (ds('event_mode') || '').trim();
     const isSeminar = dataMode === 'seminar_based' || sessions.length > 0;
 
     if (isSeminar) {
@@ -3583,12 +4043,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     updateEndMin(startAtInput, endAtInput);
     updateEndMin(seminar1StartInput, seminar1EndInput);
     updateEndMin(seminar2StartInput, seminar2EndInput);
+    refreshRegistrationCloseOptions(preferredCloseWeeks);
+    syncSeminar2Gate(false);
 
     const msg = document.getElementById('formMsg');
     if (msg) {
       msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
       msg.textContent = '';
     }
+    clearWizardStepError();
 
     const modalTitle = document.getElementById('modalTitle');
     if (modalTitle) modalTitle.textContent = readOnly ? 'Event Details' : 'Edit Event';
@@ -3600,18 +4063,21 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const subtitle = document.getElementById('modalSubtitle');
     if (subtitle) {
       subtitle.textContent = readOnly
-        ? 'Review the event information and schedule'
-        : 'Update the event details below';
+        ? 'Review Info → Details → Schedule (use Next)'
+        : 'Update Info → Details → Schedule (use Next for full fields)';
     }
 
     if (!readOnly) {
+      // Keep proposal metadata on the original button so edit-mode helpers still work.
       setTeacherProposalStepMode('edit', source);
       const submitLabel = document.querySelector('#btnSubmit span:last-child');
       if (submitLabel) {
-        const sourceStatus = String(source.dataset.status || '').trim().toLowerCase();
+        const sourceStatus = String(ds('status') || '').trim().toLowerCase();
         submitLabel.textContent = teacherProposalMode && sourceStatus === 'archived'
           ? 'Resubmit for Review'
-          : 'Save Event';
+          : (teacherProposalMode && String(ds('proposal_stage') || '').trim().toLowerCase() === 'pending_requirements'
+            ? 'Submit for Review'
+            : 'Save Event');
       }
     }
 
@@ -3632,8 +4098,14 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     } else {
       enforceSimpleEndDefaults();
     }
+    refreshRegistrationCloseOptions();
   });
-  seminar1StartInput?.addEventListener('change', () => updateEndMin(seminar1StartInput, seminar1EndInput));
+  seminar1StartInput?.addEventListener('change', () => {
+    updateEndMin(seminar1StartInput, seminar1EndInput);
+    refreshRegistrationCloseOptions();
+    syncSeminar2Gate(true);
+  });
+  seminar1EndInput?.addEventListener('change', () => syncSeminar2Gate(true));
   seminar2StartInput?.addEventListener('change', () => updateEndMin(seminar2StartInput, seminar2EndInput));
 
   startAtInput?.addEventListener('input', () => {
@@ -3642,6 +4114,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     } else {
       enforceSimpleEndDefaults();
     }
+    refreshRegistrationCloseOptions();
   });
   endAtInput?.addEventListener('change', () => {
     if ((eventModeInput?.value || 'simple') !== 'seminar_based') {
@@ -3653,10 +4126,19 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       enforceSimpleEndDefaults();
     }
   });
-  seminar1StartInput?.addEventListener('input', () => updateEndMin(seminar1StartInput, seminar1EndInput));
+  seminar1StartInput?.addEventListener('input', () => {
+    updateEndMin(seminar1StartInput, seminar1EndInput);
+    refreshRegistrationCloseOptions();
+    syncSeminar2Gate(true);
+  });
+  seminar1EndInput?.addEventListener('input', () => syncSeminar2Gate(true));
+  document.getElementById('seminar1_title')?.addEventListener('input', () => syncSeminar2Gate(true));
+  document.getElementById('seminar1_title')?.addEventListener('change', () => syncSeminar2Gate(true));
   seminar2StartInput?.addEventListener('input', () => updateEndMin(seminar2StartInput, seminar2EndInput));
 
   setStructure(eventModeInput?.value || 'simple', seminarCountInput?.value || '0');
+  refreshRegistrationCloseOptions();
+  syncSeminar2Gate(false);
   setWizardStep(1);
   setEndLocked(endAtInput, true);
   setEndLocked(seminar1EndInput, true);
@@ -3668,7 +4150,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       return { course: 'ALL', years: ['ALL'] };
     }
 
-    const multi = raw.match(/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/);
+    const multi = raw.match(/^COURSE\s*=\s*(ALL|BSIT-SD|BSIT-BA|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/);
     if (multi) {
       const years = (multi[2] || '')
         .split(',')
@@ -3677,7 +4159,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const normalizedYears = years.includes('ALL') || years.length === 0
         ? ['ALL']
         : [...new Set(years)];
-      return { course: multi[1], years: normalizedYears };
+      return { course: normalizeTargetCourse(multi[1]), years: normalizedYears };
     }
 
     const pair = raw.match(/^(BSIT|BSCS)\s*[-_|]\s*([1-4])$/);
@@ -3685,8 +4167,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       return { course: pair[1], years: [pair[2]] };
     }
 
-    if (raw === 'BSIT' || raw === 'BSCS') {
-      return { course: raw, years: ['ALL'] };
+    const standalone = normalizeTargetCourse(raw);
+    if (['BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'].includes(standalone)) {
+      return { course: standalone, years: ['ALL'] };
     }
 
     if (['1', '2', '3', '4'].includes(raw)) {
@@ -3721,11 +4204,25 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     });
   }
 
+  function normalizeTargetCourse(value) {
+    const raw = (value || '').toString().trim().toUpperCase();
+    const compact = raw.replace(/[^A-Z0-9]/g, '');
+    if (compact === 'BSITSD') return 'BSIT-SD';
+    if (compact === 'BSITBA') return 'BSIT-BA';
+    if (raw === 'BSIT-SD' || raw === 'BSIT_SD') return 'BSIT-SD';
+    if (raw === 'BSIT-BA' || raw === 'BSIT_BA') return 'BSIT-BA';
+    if (raw === 'BSIT' || raw === 'IT') return 'BSIT';
+    if (raw === 'BSCS' || raw === 'CS') return 'BSCS';
+    if (raw === 'ALL') return 'ALL';
+    return raw;
+  }
+
   function encodeTargetParticipant(courseValue, yearValues) {
-    const course = (courseValue || 'ALL').toString().trim().toUpperCase();
+    const course = normalizeTargetCourse(courseValue || 'ALL');
     const years = normalizeTargetYears(yearValues);
 
-    const normalizedCourse = ['ALL', 'BSIT', 'BSCS'].includes(course) ? course : 'ALL';
+    const allowedCourses = ['ALL', 'BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'];
+    const normalizedCourse = allowedCourses.includes(course) ? course : 'ALL';
 
     if (normalizedCourse === 'ALL' && years.length === 1 && years[0] === 'ALL') return 'All';
     if (normalizedCourse === 'ALL' && years.length === 1) return years[0];
@@ -3762,12 +4259,245 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return paidInput?.checked ? 'paid' : 'free';
   }
 
+  function focusWizardField(focusId) {
+    if (!focusId) return;
+    const el = document.getElementById(focusId);
+    if (!el) return;
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (_) {}
+    window.setTimeout(() => {
+      try {
+        if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+      } catch (_) {
+        try { el.focus(); } catch (__) {}
+      }
+    }, 180);
+  }
+
+  function showWizardFooterStatus(message, tone = 'error', focusId = null) {
+    const box = document.getElementById('wizardFooterStatus');
+    const formMsg = document.getElementById('formMsg');
+    if (formMsg) {
+      formMsg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
+      formMsg.textContent = '';
+    }
+    if (!box) {
+      if (message) focusWizardField(focusId);
+      return;
+    }
+
+    const tones = {
+      error: 'border-rose-200 bg-rose-50 text-rose-700',
+      progress: 'border-amber-200 bg-amber-50 text-amber-800',
+      success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    };
+    const toneClass = tones[tone] || tones.error;
+
+    box.className = `rounded-xl border px-3.5 py-2.5 text-sm font-semibold ${toneClass}`;
+    if (!message) {
+      box.textContent = '';
+      box.classList.add('hidden');
+      box.removeAttribute('role');
+      return;
+    }
+
+    box.textContent = message;
+    box.classList.remove('hidden');
+    box.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+
+    if (tone === 'error') {
+      box.classList.remove('wizard-step-error-flash');
+      void box.offsetWidth;
+      box.classList.add('wizard-step-error-flash');
+      focusWizardField(focusId);
+    }
+  }
+
+  function showWizardStepError(message, focusId) {
+    showWizardFooterStatus(message, 'error', focusId);
+  }
+
+  function showWizardStepProgress(message) {
+    showWizardFooterStatus(message, 'progress');
+  }
+
+  function clearWizardStepError() {
+    showWizardFooterStatus('');
+  }
+
+  function validateWizardStep(currentStep) {
+    const mode = (document.getElementById('mode')?.value || 'create').trim();
+    const fail = (message, focusId) => ({ message, focusId: focusId || null });
+
+    if (currentStep === 1) {
+      const title = (document.getElementById('title')?.value || '').trim();
+      if (!title) return fail('Event title is required.', 'title');
+      if (title.length > 150) return fail('Event title must be 150 characters or less.', 'title');
+
+      const location = (document.getElementById('location')?.value || '').trim();
+      if (!location) return fail('Location is required.', 'location');
+
+      const targetYears = typeof getSelectedTargetYears === 'function'
+        ? getSelectedTargetYears()
+        : [];
+      if (!Array.isArray(targetYears) || targetYears.length === 0) {
+        return fail('Select at least one target year level.', 'target_year_group');
+      }
+
+      if (teacherProposalMode || document.getElementById('registration_type_paid')) {
+        if (getRegistrationType() === 'paid') {
+          const feeRaw = String(document.getElementById('event_fee')?.value || '').trim();
+          const feeNum = Number.parseFloat(feeRaw);
+          if (!Number.isFinite(feeNum) || feeNum <= 0) {
+            return fail('Enter the settlement amount for this paid event.', 'event_fee');
+          }
+        }
+
+        const limitRaw = String(document.getElementById('registration_limit')?.value || '').trim();
+        if (limitRaw !== '') {
+          const limitNum = Number.parseInt(limitRaw, 10);
+          if (!Number.isFinite(limitNum) || limitNum < 1) {
+            return fail('Student limit must be a positive whole number.', 'registration_limit');
+          }
+          if (limitNum > REGISTRATION_LIMIT_MAX) {
+            return fail('Student limit cannot exceed 9999.', 'registration_limit');
+          }
+        }
+      }
+
+      return null;
+    }
+
+    if (currentStep === 2) {
+      const description = (document.getElementById('description')?.value || '').trim();
+      if (!description) return fail('Event description is required.', 'description');
+      return null;
+    }
+
+    if (currentStep === 3) {
+      const graceRaw = String(document.getElementById('grace_time')?.value || '').trim();
+      const graceNum = Number.parseInt(graceRaw, 10);
+      if (!Number.isFinite(graceNum) || graceNum < 0) {
+        return fail('Grace time must be 0 or greater.', 'grace_time');
+      }
+
+      const eventMode = (eventModeInput?.value || 'simple').trim();
+      const seminarCount = Number.parseInt(seminarCountInput?.value || '0', 10) || 0;
+
+      try {
+        if (eventMode === 'seminar_based') {
+          const s1Title = (document.getElementById('seminar1_title')?.value || '').trim();
+          const s1Start = (document.getElementById('seminar1_start_local')?.value || '').trim();
+          const s1End = (document.getElementById('seminar1_end_local')?.value || '').trim();
+          if (!s1Title) return fail('Seminar 1 title is required.', 'seminar1_title');
+          if (!s1Start) return fail('Seminar 1 start schedule is required.', 'seminar1_start_local');
+          if (!s1End) return fail('Seminar 1 end schedule is required.', 'seminar1_end_local');
+          collectSeminarPayload(1);
+
+          if (seminarCount === 2) {
+            if (!isSeminar1Complete()) {
+              return fail('Complete Seminar 1 first before filling Seminar 2.', 'seminar1_title');
+            }
+            const s2Title = (document.getElementById('seminar2_title')?.value || '').trim();
+            const s2Start = (document.getElementById('seminar2_start_local')?.value || '').trim();
+            const s2End = (document.getElementById('seminar2_end_local')?.value || '').trim();
+            if (!s2Title) return fail('Seminar 2 title is required.', 'seminar2_title');
+            if (!s2Start) return fail('Seminar 2 start schedule is required.', 'seminar2_start_local');
+            if (!s2End) return fail('Seminar 2 end schedule is required.', 'seminar2_end_local');
+            const s1EndDate = parseLocalDate(s1End);
+            const s2StartDate = parseLocalDate(s2Start);
+            if (s1EndDate && s2StartDate && s2StartDate < s1EndDate) {
+              return fail('Seminar 2 must start on or after Seminar 1 ends.', 'seminar2_start_local');
+            }
+            collectSeminarPayload(2);
+          }
+        } else {
+          const startRaw = (startAtInput?.value || '').trim();
+          const endRaw = (endAtInput?.value || '').trim();
+          if (!startRaw) return fail('Start schedule is required.', 'start_at_local');
+          if (!endRaw) return fail('End schedule is required.', 'end_at_local');
+          const startDate = parseLocalDate(startRaw);
+          const endDate = parseLocalDate(endRaw);
+          if (!startDate || !endDate) {
+            return fail('Invalid date/time selection.', startDate ? 'end_at_local' : 'start_at_local');
+          }
+          if (mode === 'create' && startDate < earliestAllowedCreateDateTime()) {
+            return fail('Start date/time must be tomorrow or later (starting 7:00 AM).', 'start_at_local');
+          }
+          if (endDate <= startDate) {
+            return fail('End time must be after start time.', 'end_at_local');
+          }
+        }
+      } catch (scheduleErr) {
+        const msg = scheduleErr?.message || 'Complete the event schedule.';
+        let focusId = 'start_at_local';
+        if (/Seminar 2/i.test(msg)) {
+          if (/title/i.test(msg)) focusId = 'seminar2_title';
+          else if (/end/i.test(msg)) focusId = 'seminar2_end_local';
+          else focusId = 'seminar2_start_local';
+        } else if (/Seminar 1/i.test(msg)) {
+          if (/title/i.test(msg)) focusId = 'seminar1_title';
+          else if (/end/i.test(msg)) focusId = 'seminar1_end_local';
+          else focusId = 'seminar1_start_local';
+        }
+        return fail(msg, focusId);
+      }
+
+      if (document.getElementById('registration_close_weeks')) {
+        refreshRegistrationCloseOptions();
+        const startForClose = getEventStartForCloseLimit();
+        const maxCloseWeeks = maxRegistrationCloseWeeksFromStart(startForClose);
+        if (maxCloseWeeks != null && maxCloseWeeks >= 1) {
+          const closeRaw = String(document.getElementById('registration_close_weeks')?.value || '').trim();
+          const closeWeeks = Number.parseInt(closeRaw, 10);
+          if (!Number.isFinite(closeWeeks) || closeWeeks < 1 || closeWeeks > maxCloseWeeks) {
+            return fail(
+              `Choose a registration close limit between 1 and ${maxCloseWeeks} week${maxCloseWeeks === 1 ? '' : 's'}.`,
+              'registration_close_weeks'
+            );
+          }
+        }
+      }
+
+      return null;
+    }
+
+    if (currentStep === 4 && teacherProposalMode) {
+      try {
+        if (mode === 'edit') {
+          validateTeacherProposalEditComplete();
+        } else {
+          collectTeacherProposalRequirements();
+        }
+      } catch (proposalErr) {
+        return fail(
+          proposalErr?.message || 'Complete the required proposal documents.',
+          mode === 'edit' ? 'teacherProposalEditSection' : 'teacherProposalCreateSection'
+        );
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  function syncEventFeeVisibility() {
+    const wrap = document.getElementById('event_fee_wrap');
+    const feeInput = document.getElementById('event_fee');
+    if (!wrap) return;
+    const isPaid = getRegistrationType() === 'paid';
+    wrap.classList.toggle('hidden', !isPaid);
+    if (!isPaid && feeInput) feeInput.value = '';
+  }
+
   function setRegistrationType(type) {
     const freeInput = document.getElementById('registration_type_free');
     const paidInput = document.getElementById('registration_type_paid');
     const isFree = type !== 'paid';
     if (freeInput) freeInput.checked = isFree;
     if (paidInput) paidInput.checked = !isFree;
+    syncEventFeeVisibility();
   }
 
   function bindRegistrationTypeCheckboxes() {
@@ -3778,26 +4508,101 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     freeInput.addEventListener('change', () => {
       if (freeInput.checked) {
         paidInput.checked = false;
+        syncEventFeeVisibility();
         return;
       }
       if (!paidInput.checked) {
         freeInput.checked = true;
       }
+      syncEventFeeVisibility();
     });
 
     paidInput.addEventListener('change', () => {
       if (paidInput.checked) {
         freeInput.checked = false;
+        syncEventFeeVisibility();
         return;
       }
       if (!freeInput.checked) {
         paidInput.checked = true;
       }
+      syncEventFeeVisibility();
     });
+
+    syncEventFeeVisibility();
   }
   bindRegistrationTypeCheckboxes();
 
   const REGISTRATION_LIMIT_MAX = 9999;
+  const PROPOSAL_FILE_MAX_BYTES = 10 * 1024 * 1024;
+
+  function validateProposalFile(file, label) {
+    if (!file) return;
+    if (file.size > PROPOSAL_FILE_MAX_BYTES) {
+      throw new Error(`"${label}" exceeds the 10MB file size limit. Choose a smaller file.`);
+    }
+  }
+
+  async function rollbackCreatedProposal(eventId) {
+    const id = String(eventId || '').trim();
+    if (!id) return;
+    const res = await fetch('/api/events_proposal_rollback.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: id, csrf_token: window.CSRF_TOKEN || '' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || 'Could not cancel the unfinished proposal.');
+    }
+  }
+
+  function validateCoverFileBeforeSubmit() {
+    if (!coverFilePending) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(coverFilePending.type)) {
+      throw new Error('Cover image must be JPG, PNG, or WEBP.');
+    }
+    if (coverFilePending.size > 5 * 1024 * 1024) {
+      throw new Error('Cover image must be 5MB or smaller.');
+    }
+  }
+
+  function validateTeacherProposalEditComplete() {
+    if (!teacherProposalMode) return;
+
+    const stage = String(teacherProposalEditState.stage || '').trim().toLowerCase();
+    const status = String(teacherProposalEditState.status || '').trim().toLowerCase();
+    if (stage !== 'pending_requirements' && status !== 'archived') {
+      return;
+    }
+
+    const submissionsByRequirement = {};
+    (teacherProposalEditState.submissions || []).forEach((submission) => {
+      const requirementId = String(submission?.requirement_id || '').trim();
+      if (requirementId) {
+        submissionsByRequirement[requirementId] = submission;
+      }
+    });
+
+    const rows = Array.from(document.querySelectorAll('#teacherProposalEditRequirementsList [data-requirement-id]'));
+    rows.forEach((row) => {
+      const requirementId = String(row.dataset.requirementId || '').trim();
+      const label = String(row.querySelector('.text-sm.font-bold')?.textContent || 'requirement').trim();
+      const file = row.querySelector('.proposal-edit-file-input')?.files?.[0] || null;
+      const existing = submissionsByRequirement[requirementId];
+      const hasExisting = Boolean(
+        existing && String(existing.file_url || existing.file_path || '').trim() !== ''
+      );
+
+      if (!hasExisting && !file) {
+        throw new Error(`Upload the file for "${label}".`);
+      }
+      if (file) {
+        validateProposalFile(file, label);
+      }
+    });
+  }
 
   const registrationLimitInput = document.getElementById('registration_limit');
   registrationLimitInput?.addEventListener('input', () => {
@@ -3828,10 +4633,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     setSelectedTargetYears(['ALL']);
     if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '15';
     setRegistrationType('free');
+    const eventFeeInput = document.getElementById('event_fee');
+    if (eventFeeInput) eventFeeInput.value = '';
     const registrationLimitInput = document.getElementById('registration_limit');
     if (registrationLimitInput) registrationLimitInput.value = '';
-    const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
-    if (registrationCloseWeeksInput) registrationCloseWeeksInput.value = '1';
+    refreshRegistrationCloseOptions();
     resetTeacherProposalRequirements();
     resetStudentRequirementsForm();
 
@@ -3840,6 +4646,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       msg.className = 'text-sm text-amber-800 min-h-0 !mt-0';
       msg.textContent = '';
     }
+    clearWizardStepError();
 
     const modalTitle = document.getElementById('modalTitle');
     if (modalTitle) modalTitle.textContent = 'Create Event';
@@ -3858,6 +4665,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     updateEndMin(startAtInput, endAtInput);
     updateEndMin(seminar1StartInput, seminar1EndInput);
     updateEndMin(seminar2StartInput, seminar2EndInput);
+    syncSeminar2Gate(true);
 
     step = 1;
     setWizardStep(1);
@@ -3868,8 +4676,20 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   document.getElementById('btnCloseModal').addEventListener('click', () => closeModal(eventModal));
 
   document.getElementById('btnNext').addEventListener('click', () => {
+    if (eventModalReadOnly) {
+      step = Math.min(maxWizardStep, step + 1);
+      setWizardStep(step);
+      return;
+    }
+
+    clearWizardStepError();
+    const error = validateWizardStep(step);
+    if (error) {
+      showWizardStepError(error.message, error.focusId);
+      return;
+    }
+
     if (step === 1) {
-      if (!document.getElementById('title').value.trim()) return;
       step = 2;
     } else if (step === 2) {
       step = 3;
@@ -3880,6 +4700,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   });
 
   document.getElementById('btnBack').addEventListener('click', () => {
+    clearWizardStepError();
     step = Math.max(1, step - 1);
     setWizardStep(step);
   });
@@ -3895,28 +4716,6 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     });
   });
 
-  <?php if ($role === 'teacher'): ?>
-    document.querySelectorAll('.event-card[data-id]').forEach((card) => {
-      const openCardDetails = () => {
-        const id = card.dataset.id || '';
-        if (!id) return;
-        window.location.href = '/event_view.php?id=' + encodeURIComponent(id);
-      };
-
-      card.addEventListener('click', (event) => {
-        // Don't hijack clicks on internal controls (action buttons, links, etc.).
-        if (event.target.closest('button, a, input, select, textarea, label')) return;
-        openCardDetails();
-      });
-
-      card.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        openCardDetails();
-      });
-    });
-  <?php endif; ?>
-
   document.getElementById('eventForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -3925,14 +4724,22 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       return;
     }
 
+    clearWizardStepError();
+    const stepError = validateWizardStep(step);
+    if (stepError) {
+      showWizardStepError(stepError.message, stepError.focusId);
+      return;
+    }
+
     const mode = document.getElementById('mode').value;
-    const msg = document.getElementById('formMsg');
     const submitBtn = document.getElementById('btnSubmit');
-    let createdEventId = '';
+    let draftEventId = '';
 
     window.pulseManageEventsBusy = true;
 
     try {
+      validateCoverFileBeforeSubmit();
+
       const title = document.getElementById('title').value.trim();
       const location = document.getElementById('location').value.trim();
       const description = document.getElementById('description').value.trim();
@@ -4049,8 +4856,20 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         payload.student_requirements = collectStudentRequirements();
       }
 
-      if (teacherProposalMode) {
+      // Registration package — teachers on create/edit, and admins when editing via View/Edit.
+      if (teacherProposalMode || document.getElementById('registration_type_paid')) {
         payload.is_free_event = getRegistrationType() === 'free';
+        if (!payload.is_free_event) {
+          const feeInput = document.getElementById('event_fee');
+          const feeRaw = feeInput ? String(feeInput.value || '').trim() : '';
+          const feeNum = Number.parseFloat(feeRaw);
+          if (!Number.isFinite(feeNum) || feeNum <= 0) {
+            throw new Error('Enter the settlement amount students must pay for this paid event.');
+          }
+          payload.event_fee = Math.round(feeNum * 100) / 100;
+        } else {
+          payload.event_fee = null;
+        }
         const registrationLimitInput = document.getElementById('registration_limit');
         const limitRaw = registrationLimitInput ? String(registrationLimitInput.value || '').trim() : '';
         if (limitRaw !== '') {
@@ -4067,22 +4886,36 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         }
 
         const registrationCloseWeeksInput = document.getElementById('registration_close_weeks');
-        const closeWeeksRaw = registrationCloseWeeksInput ? String(registrationCloseWeeksInput.value || '').trim() : '1';
-        const closeWeeks = Number.parseInt(closeWeeksRaw, 10);
-        if (!Number.isFinite(closeWeeks) || closeWeeks < 1 || closeWeeks > 4) {
-          throw new Error('Registration close limit must be between 1 and 4 weeks.');
+        const maxCloseWeeks = maxRegistrationCloseWeeksFromStart(startDate);
+        if (maxCloseWeeks === null || maxCloseWeeks < 1) {
+          payload.registration_close_weeks = null;
+        } else {
+          const closeWeeksRaw = registrationCloseWeeksInput
+            ? String(registrationCloseWeeksInput.value || '').trim()
+            : '';
+          const closeWeeks = Number.parseInt(closeWeeksRaw, 10);
+          if (!Number.isFinite(closeWeeks) || closeWeeks < 1 || closeWeeks > maxCloseWeeks) {
+            throw new Error(
+              `Registration close limit must be between 1 and ${maxCloseWeeks} week${maxCloseWeeks === 1 ? '' : 's'} for this start date.`
+            );
+          }
+          payload.registration_close_weeks = closeWeeks;
         }
-        payload.registration_close_weeks = closeWeeks;
+      }
+
+      if (teacherProposalMode && mode === 'edit') {
+        validateTeacherProposalEditComplete();
       }
 
       if (mode === 'edit') {
         payload.event_id = document.getElementById('event_id').value;
       }
 
-      msg.className = 'text-sm font-bold text-amber-600 mt-2 text-center';
-      msg.textContent = mode === 'edit'
-        ? 'Updating event...'
-        : (teacherProposalMode ? 'Creating proposal and uploading requirements...' : 'Creating event...');
+      showWizardStepProgress(
+        mode === 'edit'
+          ? 'Updating event...'
+          : (teacherProposalMode ? 'Creating proposal and uploading requirements...' : 'Creating event...')
+      );
       submitBtn.disabled = true;
       submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
@@ -4102,18 +4935,21 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         ? String(payload.event_id || document.getElementById('event_id').value || '').trim()
         : String((data.event && data.event.id) || '').trim();
 
+      if (teacherProposalMode && mode === 'create' && savedEventId) {
+        draftEventId = savedEventId;
+      }
+
       if (coverFilePending && savedEventId) {
-        msg.textContent = 'Uploading cover image...';
+        showWizardStepProgress('Uploading cover image...');
         await uploadEventCover(savedEventId);
       }
 
       if (teacherProposalMode && mode === 'create') {
         const createdEvent = data.event || {};
-        const eventId = String(createdEvent.id || '').trim();
-        createdEventId = eventId;
+        const eventId = String(createdEvent.id || draftEventId || '').trim();
         const savedRequirements = Array.isArray(createdEvent.proposal_requirements) ? createdEvent.proposal_requirements : [];
         if (!eventId || savedRequirements.length !== teacherProposalPayload.files.length) {
-          throw new Error('Proposal event was created, but the requirement package is incomplete.');
+          throw new Error('Proposal requirements could not be prepared. Nothing was submitted.');
         }
 
         for (let i = 0; i < savedRequirements.length; i += 1) {
@@ -4124,7 +4960,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             throw new Error('Missing uploaded proposal file data.');
           }
 
-          msg.textContent = `Uploading proposal file ${i + 1} of ${savedRequirements.length}...`;
+          showWizardStepProgress(`Uploading proposal file ${i + 1} of ${savedRequirements.length}...`);
 
           const formData = new FormData();
           formData.append('event_id', eventId);
@@ -4142,7 +4978,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           }
         }
 
-        msg.textContent = 'Submitting proposal for admin review...';
+        showWizardStepProgress('Submitting proposal for admin review...');
         const reviewRes = await fetch('/api/event_proposal_submit_review.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4152,18 +4988,21 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         if (!reviewData.ok) {
           throw new Error(reviewData.error || 'Failed to submit the proposal for review.');
         }
+
+        draftEventId = '';
       } else if (teacherProposalMode && mode === 'edit') {
         const eventId = String(payload.event_id || '').trim();
-        const shouldResubmitRejected = teacherProposalEditState.status === 'archived';
+        const shouldSubmitForReview = teacherProposalEditState.status === 'archived'
+          || teacherProposalEditState.stage === 'pending_requirements';
 
-        if (shouldResubmitRejected && !eventId) {
-          throw new Error('Missing event id for proposal resubmission.');
+        if (shouldSubmitForReview && !eventId) {
+          throw new Error('Missing event id for proposal submission.');
         }
 
         if (teacherProposalEditReplacements.length > 0) {
           for (let i = 0; i < teacherProposalEditReplacements.length; i += 1) {
             const replacement = teacherProposalEditReplacements[i];
-            msg.textContent = `Uploading replacement file ${i + 1} of ${teacherProposalEditReplacements.length}...`;
+            showWizardStepProgress(`Uploading replacement file ${i + 1} of ${teacherProposalEditReplacements.length}...`);
             const formData = new FormData();
             formData.append('event_id', eventId);
             formData.append('requirement_id', replacement.requirementId);
@@ -4181,8 +5020,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           }
         }
 
-        if (shouldResubmitRejected) {
-          msg.textContent = 'Submitting updated proposal for admin review...';
+        if (shouldSubmitForReview) {
+          showWizardStepProgress(
+            teacherProposalEditState.status === 'archived'
+              ? 'Submitting updated proposal for admin review...'
+              : 'Submitting proposal for admin review...'
+          );
           const reviewRes = await fetch('/api/event_proposal_submit_review.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4190,33 +5033,89 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           });
           const reviewData = await reviewRes.json();
           if (!reviewData.ok) {
-            throw new Error(reviewData.error || 'Failed to resubmit the proposal for review.');
+            throw new Error(reviewData.error || 'Failed to submit the proposal for review.');
           }
         }
       }
 
-      msg.className = 'text-sm font-bold text-emerald-500 mt-2 text-center';
-      msg.textContent = (teacherProposalMode && mode === 'create')
-        ? 'Proposal submitted for admin review!'
-        : (teacherProposalMode && mode === 'edit' && teacherProposalEditState.status === 'archived')
-          ? 'Proposal re-submitted for admin review!'
-          : 'Success!';
+      showWizardFooterStatus(
+        (teacherProposalMode && mode === 'create')
+          ? 'Proposal submitted for admin review!'
+          : (teacherProposalMode && mode === 'edit' && (teacherProposalEditState.status === 'archived' || teacherProposalEditState.stage === 'pending_requirements'))
+            ? 'Proposal submitted for admin review!'
+            : 'Success!',
+        'success'
+      );
+      window.pulseManageEventsSubmitFailedAt = 0;
       setTimeout(() => window.location.reload(), 350);
     } catch (err) {
-      msg.className = 'text-sm font-bold text-red-500 mt-2 text-center';
-      if (createdEventId) {
-        msg.textContent = (err?.message || 'Server error encountered.')
-          + ' The proposal was saved without all files. Open View/Edit on the event and upload the missing documents.';
-      } else {
-        msg.textContent = err?.message || 'Server error encountered.';
+      let errorMessage = err?.message || 'Server error encountered.';
+      if (draftEventId) {
+        showWizardStepProgress('Upload failed. Canceling the unfinished proposal...');
+        try {
+          await rollbackCreatedProposal(draftEventId);
+          draftEventId = '';
+        } catch (rollbackErr) {
+          errorMessage = `${errorMessage} The unfinished proposal could not be removed automatically — please delete it manually from the list.`;
+        }
       }
+      window.pulseManageEventsSubmitFailedAt = Date.now();
+      showWizardStepError(errorMessage);
       submitBtn.disabled = false;
       submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     } finally {
       window.pulseManageEventsBusy = false;
     }
   });
-  // ── Approve (Page 34) ──
+  // ── Approve / Reject from Review Docs modal ──
+  async function approveProposalFromReview() {
+    const event_id = proposalRequirementsEventId?.value || '';
+    const approveBtn = document.getElementById('btnApproveFromReview');
+    if (!event_id || !approveBtn || approveBtn.disabled) return;
+
+    const original = approveBtn.textContent;
+    approveBtn.disabled = true;
+    approveBtn.textContent = '...';
+    try {
+      const res = await fetch('/api/events_approve.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id, status: 'approved', csrf_token: window.CSRF_TOKEN })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Failed');
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || 'Failed');
+      syncProposalReviewActions();
+      approveBtn.textContent = original || 'Approve';
+    }
+  }
+
+  function openRejectFromReview() {
+    const event_id = proposalRequirementsEventId?.value || '';
+    const title = document.getElementById('proposalRequirementsEventTitle')?.value
+      || (proposalRequirementsTitle?.textContent || '').replace(/^Proposal documents\s*[•·]\s*/i, '').trim()
+      || 'this proposal';
+    if (!event_id) return;
+
+    const rejectModalEl = document.getElementById('rejectModal');
+    const rejectPanelEl = document.getElementById('rejectPanel');
+    document.getElementById('rejectEventId').value = event_id;
+    document.getElementById('rejectEventName').textContent = title;
+    closeProposalRequirementsModal();
+    if (!rejectModalEl || !rejectPanelEl) return;
+    rejectModalEl.classList.add('active');
+    rejectPanelEl.style.transform = 'translateY(0)';
+    document.body.style.overflow = 'hidden';
+  }
+
+  document.getElementById('btnApproveFromReview')?.addEventListener('click', () => {
+    void approveProposalFromReview();
+  });
+  document.getElementById('btnRejectFromReview')?.addEventListener('click', openRejectFromReview);
+
+  // ── Approve (legacy card buttons, if any remain) ──
   document.querySelectorAll('.btnApprove').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
@@ -5125,6 +6024,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   function scheduleManageEventsListReload() {
     if (isManageEventsBusy()) return;
+    if (window.pulseManageEventsSubmitFailedAt && Date.now() - window.pulseManageEventsSubmitFailedAt < 30000) {
+      return;
+    }
     if (manageEventsLiveReloadScheduled) return;
 
     const elapsed = Date.now() - manageEventsPageLoadedAt;
@@ -5379,20 +6281,40 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
 
     const reqBtn = card.querySelector('.btnRequirements');
+    const ready = !!eventData.approve_ready;
     if (reqBtn) {
       reqBtn.textContent = eventData.requirements_button || 'Send Req';
       reqBtn.dataset.stage = eventData.proposal_stage || '';
+      reqBtn.dataset.approveReady = ready ? '1' : '0';
       reqBtn.dataset.requirements = JSON.stringify(eventData.requirements_json || []);
       reqBtn.dataset.submissions = JSON.stringify(eventData.submissions_json || []);
       reqBtn.dataset.summary = JSON.stringify(eventData.summary || {});
     }
 
+    // Keep Review Docs modal approve/reject in sync while open for this event.
+    const openEventId = proposalRequirementsEventId?.value || '';
+    if (
+      openEventId
+      && String(openEventId) === String(eventData.id || '')
+      && proposalRequirementsModal?.classList.contains('active')
+    ) {
+      proposalRequirementState.stage = eventData.proposal_stage || proposalRequirementState.stage;
+      proposalRequirementState.requirements = eventData.requirements_json || proposalRequirementState.requirements;
+      proposalRequirementState.submissions = eventData.submissions_json || proposalRequirementState.submissions;
+      proposalRequirementState.summary = eventData.summary || proposalRequirementState.summary;
+      const approveReadyInput = document.getElementById('proposalRequirementsApproveReady');
+      if (approveReadyInput) approveReadyInput.value = ready ? '1' : '0';
+      renderProposalProgress();
+      renderProposalUploads();
+      syncProposalReviewActions();
+    }
+
+    // Legacy card Approve buttons (if any remain elsewhere).
     const approveBtn = card.querySelector('.btnApprove');
     if (approveBtn && eventData.show_approve === false) {
       approveBtn.classList.add('hidden');
     } else if (approveBtn) {
       approveBtn.classList.remove('hidden');
-      const ready = !!eventData.approve_ready;
       approveBtn.disabled = !ready;
       approveBtn.dataset.approveReady = ready ? '1' : '0';
       approveBtn.classList.toggle('opacity-50', !ready);

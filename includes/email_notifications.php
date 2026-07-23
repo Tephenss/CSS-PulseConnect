@@ -442,6 +442,71 @@ function send_admin_login_verification_email(
     return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
 }
 
+function send_teacher_login_verification_email(
+    string $recipientEmail,
+    string $fullName,
+    string $code
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($fullName) !== '' ? trim($fullName) : 'Teacher';
+    $subject = 'CCS PulseConnect Teacher Login Verification Code';
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Use this verification code to complete your teacher login: {$code}\n\n"
+        . "This code expires in 5 minutes.\n"
+        . "If you did not attempt to log in, please ignore this email.";
+
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:0;background:#F4F4F5;font-family:Arial,sans-serif;color:#111827;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">'
+        . '<tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
+        . '<tr><td style="background:#111827;padding:20px 24px;">'
+        . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">CCS PulseConnect</h1>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Teacher Login Verification</p>'
+        . '</td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . '<p style="margin:0 0 10px 0;font-size:15px;line-height:1.6;color:#18181B;">Use the code below to complete your teacher login:</p>'
+        . '<div style="display:inline-block;padding:10px 16px;border-radius:10px;background:#111827;color:#FFFFFF;font-weight:700;font-size:24px;letter-spacing:4px;">' . htmlspecialchars($code, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<p style="margin:14px 0 0 0;font-size:13px;color:#52525B;">This code expires in <strong>5 minutes</strong>.</p>'
+        . '<p style="margin:8px 0 0 0;font-size:12px;color:#71717A;">If you did not attempt to log in, please ignore this email.</p>'
+        . '</td></tr></table>'
+        . '</td></tr></table>'
+        . '</body></html>';
+
+    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
+    $body = build_multipart_body($textMessage, $htmlMessage);
+
+    $smtpHost = trim((string) SMTP_HOST);
+    $smtpUser = trim((string) SMTP_USERNAME);
+    $smtpPass = (string) SMTP_PASSWORD;
+    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
+        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
+        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
+        $smtpFromName = trim((string) SMTP_FROM_NAME);
+        $smtpResult = smtp_send_mail(
+            $smtpHost,
+            $smtpPort,
+            $smtpEncryption,
+            $smtpUser,
+            $smtpPass,
+            EMAIL_SENDER_ADDRESS,
+            $smtpFromName,
+            $to,
+            $subject,
+            $body
+        );
+        if ($smtpResult) {
+            return true;
+        }
+    }
+
+    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+}
+
 function send_password_reset_code_email(
     string $recipientEmail,
     string $fullName,

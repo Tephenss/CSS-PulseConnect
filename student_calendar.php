@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -10,8 +11,8 @@ require_once __DIR__ . '/includes/layout.php';
 
 $user = require_role(['admin']);
 
-// Fetch only published events
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=eq.published&order=start_at.asc';
+// Show published + approved (ready to publish) events on the calendar
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=in.(published,approved)&order=start_at.asc';
 
 $headers = [
     'Accept: application/json',
@@ -32,7 +33,7 @@ render_header('Event Calendar', $user);
 <div class="mb-8 flex items-center justify-between">
   <div>
     <h2 class="text-xl font-bold text-zinc-900 mb-1">Student Calendar</h2>
-    <p class="text-zinc-600 text-sm">View and track all upcoming published school events.</p>
+    <p class="text-zinc-600 text-sm">View and track upcoming approved and published school events.</p>
   </div>
 </div>
 
@@ -148,11 +149,12 @@ render_header('Event Calendar', $user);
   }
   
   function getEventStyle(evt) {
-    const start = new Date(evt.start_at);
-    const end = evt.end_at ? new Date(evt.end_at) : null;
-    if (end && end < now) return 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50';
-    if (start <= now && (!end || end >= now)) return 'bg-emerald-100 text-emerald-900 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50';
-    return 'bg-orange-100 text-orange-900 border-orange-200 hover:border-orange-300 hover:bg-orange-50';
+    const status = String(evt.status || '').toLowerCase();
+    // Yellow = published, grey = not yet published
+    if (status === 'published') {
+      return 'bg-yellow-100 text-yellow-900 border-yellow-300 hover:border-yellow-400 hover:bg-yellow-50';
+    }
+    return 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:border-zinc-400 hover:bg-zinc-50';
   }
 
   function formatDateRange(startISO, endISO) {
@@ -231,7 +233,11 @@ render_header('Event Calendar', $user);
         
         // Tooltip logic
         evEl.addEventListener('mouseenter', (e) => {
-           document.getElementById('ttTitle').textContent = evt.title;
+           const status = String(evt.status || '').toLowerCase();
+           const statusLabel = status === 'published'
+             ? ' (Published)'
+             : (status === 'approved' ? ' (Ready to publish)' : '');
+           document.getElementById('ttTitle').textContent = evt.title + statusLabel;
            document.getElementById('ttDate').textContent = formatDateRange(evt.start_at, evt.end_at);
            if (evt.location) {
               document.getElementById('ttLoc').textContent = evt.location;

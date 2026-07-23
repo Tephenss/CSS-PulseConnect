@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -12,6 +13,7 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/student_requirements.php';
+require_once __DIR__ . '/includes/registration_access.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -40,7 +42,8 @@ $eventLookup = fetch_event_row_by_id(
         'Accept: application/json',
         'apikey: ' . SUPABASE_KEY,
         'Authorization: Bearer ' . SUPABASE_KEY,
-    ]
+    ],
+    'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration'
 );
 if (!$eventLookup['ok']) {
     $status = (int) ($eventLookup['status'] ?? 503);
@@ -77,9 +80,10 @@ if (!in_array($participantTab, ['participants', 'absence_reasons'], true)) {
 if ($role === 'teacher' && $participantTab === 'absence_reasons') {
     $participantTab = 'participants';
 }
-$backHref = $role === 'teacher' ? '/manage_events.php' : '/events.php';
+$backHref = event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null);
 $hasStudentRequirements = event_has_student_requirements($eventId, $headers);
-$isEventCreator = $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId;
+$isEventCreator = $role === 'admin' || ((string) ($event['created_by'] ?? '') === $userId);
+$isPaidEvent = !event_is_free_registration_event($event);
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
@@ -534,31 +538,24 @@ if ($usesSessions) {
 
     render_header('Participants', $user);
     ?>
-    <div class="mb-4">
-      <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
-        <div class="flex items-center gap-3">
-          <a href="<?= htmlspecialchars($backHref) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-            <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-          </a>
-          <div>
-            <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
-            <p class="text-sm text-zinc-500 mt-1">Seminar attendance is tracked per session.</p>
-          </div>
-        </div>
-      </div>
-
-      <?php
-      render_event_tabs([
-          'event_id' => $eventId,
-          'current_tab' => $participantTab === 'absence_reasons' ? 'absence_reasons' : 'participants',
-          'role' => $role,
-          'uses_sessions' => $usesSessions,
-          'event_status' => (string) ($event['status'] ?? ''),
-          'return_to' => $returnTo,
-          'has_student_requirements' => $hasStudentRequirements,
-          'is_event_creator' => $isEventCreator,
-      ]);
-      ?>
+    <?php
+    render_event_page_header([
+        'back_href' => $backHref,
+        'title' => (string) ($event['title'] ?? ''),
+        'subtitle' => 'Seminar attendance is tracked per session.',
+    ]);
+    render_event_tabs([
+        'event_id' => $eventId,
+        'current_tab' => $participantTab === 'absence_reasons' ? 'absence_reasons' : 'participants',
+        'role' => $role,
+        'uses_sessions' => $usesSessions,
+        'event_status' => (string) ($event['status'] ?? ''),
+        'return_to' => $returnTo,
+        'has_student_requirements' => $hasStudentRequirements,
+        'is_event_creator' => $isEventCreator,
+        'is_paid_event' => $isPaidEvent,
+    ]);
+    ?>
 
       <?php if ($participantTab === 'participants'): ?>
         <div class="grid grid-cols-1 md:grid-cols-<?= max(1, min(4, count($sessions))) ?> gap-4 mb-6">
@@ -831,7 +828,7 @@ if (!$usesSessions) {
 
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-    . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),'
+    . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,photo_url,sections(name)),'
     . 'tickets(id,token,attendance(id,check_in_at,status,last_scanned_at))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
@@ -1287,29 +1284,20 @@ if ($eventWindowClosed) {
 }
 
 render_header('Participants', $user);
-?>
 
-<div class="mb-4">
-  <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
-    <div class="flex items-center gap-3">
-      <a href="<?= htmlspecialchars($backHref) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-        <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-      </a>
-      <div>
-        <h2 class="text-xl md:text-2xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars((string) ($event['title'] ?? 'Event')) ?></h2>
-        <p class="text-sm text-zinc-500 mt-1">Participant directory and real-time attendance tracking.</p>
-      </div>
-    </div>
-    <div class="flex flex-wrap items-center gap-2.5">
-    <a href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&export=excel<?= htmlspecialchars($returnToQuery) ?>" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">
-      <svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
-      Export Excel
-    </a>
-    </div>
-  </div>
-</div>
+$exportExcelHtml = '<a href="/participants.php?event_id=' . htmlspecialchars($eventId)
+    . '&export=excel' . htmlspecialchars($returnToQuery)
+    . '" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">'
+    . '<svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>'
+    . 'Export Excel</a>';
 
-<?php
+render_event_page_header([
+    'back_href' => $backHref,
+    'title' => (string) ($event['title'] ?? 'Event'),
+    'subtitle' => 'Participant directory and real-time attendance tracking.',
+    'actions_html' => $exportExcelHtml,
+]);
+
 render_event_tabs([
     'event_id' => $eventId,
     'current_tab' => $participantTab === 'absence_reasons' ? 'absence_reasons' : 'participants',
@@ -1320,6 +1308,7 @@ render_event_tabs([
     'return_to' => $returnTo,
     'has_student_requirements' => $hasStudentRequirements,
     'is_event_creator' => $isEventCreator,
+    'is_paid_event' => $isPaidEvent,
 ]);
 ?>
 
@@ -1358,139 +1347,363 @@ render_event_tabs([
   </div>
 </div>
 
-<div class="pb-10 relative">
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-    <?php if (count($rows) === 0): ?>
-      <div class="col-span-full rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 py-16 flex flex-col items-center justify-center pointer-events-none">
-        <svg class="w-10 h-10 text-zinc-400 mb-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
-        <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
+
+<style>
+.pc-card, .pc-card * {
+  box-sizing: border-box;
+}
+
+.pc-card {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-width: 280px;
+  background: white;
+  border-radius: 28px;
+  padding: 3px;
+  position: relative;
+  box-shadow: #60747430 0px 50px 24px -36px;
+  transition: all 0.5s ease-in-out;
+  overflow: hidden;
+  cursor: default;
+}
+
+.pc-card .profile-pic {
+  position: absolute;
+  width: calc(100% - 6px);
+  height: calc(100% - 6px);
+  top: 3px;
+  left: 3px;
+  border-radius: 25px;
+  z-index: 1;
+  border: 0px solid #f97316;
+  overflow: hidden;
+  transition: all 0.5s ease-in-out 0.2s, z-index 0.5s ease-in-out 0.2s;
+  background: #fff7ed;
+}
+
+.pc-card .profile-pic img {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  object-position: center top;
+  transition: all 0.5s ease-in-out 0s;
+}
+
+.pc-card .profile-initials {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  font-weight: 900;
+  color: #ea580c;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  transition: all 0.5s ease-in-out 0s;
+  user-select: none;
+}
+
+.pc-card .bottom {
+  position: absolute;
+  bottom: 3px;
+  left: 3px;
+  right: 3px;
+  background: linear-gradient(135deg, #c2410c 0%, #ea580c 60%, #f97316 100%);
+  top: 61%;
+  border-radius: 22px;
+  z-index: 2;
+  box-shadow: rgba(234, 88, 12, 0.22) 0px 5px 5px 0px inset;
+  overflow: hidden;
+  transition: all 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) 0s;
+  padding: 12px 14px 20px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+.pc-card .bottom .bottom-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+  transition: padding-left 0.5s ease-in-out;
+}
+
+.pc-card:hover .bottom .bottom-header {
+  padding-left: 88px;
+}
+
+.pc-card .bottom .pname {
+  display: block;
+  font-size: 0.95rem;
+  color: white;
+  font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.18);
+}
+
+.pc-card .bottom .psubtitle {
+  display: block;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.pc-card .bottom .pdetails-hover {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: all 0.4s ease-in-out;
+  margin-top: 8px;
+  visibility: hidden;
+  max-height: 0;
+  overflow: hidden;
+}
+
+.pc-card:hover .bottom .pdetails-hover {
+  visibility: visible;
+  max-height: 200px;
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.15s;
+  /* Add top margin to clear the 90px circular avatar fully */
+  margin-top: 14px;
+}
+
+.pc-card .bottom .pinfo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pc-card .bottom .pinfo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: rgba(255,255,255,0.92);
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.22);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-card .bottom .bottom-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.pc-card .bottom .att-badge {
+  font-size: 0.6rem;
+  font-weight: 800;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pc-card .bottom .admin-btns {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.pc-card .bottom .admin-btns button {
+  background: rgba(255,255,255,0.18);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 14px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.pc-card .bottom .admin-btns button:hover {
+  background: rgba(255,255,255,0.32);
+}
+
+.pc-card:hover {
+  border-top-left-radius: 50px;
+}
+
+.pc-card:hover .bottom {
+  top: 22%;
+  border-radius: 40px 22px 22px 22px;
+  transition: all 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) 0.2s;
+}
+
+.pc-card:hover .profile-pic {
+  width: 90px;
+  height: 90px;
+  top: 10px;
+  left: 10px;
+  border-radius: 50%;
+  z-index: 3;
+  border: 6px solid #f97316;
+  box-shadow: rgba(234, 88, 12, 0.25) 0px 5px 12px 0px;
+  transition: all 0.5s ease-in-out, z-index 0.5s ease-in-out 0.1s;
+}
+
+.pc-card:hover .profile-pic img,
+.pc-card:hover .profile-initials {
+  transition: all 0.5s ease-in-out 0.4s;
+}
+
+.pc-card:hover .profile-initials {
+  font-size: 2rem;
+}
+
+/* ── Attendance status colours in the bottom panel ───────────────────── */
+.att-present  { background: #d1fae5; color: #065f46; }
+.att-absent   { background: #fee2e2; color: #991b1b; }
+.att-late     { background: #fef3c7; color: #92400e; }
+.att-early    { background: #e0f2fe; color: #075985; }
+.att-unscanned{ background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); }
+</style>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 pb-10 justify-items-center">
+  <?php if (count($rows) === 0): ?>
+    <div class="col-span-full rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 py-16 flex flex-col items-center justify-center pointer-events-none">
+      <svg class="w-10 h-10 text-zinc-400 mb-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+      <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
+    </div>
+  <?php endif; ?>
+
+  <?php foreach ($rows as $r): ?>
+    <?php
+      $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+      $nameParts = [];
+      foreach (['first_name','middle_name','last_name'] as $k) {
+          $v = trim((string) ($u[$k] ?? ''));
+          if ($v !== '') $nameParts[] = $v;
+      }
+      $name = implode(' ', $nameParts);
+      $suffix = trim((string) ($u['suffix'] ?? ''));
+      if ($suffix !== '') $name .= ', ' . $suffix;
+
+      $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
+      $ticket  = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+      $token   = (string) ($ticket['token'] ?? '');
+
+      $attendance = null;
+      if (isset($ticket['attendance'])) {
+          $atts = $ticket['attendance'];
+          if (is_array($atts)) {
+              $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
+          }
+      }
+
+      $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
+      $attStatus  = is_array($attendance) ? ($attendance['status'] ?? '') : '';
+      if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
+          $attStatus = 'absent';
+      }
+      $registrationId = (string) ($r['id'] ?? '');
+
+      // Initials fallback
+      $initials = '';
+      foreach ($nameParts as $p) { $initials .= mb_strtoupper(mb_substr($p, 0, 1)); if (mb_strlen($initials) >= 2) break; }
+      if (mb_strlen($initials) === 0) $initials = '?';
+
+      // Check-in time
+      $checkInFormat = '—';
+      if ($checkInRaw) {
+          try {
+              $checkInLocal = $toLocalDt((string) $checkInRaw);
+              if ($checkInLocal) $checkInFormat = $checkInLocal->format('M d, g:i A');
+          } catch (Throwable $e) {}
+      }
+
+      $sec     = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+      $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
+      $yearLvl = 'N/A';
+      if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
+          $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
+      } else if (preg_match('/([1-4])/', trim($secName), $m)) {
+          $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
+      }
+
+      $attStatusNorm = strtolower(trim((string)$attStatus));
+      $attBadgeClass = match($attStatusNorm) {
+          'present','scanned','completed' => 'att-present',
+          'absent'  => 'att-absent',
+          'late'    => 'att-late',
+          'early'   => 'att-early',
+          default   => 'att-unscanned',
+      };
+      $attLabel = $attStatusNorm !== '' ? ucfirst($attStatusNorm) : 'Unscanned';
+
+      $avatarUrl = trim((string) ($u['photo_url'] ?? ''));
+      $studentId = (string) ($u['student_id'] ?? 'N/A');
+      $email     = (string) ($u['email'] ?? '');
+      $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName);
+    ?>
+    <div class="pc-card participant-card"
+         data-search="<?= htmlspecialchars($searchStr) ?>">
+
+      <!-- Profile picture / initials -->
+      <div class="profile-pic">
+        <?php if ($avatarUrl !== ''): ?>
+          <img src="<?= htmlspecialchars($avatarUrl) ?>" alt="<?= htmlspecialchars($name) ?>" loading="lazy">
+        <?php else: ?>
+          <div class="profile-initials"><?= htmlspecialchars($initials) ?></div>
+        <?php endif; ?>
       </div>
-    <?php endif; ?>
 
-    <?php foreach ($rows as $r): ?>
-      <?php
-        $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
-        $nameParts = [];
-        foreach (['first_name','middle_name','last_name'] as $k) {
-            $v = trim((string) ($u[$k] ?? ''));
-            if ($v !== '') $nameParts[] = $v;
-        }
-        $name = implode(' ', $nameParts);
-        $suffix = trim((string) ($u['suffix'] ?? ''));
-        if ($suffix !== '') $name .= ', ' . $suffix;
+      <!-- Slide-up info panel -->
+      <div class="bottom">
+        <!-- Always visible name, student number, and section/course -->
+        <div class="bottom-header">
+          <span class="pname" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name ?: 'Unnamed') ?></span>
+          <span class="psubtitle">#<?= htmlspecialchars($studentId) ?> • <?= htmlspecialchars($secName) ?></span>
+        </div>
 
-        $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
-        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
-        $token = (string) ($ticket['token'] ?? '');
-
-        $attendance = null;
-        if (isset($ticket['attendance'])) {
-            $atts = $ticket['attendance'];
-            if (is_array($atts)) {
-                $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
-            }
-        }
-        
-        $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-        $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
-        if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
-            $attStatus = 'absent';
-        }
-        $registrationId = (string) ($r['id'] ?? '');
-
-        // Generate Initials
-        $initials = '';
-        foreach ($nameParts as $p) { $initials .= mb_strtoupper(mb_substr($p, 0, 1)); if (mb_strlen($initials) >= 2) break; }
-        if (mb_strlen($initials)===0) $initials = '?';
-
-        // Format times
-        $checkInFormat = '—';
-        if ($checkInRaw) {
-           try {
-               $checkInLocal = $toLocalDt((string) $checkInRaw);
-               if ($checkInLocal) $checkInFormat = $checkInLocal->format('M d, g:i A');
-           } catch (Throwable $e) {}
-        }
-        $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
-        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
-        $yearLvl = 'N/A';
-        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
-            $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
-        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
-            $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
-        }
-
-        $attStatusColor = match((string)$attStatus) {
-            'present' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
-            'absent' => 'bg-rose-100 text-rose-900 border-rose-200',
-            'late' => 'bg-amber-100 text-amber-900 border-amber-200',
-            'early' => 'bg-sky-100 text-sky-900 border-sky-200',
-            default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
-        };
-      ?>
-      <div class="participant-card group relative rounded-2xl bg-white border border-zinc-200 p-5 shadow-sm hover:border-orange-200 hover:shadow-md transition-all flex flex-col justify-between"
-           data-search="<?= htmlspecialchars(strtolower($name . ' ' . (string)($u['email'] ?? '') . ' ' . (string)($u['student_id'] ?? '') . ' ' . $secName)) ?>">
-        
-        <div class="flex items-start gap-4 mb-5 relative z-10 w-full overflow-hidden">
-          <div class="w-12 h-12 rounded-2xl bg-orange-100 border border-orange-200 flex items-center justify-center text-orange-800 text-base font-bold flex-shrink-0">
-             <?= htmlspecialchars($initials) ?>
+        <!-- Extra details revealed on hover -->
+        <div class="pdetails-hover">
+          <div class="pinfo">
+            <span class="pinfo-badge" title="<?= htmlspecialchars($email) ?>">
+              ✉ <?= htmlspecialchars($email ?: '—') ?>
+            </span>
+            <span class="pinfo-badge">🏛 <?= htmlspecialchars($secName) ?></span>
+            <span class="pinfo-badge">📅 <?= htmlspecialchars($yearLvl) ?></span>
+            <span class="pinfo-badge">⏰ <?= htmlspecialchars($checkInFormat) ?></span>
           </div>
-          <div class="min-w-0 flex-1">
-            <h4 class="text-base font-bold text-zinc-900 tracking-wide truncate pr-2" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name) ?></h4>
-            <p class="text-[11px] font-medium text-zinc-600 truncate mt-0.5 mb-1" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)($u['email'] ?? '')) ?></p>
-            
-            <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
-                <p class="text-[10px] font-mono font-bold text-orange-600 truncate bg-orange-50 w-fit px-1.5 py-0.5 rounded-md border border-orange-100">#<?= htmlspecialchars((string)($u['student_id'] ?? 'N/A')) ?></p>
-                <div class="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-zinc-50 border border-zinc-100 text-[10px] font-bold text-zinc-600">
-                    <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
-                    <?= htmlspecialchars($secName) ?>
-                </div>
-                <div class="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 border border-blue-100 text-[10px] font-bold text-blue-600">
-                    <svg class="w-3 h-3 text-blue-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/></svg>
-                    <?= htmlspecialchars($yearLvl) ?>
-                </div>
+        </div>
+
+        <div class="bottom-bottom">
+          <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
+          <?php if ($role === 'admin'): ?>
+            <div class="admin-btns">
+              <button class="btnResetAttendance" data-id="<?= htmlspecialchars($registrationId) ?>" title="Reset attendance">↺ Reset</button>
+              <button class="btnRemove" data-id="<?= htmlspecialchars($registrationId) ?>" title="Remove participant">✕ Remove</button>
             </div>
-            
-            <?php if ((string)$attStatus !== ''): ?>
-              <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border <?= $attStatusColor ?>">
-                 <span class="text-[10px] font-bold uppercase tracking-wider truncate"><?= htmlspecialchars((string) $attStatus) ?></span>
-              </div>
-            <?php else: ?>
-               <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-zinc-200 bg-zinc-50">
-                 <span class="text-[10px] font-bold text-zinc-600 uppercase tracking-wider truncate">Unscanned</span>
-               </div>
-            <?php endif; ?>
-          </div>
-        </div>
-
-        <div class="mt-auto pt-4 border-t border-zinc-200 flex flex-col gap-2.5 relative z-10">
-           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
-              <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                 <div class="w-2 h-2 rounded-full bg-sky-500"></div> Check-In
-              </span>
-              <span class="text-xs font-semibold text-zinc-900"><?= $checkInFormat ?></span>
-           </div>
-           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 mt-2 border-t border-zinc-100 pt-3">
-              <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                 <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a2.999 2.999 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a2.999 2.999 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg> Token
-              </span>
-              <span class="font-mono text-[11px] text-zinc-600 truncate max-w-[150px]"><?= htmlspecialchars($token) ?></span>
-           </div>
-            
-           <?php if ($role === 'admin'): ?>
-              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button class="btnResetAttendance w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
-                  Reset Attendance
-                </button>
-                <button class="btnRemove w-full rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800 hover:bg-red-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
-                  Remove Participant
-                </button>
-              </div>
-           <?php endif; ?>
+          <?php endif; ?>
         </div>
       </div>
-    <?php endforeach; ?>
-  </div>
+    </div>
+  <?php endforeach; ?>
 </div>
 <?php else: ?>
 <?php if (!$absenceReasonTableAvailable): ?>

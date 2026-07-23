@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -12,12 +13,7 @@ require_once __DIR__ . '/includes/helpers.php';
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
 
-if ($role === 'teacher') {
-  header('Location: /manage_events.php');
-  exit;
-}
-
-$select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type';
+$select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type,cover_image_url';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
 $url = $base . '&or=(status.eq.published,status.eq.finished)&limit=200';
 
@@ -91,27 +87,41 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
 
   $for = (string) ($e['event_for'] ?? 'All');
   $targetLabel = format_target_participant($for);
+  $coverUrl = trim((string) ($e['cover_image_url'] ?? ''));
   ?>
   <a href="/event_view.php?id=<?= htmlspecialchars((string) ($e['id'] ?? '')) ?>"
-    class="group relative block rounded-2xl border border-zinc-200 bg-white p-6 border-b-[3px] shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 <?= $statusConfig['accent'] ?>">
-    <div class="relative z-10 flex flex-col h-full">
+    class="pc-event-card group relative flex flex-col overflow-hidden border border-zinc-200 bg-white border-b-[3px] shadow-sm hover:shadow-md <?= $statusConfig['accent'] ?>">
+    <?php if ($coverUrl !== ''): ?>
+      <div class="pc-event-card-cover relative aspect-[16/9] shrink-0 bg-zinc-100">
+        <img src="<?= htmlspecialchars($coverUrl) ?>" alt=""
+          class="h-full w-full object-cover" loading="lazy"
+          decoding="async" />
+        <div class="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent"></div>
+        <span
+          class="absolute right-3 top-3 text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 backdrop-blur-sm <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
+          <?= htmlspecialchars($status) ?>
+        </span>
+      </div>
+    <?php endif; ?>
+    <div class="relative z-10 flex flex-col gap-4 p-5">
       <div>
-        <div class="flex items-start justify-between gap-4 mb-4">
-          <h4
-            class="text-sm font-bold tracking-tight text-zinc-900 group-hover:text-orange-900 transition-colors line-clamp-2">
+        <div class="flex items-start justify-between gap-4 mb-2">
+          <h4 class="pc-shiny-title pc-shiny-title--on-light text-sm font-bold tracking-tight line-clamp-2">
             <?= htmlspecialchars((string) ($e['title'] ?? 'Event')) ?></h4>
-          <span
-            class="text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 flex-shrink-0 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
-            <?= htmlspecialchars($status) ?>
-          </span>
+          <?php if ($coverUrl === ''): ?>
+            <span
+              class="text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 flex-shrink-0 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
+              <?= htmlspecialchars($status) ?>
+            </span>
+          <?php endif; ?>
         </div>
 
-        <p class="text-xs text-zinc-600 line-clamp-2 mb-5 min-h-[32px] leading-relaxed">
+        <p class="text-xs text-zinc-600 line-clamp-2 leading-relaxed">
           <?= htmlspecialchars((string) ($e['description'] ?? 'No description provided for this event.')) ?>
         </p>
       </div>
 
-      <div class="mt-auto space-y-2.5">
+      <div class="space-y-2.5">
         <div class="flex items-center gap-2.5 text-xs font-medium text-zinc-800">
           <div
             class="w-7 h-7 rounded-full bg-orange-50 flex items-center justify-center flex-shrink-0 border border-orange-100">
@@ -135,7 +145,7 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
           <span class="truncate"><?= htmlspecialchars((string) ($e['location'] ?? 'Location TBA')) ?></span>
         </div>
 
-        <div class="flex items-center gap-2 pt-3 border-t border-zinc-100 mt-1">
+        <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-zinc-100">
           <span
             class="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-1 rounded-md">
             <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -165,13 +175,170 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
 render_header('Events', $user);
 ?>
 
-<div class="mb-6 flex items-center justify-between">
-  <div>
-    <h2 class="text-xl font-bold text-zinc-900 mb-1">Explore Events</h2>
-    <p class="text-zinc-600 text-sm">Browse published events and review finished ones without sending them straight to
-      archive.</p>
+<style>
+  .events-hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    border: 1px solid rgba(120, 53, 15, 0.12);
+    background:
+      radial-gradient(ellipse 80% 70% at 90% 20%, rgba(249, 115, 22, 0.14), transparent 55%),
+      radial-gradient(ellipse 60% 50% at 10% 90%, rgba(127, 29, 29, 0.1), transparent 50%),
+      linear-gradient(145deg, #fffaf5 0%, #ffffff 45%, #faf7f4 100%);
+    padding: 1.5rem 1.5rem 1.35rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .events-hero-copy {
+    position: relative;
+    z-index: 1;
+    max-width: 36rem;
+  }
+
+  .events-cube-wrap {
+    display: none;
+  }
+
+  @media (min-width: 900px) {
+    .events-hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+      padding: 1.75rem 2rem;
+      min-height: 220px;
+    }
+
+    .events-cube-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 220px;
+      height: 220px;
+      perspective: 800px;
+    }
+  }
+
+  .events-cube-container {
+    width: 140px;
+    height: 140px;
+    perspective: 800px;
+    transition: transform 0.7s ease-out;
+  }
+
+  .events-cube-container:hover {
+    transform: scale(1.18);
+  }
+
+  .events-cube {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform-style: preserve-3d;
+    animation: eventsCubeSpin 10s infinite linear;
+  }
+
+  .events-cube-face {
+    --pulse-edge: linear-gradient(
+        115deg,
+        #7f1d1d,
+        #ea580c,
+        #fbbf24,
+        #ea580c,
+        #7f1d1d
+      )
+      1;
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 140px;
+    height: 140px;
+    padding: 0.5rem;
+    color: #fff7ed;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-align: center;
+    line-height: 1.25;
+    background: #1c0a0acc;
+    border: 2px solid;
+    border-image: var(--pulse-edge);
+    backface-visibility: hidden;
+  }
+
+  .events-cube-face span {
+    max-width: 100%;
+  }
+
+  .events-cube-front {
+    transform: translateZ(70px);
+  }
+
+  .events-cube-back {
+    transform: rotateY(180deg) translateZ(70px);
+  }
+
+  .events-cube-right {
+    transform: rotateY(90deg) translateZ(70px);
+  }
+
+  .events-cube-left {
+    transform: rotateY(-90deg) translateZ(70px);
+  }
+
+  .events-cube-top {
+    transform: rotateX(90deg) translateZ(70px);
+  }
+
+  .events-cube-bottom {
+    transform: rotateX(-90deg) translateZ(70px);
+  }
+
+  @keyframes eventsCubeSpin {
+    0% {
+      transform: rotateX(0) rotateY(0) rotateZ(0);
+    }
+
+    100% {
+      transform: rotateX(360deg) rotateY(360deg) rotateZ(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .events-cube {
+      animation: none;
+      transform: rotateX(-18deg) rotateY(32deg);
+    }
+
+    .events-cube-container:hover {
+      transform: none;
+    }
+  }
+</style>
+
+<div class="events-hero">
+  <div class="events-hero-copy">
+    <p class="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-orange-700/80">PulseConnect · CCS</p>
+    <h2 class="text-2xl font-bold text-zinc-900 mb-2 tracking-tight">Explore Events</h2>
+    <p class="text-zinc-600 text-sm leading-relaxed max-w-lg">Browse published campus events and review finished ones
+      without sending them straight to archive.</p>
+  </div>
+  <div class="events-cube-wrap" aria-hidden="true">
+    <div class="events-cube-container">
+      <div class="events-cube">
+        <div class="events-cube-face events-cube-front"><span>PulseConnect</span></div>
+        <div class="events-cube-face events-cube-back"><span>Stay Linked</span></div>
+        <div class="events-cube-face events-cube-right"><span>CCS Events</span></div>
+        <div class="events-cube-face events-cube-left"><span>Register</span></div>
+        <div class="events-cube-face events-cube-top"><span>Attend</span></div>
+        <div class="events-cube-face events-cube-bottom"><span>Engage</span></div>
+      </div>
+    </div>
   </div>
 </div>
+
 <div class="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm w-fit">
   <button type="button" id="tabPublished"
     class="event-tab-btn rounded-xl bg-orange-600 px-4 py-2 text-sm font-bold text-white shadow-sm">

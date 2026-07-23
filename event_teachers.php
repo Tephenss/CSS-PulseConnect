@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -11,6 +12,8 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
+require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/student_requirements.php';
 
 $user = require_role(['admin']);
 $eventId = isset($_GET['event_id']) ? trim((string) $_GET['event_id']) : '';
@@ -37,7 +40,7 @@ $writeHeaders = [
 function load_qr_event(string $eventId, array $headers): ?array
 {
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,title,status,start_at,end_at,location,created_by,users:created_by(first_name,last_name,suffix)'
+        . '?select=id,title,status,start_at,end_at,location,created_by,is_free_event,users:created_by(first_name,last_name,suffix)'
         . '&id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $res = supabase_request('GET', $url, $headers);
@@ -447,9 +450,9 @@ render_header('QR Scanner Assignment', $user);
     <!-- Standard Header Row (Aligned with event_view.php) -->
     <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
         <div class="flex items-center gap-3">
-            <a href="/events.php" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-                <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-            </a>
+            <?= render_event_back_button(
+                event_management_return_to('admin', isset($_GET['return_to']) ? (string) $_GET['return_to'] : null)
+            ) ?>
             <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
             <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars($status) ?></span>
         </div>
@@ -464,6 +467,10 @@ render_header('QR Scanner Assignment', $user);
         'role' => 'admin',
         'uses_sessions' => $usesSessions,
         'event_status' => $status,
+        'return_to' => event_management_return_to('admin', isset($_GET['return_to']) ? (string) $_GET['return_to'] : null),
+        'has_student_requirements' => event_has_student_requirements($eventId, $headers),
+        'is_event_creator' => true,
+        'is_paid_event' => !event_is_free_registration_event($event),
     ]);
     ?>
 

@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/../includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
@@ -138,6 +139,11 @@ if (!is_array($event)) {
 if (!can_import_registration_access($event, $user)) {
     json_response(['ok' => false, 'error' => 'Forbidden'], 403);
 }
+
+json_response([
+    'ok' => false,
+    'error' => 'Excel paid-list import is no longer used. Open the Payments tab to record student payments.',
+], 410);
 
 if (strtolower(trim((string) ($event['status'] ?? ''))) !== 'published') {
     json_response(['ok' => false, 'error' => 'Publish the event first before importing registration approvals.'], 409);

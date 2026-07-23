@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -9,6 +10,8 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
+require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/student_requirements.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -29,7 +32,7 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by&id=eq.' . rawurlencode($eventId) . '&limit=1';
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,is_free_event&id=eq.' . rawurlencode($eventId) . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
 $eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : [];
 $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
@@ -574,9 +577,7 @@ render_header('Evaluation Management', $user);
 <div class="mb-4">
   <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
     <div class="flex items-center gap-3">
-      <a href="/events.php" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-        <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-      </a>
+      <?= render_event_back_button(event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null)) ?>
       <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
       <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars((string) ($event['status'] ?? '')) ?></span>
     </div>
@@ -589,6 +590,10 @@ render_header('Evaluation Management', $user);
       'role' => $role,
       'uses_sessions' => $usesSessions,
       'event_status' => (string) ($event['status'] ?? ''),
+      'return_to' => event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null),
+      'has_student_requirements' => event_has_student_requirements($eventId, $headers),
+      'is_event_creator' => $role === 'admin' || ((string) ($event['created_by'] ?? '') === (string) ($user['id'] ?? '')),
+      'is_paid_event' => !event_is_free_registration_event($event),
   ]);
   ?>
 

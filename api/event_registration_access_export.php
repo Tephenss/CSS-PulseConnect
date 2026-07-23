@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/../includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
@@ -55,6 +56,12 @@ if (!can_export_registration_access($event, $user)) {
     echo 'Forbidden';
     exit;
 }
+
+// Excel controlled-registration export is replaced by the Payments tab.
+http_response_code(410);
+header('Content-Type: text/plain; charset=utf-8');
+echo 'Excel paid-list export is no longer used. Open the Payments tab to record student payments.';
+exit;
 
 $targetStudents = fetch_target_students_for_event($event, $headers);
 $accessRows = build_event_registration_access_map(

@@ -1,0 +1,15 @@
+# API endpoints are PHP-only. Block accidental credential / dump downloads.
+Options -Indexes
+
+<IfModule mod_authz_core.c>
+  <FilesMatch "(?i)\.(json|sql|md|log|bak|env|ini| Dist|yml|yaml)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+  <FilesMatch "(?i)\.(json|sql|md|log|bak|env|ini| Dist|yml|yaml)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>

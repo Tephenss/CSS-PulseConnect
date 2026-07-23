@@ -59,16 +59,8 @@ function event_is_free_registration_event(array $event): bool
 
 function event_registration_open_to_all(array $event): bool
 {
-    if (event_allows_open_registration($event)) {
-        return true;
-    }
-
-    if (!event_is_free_registration_event($event)) {
-        return false;
-    }
-
-    $status = strtolower(trim((string) ($event['status'] ?? '')));
-    return $status === 'published';
+    // Driven only by the Allow Registration toggle (set true for free events on publish).
+    return event_allows_open_registration($event);
 }
 
 function normalize_registration_limit(mixed $value): ?int
@@ -88,6 +80,41 @@ function normalize_registration_limit(mixed $value): ?int
 function event_registration_limit(array $event): ?int
 {
     return normalize_registration_limit($event['registration_limit'] ?? null);
+}
+
+function normalize_event_fee(mixed $value): ?float
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    if (is_string($value)) {
+        $value = str_replace([',', ' '], '', trim($value));
+    }
+
+    if (!is_numeric($value)) {
+        return null;
+    }
+
+    $fee = round((float) $value, 2);
+    if ($fee < 0 || $fee > 9999999.99) {
+        return null;
+    }
+
+    return $fee;
+}
+
+function event_settlement_fee(array $event): ?float
+{
+    return normalize_event_fee($event['event_fee'] ?? null);
+}
+
+function format_event_fee_php(?float $fee): string
+{
+    if ($fee === null) {
+        return '';
+    }
+    return '₱' . number_format($fee, 2);
 }
 
 function format_event_registration_total(int $count, array $event): string
@@ -110,9 +137,48 @@ function normalize_registration_close_weeks(mixed $value): ?int
     return ($weeks >= 1 && $weeks <= 4) ? $weeks : null;
 }
 
+function normalize_registration_close_extend_days(mixed $value): int
+{
+    if ($value === null || $value === '') {
+        return 0;
+    }
+
+    $days = (int) $value;
+    return ($days >= 0 && $days <= 3) ? $days : 0;
+}
+
 function event_registration_close_weeks(array $event): ?int
 {
     return normalize_registration_close_weeks($event['registration_close_weeks'] ?? null);
+}
+
+/**
+ * Largest close-weeks value (0–4) whose close date is still on/after today.
+ * 0 means the start is less than 1 week away (no weeks-based close option).
+ */
+function max_registration_close_weeks_for_start(
+    DateTimeInterface $startAt,
+    ?DateTimeInterface $now = null
+): int {
+    $manila = new DateTimeZone('Asia/Manila');
+    $startDay = DateTimeImmutable::createFromInterface($startAt)
+        ->setTimezone($manila)
+        ->modify('today');
+    $today = $now !== null
+        ? DateTimeImmutable::createFromInterface($now)->setTimezone($manila)->modify('today')
+        : new DateTimeImmutable('today', $manila);
+
+    $diffDays = (int) floor(($startDay->getTimestamp() - $today->getTimestamp()) / 86400);
+    if ($diffDays < 7) {
+        return 0;
+    }
+
+    return min(4, intdiv($diffDays, 7));
+}
+
+function event_registration_close_extend_days(array $event): int
+{
+    return normalize_registration_close_extend_days($event['registration_close_extend_days'] ?? 0);
 }
 
 function event_registration_last_day(array $event): ?DateTimeImmutable
@@ -136,8 +202,13 @@ function event_registration_last_day(array $event): ?DateTimeImmutable
     $manila = new DateTimeZone('Asia/Manila');
     $startInManila = $start->setTimezone($manila);
     $startDate = new DateTimeImmutable($startInManila->format('Y-m-d'), $manila);
+    $baseLastDay = $startDate->modify('-' . $weeks . ' weeks');
+    $extendDays = event_registration_close_extend_days($event);
+    if ($extendDays > 0) {
+        return $baseLastDay->modify('+' . $extendDays . ' days');
+    }
 
-    return $startDate->modify('-' . $weeks . ' weeks');
+    return $baseLastDay;
 }
 
 function is_event_registration_window_closed(array $event, ?DateTimeInterface $now = null): bool
@@ -232,16 +303,34 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
         . '?id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $selectWithColumn = $baseUrl
-        . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count';
+        . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registration_close_extend_days,registered_count,cover_image_url';
     $res = supabase_request('GET', $selectWithColumn, $headers);
 
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-        if (registration_access_missing_column_message($message, 'allow_registration')
+        if (registration_access_missing_column_message($message, 'registration_close_extend_days')) {
+            $selectWithColumn = $baseUrl
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registered_count,cover_image_url';
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
+        if (!$res['ok'] && registration_access_missing_column_message($message, 'event_fee')) {
+            $selectWithColumn = $baseUrl
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count,cover_image_url';
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
+        if (!$res['ok'] && registration_access_missing_column_message($message, 'cover_image_url')) {
+            $selectWithColumn = $baseUrl
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count';
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
+        if (!$res['ok'] && (registration_access_missing_column_message($message, 'allow_registration')
             || registration_access_missing_column_message($message, 'is_free_event')
             || registration_access_missing_column_message($message, 'registration_limit')
             || registration_access_missing_column_message($message, 'registration_close_weeks')
-            || registration_access_missing_column_message($message, 'registered_count')) {
+            || registration_access_missing_column_message($message, 'registered_count'))) {
             $fallbackUrl = $baseUrl
                 . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration';
             $res = supabase_request('GET', $fallbackUrl, $headers);
@@ -258,7 +347,7 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
                     return null;
                 }
             }
-        } else {
+        } elseif (!$res['ok']) {
             return null;
         }
     }
@@ -275,11 +364,17 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
     if (!array_key_exists('is_free_event', $event)) {
         $event['is_free_event'] = true;
     }
+    if (!array_key_exists('event_fee', $event)) {
+        $event['event_fee'] = null;
+    }
     if (!array_key_exists('registration_limit', $event)) {
         $event['registration_limit'] = null;
     }
     if (!array_key_exists('registration_close_weeks', $event)) {
         $event['registration_close_weeks'] = null;
+    }
+    if (!array_key_exists('registration_close_extend_days', $event)) {
+        $event['registration_close_extend_days'] = 0;
     }
     if (!array_key_exists('registered_count', $event)) {
         $event['registered_count'] = fetch_event_registration_count((string) ($event['id'] ?? ''), $headers, $event);
@@ -338,7 +433,7 @@ function fetch_target_students_for_event(array $event, array $headers): array
 function fetch_event_registration_access_rows(string $eventId, array $headers): array
 {
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registration_access'
-        . '?select=student_id,approved,payment_status,payment_note,updated_at'
+        . '?select=student_id,approved,payment_status,payment_note,amount_paid,updated_at'
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&limit=100000';
 
@@ -347,6 +442,17 @@ function fetch_event_registration_access_rows(string $eventId, array $headers): 
         $message = (string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? '');
         if (registration_access_missing_table_message($message)) {
             return [];
+        }
+        if (registration_access_missing_column_message($message, 'amount_paid')) {
+            $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registration_access'
+                . '?select=student_id,approved,payment_status,payment_note,updated_at'
+                . '&event_id=eq.' . rawurlencode($eventId)
+                . '&limit=100000';
+            $fallback = supabase_request('GET', $fallbackUrl, $headers);
+            if ($fallback['ok']) {
+                $rows = json_decode((string) $fallback['body'], true);
+                return is_array($rows) ? $rows : [];
+            }
         }
         return [];
     }
@@ -490,6 +596,88 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
     }
 
     $studentId = trim((string) ($studentRow['id'] ?? ''));
+    $isPaidEvent = !event_is_free_registration_event($event);
+    $controlled = !event_registration_open_to_all($event);
+
+    // Free event with Allow Registration OFF — registration is paused.
+    if ($controlled && !$isPaidEvent) {
+        return [
+            'allowed' => false,
+            'target_allowed' => true,
+            'approval_required' => false,
+            'controlled_registration' => true,
+            'payment_required' => false,
+            'is_paid_event' => false,
+            'message' => 'Registration is currently closed by the organizer.',
+        ];
+    }
+
+    // Paid events with Allow Registration OFF: settle payment first, then documents.
+    if ($controlled) {
+        $accessRows = $accessMap ?? build_event_registration_access_map(
+            fetch_event_registration_access_rows((string) ($event['id'] ?? ''), $headers)
+        );
+
+        $accessRow = $studentId !== '' && isset($accessRows[$studentId]) && is_array($accessRows[$studentId])
+            ? $accessRows[$studentId]
+            : null;
+
+        if ($accessRow === null || !registration_access_row_allows($accessRow)) {
+            $fee = event_settlement_fee($event);
+            $feeText = format_event_fee_php($fee);
+            $message = 'Settle your payment first with the authorized person assigned for this event.';
+            if ($feeText !== '') {
+                $message = 'Settle ' . $feeText . ' with the authorized person assigned for this event before you can continue.';
+            }
+
+            return [
+                'allowed' => false,
+                'target_allowed' => true,
+                'approval_required' => true,
+                'controlled_registration' => true,
+                'payment_required' => true,
+                'is_paid_event' => $isPaidEvent,
+                'event_fee' => $fee,
+                'amount_paid' => isset($accessRow['amount_paid']) ? (float) $accessRow['amount_paid'] : null,
+                'message' => $message,
+            ];
+        }
+
+        if ($eventId !== '' && $studentId !== '') {
+            $docAccess = resolve_student_document_access($eventId, $studentId, $headers);
+            if (($docAccess['required'] ?? false) && !($docAccess['approved'] ?? false)) {
+                return [
+                    'allowed' => false,
+                    'target_allowed' => true,
+                    'approval_required' => false,
+                    'controlled_registration' => true,
+                    'payment_required' => false,
+                    'payment_cleared' => true,
+                    'is_paid_event' => $isPaidEvent,
+                    'amount_paid' => isset($accessRow['amount_paid']) ? (float) $accessRow['amount_paid'] : null,
+                    'requirements_required' => true,
+                    'requirements_complete' => (bool) ($docAccess['complete'] ?? false),
+                    'requirements_status' => (string) ($docAccess['status'] ?? ''),
+                    'requirements_decline_reason' => (string) ($docAccess['decline_reason'] ?? ''),
+                    'message' => (string) ($docAccess['message'] ?? 'Submit and get your documents approved.'),
+                ];
+            }
+        }
+
+        return [
+            'allowed' => true,
+            'target_allowed' => true,
+            'approval_required' => false,
+            'controlled_registration' => true,
+            'payment_required' => false,
+            'payment_cleared' => true,
+            'is_paid_event' => $isPaidEvent,
+            'amount_paid' => isset($accessRow['amount_paid']) ? (float) $accessRow['amount_paid'] : null,
+            'message' => '',
+        ];
+    }
+
+    // Free / open registration: documents gate registration as before.
     if ($eventId !== '' && $studentId !== '') {
         $docAccess = resolve_student_document_access($eventId, $studentId, $headers);
         if (($docAccess['required'] ?? false) && !($docAccess['approved'] ?? false)) {
@@ -497,7 +685,7 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
                 'allowed' => false,
                 'target_allowed' => true,
                 'approval_required' => false,
-                'controlled_registration' => !event_registration_open_to_all($event),
+                'controlled_registration' => false,
                 'requirements_required' => true,
                 'requirements_complete' => (bool) ($docAccess['complete'] ?? false),
                 'requirements_status' => (string) ($docAccess['status'] ?? ''),
@@ -507,40 +695,11 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
         }
     }
 
-    if (event_registration_open_to_all($event)) {
-        return [
-            'allowed' => true,
-            'target_allowed' => true,
-            'approval_required' => false,
-            'controlled_registration' => false,
-            'message' => '',
-        ];
-    }
-
-    $accessRows = $accessMap ?? build_event_registration_access_map(
-        fetch_event_registration_access_rows((string) ($event['id'] ?? ''), $headers)
-    );
-
-    $studentId = trim((string) ($studentRow['id'] ?? ''));
-    $accessRow = $studentId !== '' && isset($accessRows[$studentId]) && is_array($accessRows[$studentId])
-        ? $accessRows[$studentId]
-        : null;
-
-    if ($accessRow !== null && registration_access_row_allows($accessRow)) {
-        return [
-            'allowed' => true,
-            'target_allowed' => true,
-            'approval_required' => false,
-            'controlled_registration' => true,
-            'message' => '',
-        ];
-    }
-
     return [
-        'allowed' => false,
+        'allowed' => true,
         'target_allowed' => true,
-        'approval_required' => true,
-        'controlled_registration' => true,
-        'message' => 'Registration requires payment approval first.',
+        'approval_required' => false,
+        'controlled_registration' => false,
+        'message' => '',
     ];
 }

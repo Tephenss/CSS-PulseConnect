@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/event_targeting.php';
+
 function clean_string(string $v): string
 {
     return trim(preg_replace('/\s+/', ' ', $v) ?? '');
@@ -48,7 +50,7 @@ function build_display_name(string $first, string $middle, string $last, string 
 /**
  * Decode legacy event_for value into separate course/year selectors.
  *
- * course: ALL | BSIT | BSCS
+ * course: ALL | BSIT | BSIT-SD | BSIT-BA | BSCS
  * year:   ALL | 1 | 2 | 3 | 4
  */
 function decode_target_participant(string $eventFor): array
@@ -72,9 +74,9 @@ function decode_target_participant(string $eventFor): array
         return ['course' => $course, 'year' => $years[0], 'years' => $years];
     }
 
-    // New format: COURSE=BSIT;YEARS=1,2
-    if (preg_match('/^COURSE\s*=\s*(ALL|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/', $raw, $m)) {
-        $course = $m[1];
+    // New format: COURSE=BSIT;YEARS=1,2 (also BSIT-SD / BSIT-BA)
+    if (preg_match('/^COURSE\s*=\s*(ALL|BSIT-SD|BSIT-BA|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/', $raw, $m)) {
+        $course = normalize_event_target_course($m[1]);
         $rawYears = preg_split('/\s*,\s*/', trim($m[2])) ?: [];
         $normalizedYears = [];
         foreach ($rawYears as $y) {
@@ -98,8 +100,9 @@ function decode_target_participant(string $eventFor): array
         return ['course' => $course, 'year' => $years[0], 'years' => $years];
     }
 
-    if ($raw === 'BSIT' || $raw === 'BSCS') {
-        $course = $raw;
+    $standalone = normalize_event_target_course($raw);
+    if (in_array($standalone, ['BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'], true)) {
+        $course = $standalone;
     } elseif (in_array($raw, ['1', '2', '3', '4'], true)) {
         $years = [$raw];
     }
@@ -125,7 +128,7 @@ function encode_target_participant(string $course, mixed $year): string
         }
     }
 
-    if (!in_array($course, ['ALL', 'BSIT', 'BSCS'], true)) {
+    if (!in_array($course, ['ALL', 'BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'], true)) {
         $course = 'ALL';
     }
 
@@ -167,6 +170,8 @@ function format_target_participant(string $eventFor): string
 
     $courseLabel = match ($course) {
         'BSIT' => 'BSIT',
+        'BSIT-SD' => 'BSIT-SD',
+        'BSIT-BA' => 'BSIT-BA',
         'BSCS' => 'BSCS',
         default => 'All Courses',
     };

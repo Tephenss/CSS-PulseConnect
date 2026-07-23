@@ -20,3 +20,7 @@ desktop.ini
 api/service-account.json
 includes/fcm-credentials.php
 includes/service-account.json
+
+# PHP session files (dev only) — keep deny .htaccess deployable
+sessions/*
+!sessions/.htaccess

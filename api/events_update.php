@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/../includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
@@ -49,7 +50,7 @@ $readHeaders = [
 ];
 
 $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-    . '&select=id,status,created_by'
+    . '&select=id,status,created_by,start_at'
     . '&limit=1';
 $checkRes = supabase_request('GET', $checkUrl, $readHeaders);
 if (!$checkRes['ok']) {
@@ -105,6 +106,26 @@ if (isset($data['grace_time'])) {
 if (isset($data['is_free_event'])) {
     $fields['is_free_event'] = normalize_registration_bool($data['is_free_event']);
 }
+if (array_key_exists('event_fee', $data)) {
+    $isFree = array_key_exists('is_free_event', $fields)
+        ? (bool) $fields['is_free_event']
+        : null;
+    if ($data['event_fee'] === null || $data['event_fee'] === '') {
+        $fields['event_fee'] = null;
+    } else {
+        $fee = normalize_event_fee($data['event_fee']);
+        if ($fee === null || $fee <= 0) {
+            json_response(['ok' => false, 'error' => 'Enter a valid event fee greater than 0.'], 400);
+        }
+        $fields['event_fee'] = $fee;
+    }
+    if ($isFree === false && (!isset($fields['event_fee']) || $fields['event_fee'] === null)) {
+        json_response(['ok' => false, 'error' => 'Paid events require a settlement amount for students.'], 400);
+    }
+    if ($isFree === true) {
+        $fields['event_fee'] = null;
+    }
+}
 if (array_key_exists('registration_limit', $data)) {
     $registrationLimit = normalize_registration_limit($data['registration_limit']);
     if ($data['registration_limit'] !== null && $data['registration_limit'] !== '' && $registrationLimit === null) {
@@ -117,7 +138,51 @@ if (array_key_exists('registration_close_weeks', $data)) {
     if ($data['registration_close_weeks'] !== null && $data['registration_close_weeks'] !== '' && $registrationCloseWeeks === null) {
         json_response(['ok' => false, 'error' => 'Registration close limit must be between 1 and 4 weeks.'], 400);
     }
+    if ($registrationCloseWeeks !== null) {
+        $startForClose = null;
+        if (isset($fields['start_at'])) {
+            try {
+                $startForClose = new DateTimeImmutable((string) $fields['start_at']);
+            } catch (Throwable $e) {
+                $startForClose = null;
+            }
+        }
+        if ($startForClose === null) {
+            $existingStart = trim((string) ($currentEvent['start_at'] ?? ''));
+            if ($existingStart !== '') {
+                try {
+                    $startForClose = new DateTimeImmutable($existingStart);
+                } catch (Throwable $e) {
+                    $startForClose = null;
+                }
+            }
+        }
+        if ($startForClose !== null) {
+            $maxCloseWeeks = max_registration_close_weeks_for_start($startForClose);
+            if ($maxCloseWeeks < 1) {
+                json_response([
+                    'ok' => false,
+                    'error' => 'Registration close limit is not available when the event starts in less than 1 week.',
+                ], 400);
+            }
+            if ($registrationCloseWeeks > $maxCloseWeeks) {
+                json_response([
+                    'ok' => false,
+                    'error' => 'Registration close limit cannot be more than '
+                        . $maxCloseWeeks . ' week' . ($maxCloseWeeks === 1 ? '' : 's')
+                        . ' before this event start (based on today’s date).',
+                ], 400);
+            }
+        }
+    }
     $fields['registration_close_weeks'] = $registrationCloseWeeks;
+}
+if (array_key_exists('registration_close_extend_days', $data)) {
+    $extendRaw = $data['registration_close_extend_days'];
+    if ($extendRaw !== null && $extendRaw !== '' && !in_array((int) $extendRaw, [0, 1, 2, 3], true)) {
+        json_response(['ok' => false, 'error' => 'Registration close extension must be 0 to 3 days.'], 400);
+    }
+    $fields['registration_close_extend_days'] = normalize_registration_close_extend_days($extendRaw);
 }
 $shouldUpdateMode = isset($data['event_mode']) || $eventMode !== $currentEventMode;
 if ($shouldUpdateMode) {
@@ -175,7 +240,32 @@ $headers = [
 ];
 
 $res = supabase_request('PATCH', $url, $headers, json_encode($fields, JSON_UNESCAPED_SLASHES));
-if (!$res['ok'] && (is_missing_column_error($res, 'event_mode') || is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks'))) {
+if (!$res['ok'] && (is_missing_column_error($res, 'event_mode') || is_missing_column_error($res, 'is_free_event') || is_missing_column_error($res, 'registration_limit') || is_missing_column_error($res, 'registration_close_weeks') || is_missing_column_error($res, 'registration_close_extend_days') || is_missing_column_error($res, 'event_fee'))) {
+    if ($role === 'teacher' && array_key_exists('registration_limit', $fields) && $fields['registration_limit'] !== null && is_missing_column_error($res, 'registration_limit')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Student limit could not be saved. Run supabase/APPLY_REGISTRATION_FIXES.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+    if ($role === 'teacher' && array_key_exists('registration_close_weeks', $fields) && is_missing_column_error($res, 'registration_close_weeks')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Registration close limit could not be saved. Run supabase/APPLY_REGISTRATION_FIXES.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+    if (array_key_exists('registration_close_extend_days', $fields) && is_missing_column_error($res, 'registration_close_extend_days')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Registration close extension could not be saved. Run supabase/migrations/047_registration_close_extend_days.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+    if ($role === 'teacher' && array_key_exists('event_fee', $fields) && $fields['event_fee'] !== null && is_missing_column_error($res, 'event_fee')) {
+        json_response([
+            'ok' => false,
+            'error' => 'Event fee could not be saved. Run supabase/migrations/045_event_fee.sql in Supabase SQL Editor first.',
+        ], 500);
+    }
+
     $retryFields = $fields;
     if (is_missing_column_error($res, 'event_mode')) {
         unset($retryFields['event_mode']);
@@ -191,6 +281,12 @@ if (!$res['ok'] && (is_missing_column_error($res, 'event_mode') || is_missing_co
     }
     if (is_missing_column_error($res, 'registration_close_weeks')) {
         unset($retryFields['registration_close_weeks']);
+    }
+    if (is_missing_column_error($res, 'registration_close_extend_days')) {
+        unset($retryFields['registration_close_extend_days']);
+    }
+    if (is_missing_column_error($res, 'event_fee')) {
+        unset($retryFields['event_fee']);
     }
     $res = supabase_request('PATCH', $url, $headers, json_encode($retryFields, JSON_UNESCAPED_SLASHES));
 }

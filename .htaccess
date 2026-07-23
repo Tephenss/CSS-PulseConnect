@@ -1,0 +1,61 @@
+# CCS PulseConnect — Hostinger (LiteSpeed) public_html hardening
+# 1) Block secrets / internal folders
+# 2) Hide .php from the browser address bar (pretty URLs)
+
+Options -Indexes
+
+<IfModule mod_authz_core.c>
+  <FilesMatch "(?i)^(config\.php|\.env(\..*)?|composer\.(json|lock)|package(-lock)?\.json)$">
+    Require all denied
+  </FilesMatch>
+
+  <FilesMatch "(?i)\.(bak|sql|md|log|ini| Dist|yml|yaml|sh|ps1|bat|cmd|env|json|lock)$">
+    Require all denied
+  </FilesMatch>
+
+  <FilesMatch "(?i)^(debug_|test_|final_check\.php|manage_events\.pre_restore_backup\.php|manage_events\.before_wizard_restore\.bak)">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+  <FilesMatch "(?i)^(config\.php|\.env(\..*)?|composer\.(json|lock)|package(-lock)?\.json)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+  <FilesMatch "(?i)\.(bak|sql|md|log|ini| Dist|yml|yaml|sh|ps1|bat|cmd|env|json|lock)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+  <FilesMatch "(?i)^(debug_|test_|final_check\.php|manage_events\.pre_restore_backup\.php|manage_events\.before_wizard_restore\.bak)">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Block hidden / internal folders from URL access
+  RewriteRule (^|/)\.(git|env|svn|hg|idea|vscode)(/|$) - [F,L]
+  RewriteRule ^(includes|supabase|sessions)(/|$) - [F,L]
+  RewriteRule (?i)\.(bak|sql|md|log| Dist|env)$ - [F,L]
+
+  # ── Pretty URLs: /home.php → /home (keep /api/*.php for fetch/POST) ──
+  # REDIRECT_STATUS guard prevents rewrite↔redirect loops on some Apache/LiteSpeed setups.
+  RewriteCond %{ENV:REDIRECT_STATUS} ^$
+  RewriteCond %{THE_REQUEST} \s/+(\S*?)\.php([?\s]) [NC]
+  RewriteCond %{REQUEST_URI} !^/api/ [NC]
+  RewriteRule ^ /%1 [R=301,L,NE,QSA]
+
+  # Internally map /home → /home.php
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME}.php -f
+  RewriteRule ^(.*)$ $1.php [L,QSA]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

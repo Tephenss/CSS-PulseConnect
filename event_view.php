@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/includes/session.php';
+session_bootstrap();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -108,8 +109,6 @@ $participants = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : 
 $totalRegistered = count(is_array($participants) ? $participants : []);
 $completedCount = 0;
 $nonCompletedCount = 0;
-$registrationAccessMap = [];
-$approvedRegistrationCount = 0;
 $studentRegistrationAccess = null;
 
 if (is_array($participants)) {
@@ -130,17 +129,6 @@ if (is_array($participants)) {
             $completedCount++;
         } else {
             $nonCompletedCount++;
-        }
-    }
-}
-
-if (($role === 'admin' || $role === 'teacher') && strtolower(trim((string) ($event['status'] ?? ''))) === 'published') {
-    $registrationAccessMap = build_event_registration_access_map(
-        fetch_event_registration_access_rows($id, $headers)
-    );
-    foreach ($registrationAccessMap as $row) {
-        if (is_array($row) && registration_access_row_allows($row)) {
-            $approvedRegistrationCount++;
         }
     }
 }
@@ -258,7 +246,7 @@ $status = (string)($event['status'] ?? '');
 $isFinishedEvent = strtolower(trim($status)) === 'finished';
 $isRegistrationAllowed = event_allows_open_registration($event);
 $canToggleRegistration = $status === 'published';
-$showControlledRegistrationTools = $status === 'published' && !$isFinishedEvent && !$isRegistrationAllowed;
+$isPaidEvent = !event_is_free_registration_event($event);
 
 $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
@@ -268,6 +256,11 @@ $statusColor = match($status) {
     'draft' => 'bg-orange-100 text-orange-900 border-orange-200',
     default => 'bg-zinc-100 text-zinc-800 border-zinc-200',
 };
+
+$isEventCreatorTeacher = $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId;
+$hasStudentRequirements = event_has_student_requirements($id, $headers);
+// Document Review uses the dedicated page tab — no overlay modal from Event Details.
+$showDocumentReviewModal = false;
 
 $studentCanRegister = is_array($studentRegistrationAccess)
     ? (bool) ($studentRegistrationAccess['allowed'] ?? false)
@@ -285,7 +278,7 @@ $studentButtonLabel = $studentCanRegister
     ? 'Register & Get Ticket'
     : (!$studentTargetAllowed
         ? 'Not Eligible for Registration'
-        : ($studentNeedsApproval ? 'Payment Approval Required' : 'Registration Closed'));
+        : ($studentNeedsApproval ? 'Settle Payment First' : 'Registration Closed'));
 $studentButtonClasses = $studentCanRegister
     ? 'rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white px-6 py-3 text-sm font-bold hover:from-orange-500 hover:to-red-500 transition-all shadow-lg shadow-orange-600/20'
     : 'rounded-xl bg-zinc-200 text-zinc-500 cursor-not-allowed px-6 py-3 text-sm font-bold';
@@ -295,15 +288,17 @@ render_header('Event Details', $user);
 ?>
 
 <?php
-    $backUrl = '/events.php';
+    $backUrl = event_management_return_to(
+        $role === 'student' ? 'admin' : $role,
+        isset($_GET['return_to']) ? (string) $_GET['return_to'] : ($role === 'student' ? '/events.php' : null)
+    );
+    $returnTo = $backUrl;
 ?>
 <div class="mb-4">
     <!-- Back Button & Header Row -->
     <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
         <div class="flex items-center gap-3">
-            <a href="<?= htmlspecialchars($backUrl) ?>" class="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-600 transition shadow-sm">
-                <svg class="w-4 h-4 mr-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-            </a>
+            <?= render_event_back_button($backUrl, $role === 'teacher' ? 'Back to Manage Events' : 'Back') ?>
             <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
             <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars($status) ?></span>
         </div>
@@ -340,6 +335,8 @@ render_header('Event Details', $user);
                         data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
                         data-event_mode="<?= htmlspecialchars(count($sessions) > 0 ? 'seminar_based' : 'simple') ?>"
                         data-sessions="<?= $sessionsJsonForAttr ?>"
+                        data-registration_close_weeks="<?= htmlspecialchars((string) (event_registration_close_weeks($event) ?? '')) ?>"
+                        data-registration_close_extend_days="<?= htmlspecialchars((string) event_registration_close_extend_days($event)) ?>"
                 >
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
                     Edit Event
@@ -351,15 +348,21 @@ render_header('Event Details', $user);
     </div>
 
     <?php
-    render_event_tabs([
-        'event_id' => $id,
-        'current_tab' => 'details',
-        'role' => $role,
-        'uses_sessions' => count($sessions) > 0,
-        'event_status' => $status,
-        'has_student_requirements' => event_has_student_requirements($id, $headers),
-        'is_event_creator' => $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId,
-    ]);
+    if ($role === 'admin' || $role === 'teacher') {
+        render_event_tabs([
+            'event_id' => $id,
+            'current_tab' => 'details',
+            'role' => $role,
+            'uses_sessions' => count($sessions) > 0,
+            'event_status' => $status,
+            'return_to' => $returnTo,
+            'has_student_requirements' => $hasStudentRequirements,
+            'is_event_creator' => $isEventCreatorTeacher || $role === 'admin',
+            'is_paid_event' => $isPaidEvent,
+        ]);
+    }
+
+    $coverImageUrl = trim((string) ($event['cover_image_url'] ?? ''));
     ?>
 
     <!-- Layout Grid: Left Sidebar & Main Content -->
@@ -368,8 +371,20 @@ render_header('Event Details', $user);
         <!-- MAIN CONTENT AREA -->
         <div class="flex-1 min-w-0">
             <!-- Tab Content: Details -->
-            <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm relative overflow-hidden mb-6">
-
+            <div class="pc-event-card border border-zinc-200 bg-white shadow-sm relative overflow-hidden mb-6">
+                <?php if ($coverImageUrl !== ''): ?>
+                <div class="relative aspect-[16/9] w-full overflow-hidden bg-zinc-100 sm:aspect-[21/9]">
+                    <img src="<?= htmlspecialchars($coverImageUrl) ?>"
+                        alt="<?= htmlspecialchars((string) ($event['title'] ?? 'Event cover')) ?>"
+                        class="h-full w-full object-cover" loading="eager" decoding="async" />
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/50 via-black/10 to-transparent"></div>
+                    <div class="absolute bottom-0 left-0 right-0 p-5 md:p-6">
+                        <h3 class="pc-shiny-title pc-shiny-title--on-dark text-lg md:text-xl font-black tracking-wide line-clamp-2">
+                            <?= htmlspecialchars((string) ($event['title'] ?? '')) ?>
+                        </h3>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="p-6 md:p-8">
                     <div class="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl rounded-tl-full pointer-events-none"></div>
@@ -536,39 +551,12 @@ render_header('Event Details', $user);
                     </button>
                 </div>
                 <p class="text-[11px] text-zinc-500 font-medium">
-                    Turn ON to let all targeted students register instantly. Keep this OFF to require payment approval through Excel import first.
+                    <?php if ($isPaidEvent): ?>
+                        Keep this OFF for paid events so students register after payment is recorded in the Payments tab. Turn ON only to open free registration to all targeted students.
+                    <?php else: ?>
+                        Turn ON to let all targeted students register. Keep this OFF to pause new registrations.
+                    <?php endif; ?>
                 </p>
-
-                <?php if ($showControlledRegistrationTools): ?>
-                <div class="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-4">
-                    <div class="text-sm font-black text-orange-900">Controlled Registration Mode</div>
-                    <p class="mt-1 text-[12px] leading-relaxed text-orange-800">
-                        Export the target participant list, mark the <span class="font-black">PAID</span> column with <span class="font-black">YES</span>, <span class="font-black">PAID</span>, or a check mark, then import it back so only approved students can register.
-                    </p>
-                    <div class="mt-3 flex flex-wrap items-center gap-3">
-                        <a
-                            href="/api/event_registration_access_export.php?event_id=<?= rawurlencode($id) ?>"
-                            class="inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-bold text-orange-700 hover:bg-orange-100 transition">
-                            Export Excel
-                        </a>
-                        <button
-                            type="button"
-                            id="btnImportRegistrationAccess"
-                            class="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-orange-700 transition">
-                            Import Paid List
-                        </button>
-                        <input
-                            id="inputRegistrationAccessFile"
-                            type="file"
-                            class="hidden"
-                            accept=".xlsx,.csv">
-                    </div>
-                    <div class="mt-3 text-[12px] font-semibold text-orange-700">
-                        <?= $approvedRegistrationCount ?> approved students currently allowed to register.
-                    </div>
-                    <div id="msgRegistrationAccess" class="mt-2 text-[12px] font-bold text-orange-700"></div>
-                </div>
-                <?php endif; ?>
             </div>
             <?php endif; ?>
             
@@ -644,6 +632,28 @@ render_header('Event Details', $user);
                 <input id="end_at_local" name="end_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
                 </div>
             </div>
+          </div>
+
+          <div id="registrationCloseExtendSection" class="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 space-y-3">
+            <div>
+              <div class="text-xs font-bold uppercase tracking-wide text-sky-800">Extend Registration Close Limit</div>
+              <p class="text-[11px] text-sky-800/80 mt-1 leading-relaxed">
+                Keeps the original close rule set when the event was created
+                (<span id="registrationCloseBaseLabel" class="font-semibold">—</span>).
+                After a reschedule, you may extend that deadline by up to 3 days.
+              </p>
+            </div>
+            <div>
+              <label for="registration_close_extend_days" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Extension</label>
+              <select id="registration_close_extend_days" name="registration_close_extend_days"
+                class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
+                <option value="0">No extension</option>
+                <option value="1">+1 day</option>
+                <option value="2">+2 days</option>
+                <option value="3">+3 days</option>
+              </select>
+            </div>
+            <p id="registrationClosePreview" class="text-[12px] font-semibold text-sky-900">Registration closes: —</p>
           </div>
 
           <div id="seminarEditSection" class="hidden rounded-2xl border border-orange-200 bg-orange-50/60 p-4 space-y-4">
@@ -1084,6 +1094,11 @@ const eventModeInput = document.getElementById('event_mode');
 const seminarEditSection = document.getElementById('seminarEditSection');
 const seminar2Editor = document.getElementById('seminar2Editor');
 const btnToggleSeminar2 = document.getElementById('btnToggleSeminar2');
+const registrationCloseExtendInput = document.getElementById('registration_close_extend_days');
+const registrationCloseBaseLabel = document.getElementById('registrationCloseBaseLabel');
+const registrationClosePreview = document.getElementById('registrationClosePreview');
+const registrationCloseExtendSection = document.getElementById('registrationCloseExtendSection');
+let editRegistrationCloseWeeks = null;
 
 let mainIsExpanded = false;
 let originalMainDesc = '';
@@ -1120,6 +1135,58 @@ function toLocalInput(iso) {
     const d = new Date(iso);
     const pad = (n) => String(n).padStart(2, '0');
     return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function formatManilaDateLabel(dateObj) {
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return '—';
+    return dateObj.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: 'Asia/Manila',
+    });
+}
+
+function computeRegistrationCloseDate(startLocalValue, weeks, extendDays) {
+    if (!startLocalValue || !weeks || weeks < 1) return null;
+    const start = new Date(startLocalValue);
+    if (Number.isNaN(start.getTime())) return null;
+
+    // Use Manila calendar date from the local picker value (YYYY-MM-DD).
+    const datePart = String(startLocalValue).slice(0, 10);
+    const parts = datePart.split('-').map((n) => Number(n));
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    const [year, month, day] = parts;
+    const base = new Date(Date.UTC(year, month - 1, day));
+    base.setUTCDate(base.getUTCDate() - (weeks * 7));
+    const extend = Math.max(0, Math.min(3, Number(extendDays) || 0));
+    if (extend > 0) {
+        base.setUTCDate(base.getUTCDate() + extend);
+    }
+    return base;
+}
+
+function refreshRegistrationClosePreview() {
+    if (!registrationClosePreview) return;
+    const startLocal = document.getElementById('start_at_local')?.value || '';
+    const weeks = editRegistrationCloseWeeks;
+    const extendDays = Number(registrationCloseExtendInput?.value || 0);
+    if (!weeks) {
+        registrationCloseExtendSection?.classList.add('hidden');
+        registrationClosePreview.textContent = 'Registration closes: no close limit set for this event.';
+        return;
+    }
+    registrationCloseExtendSection?.classList.remove('hidden');
+    if (registrationCloseBaseLabel) {
+        registrationCloseBaseLabel.textContent = `${weeks} week${weeks === 1 ? '' : 's'} before event start`;
+    }
+    const closeDate = computeRegistrationCloseDate(startLocal, weeks, extendDays);
+    if (!closeDate) {
+        registrationClosePreview.textContent = 'Registration closes: set a start date to preview.';
+        return;
+    }
+    const extendNote = extendDays > 0 ? ` (includes +${extendDays} day${extendDays === 1 ? '' : 's'} extension)` : '';
+    registrationClosePreview.textContent = `Registration closes: ${formatManilaDateLabel(closeDate)}${extendNote}`;
 }
 
 function clearSeminarEditor(prefix) {
@@ -1188,6 +1255,18 @@ if (btnEdit) {
     document.getElementById('start_at_local').value = toLocalInput(btnEdit.dataset.start_at);
     document.getElementById('end_at_local').value = toLocalInput(btnEdit.dataset.end_at);
 
+    const weeksRaw = String(btnEdit.dataset.registration_close_weeks || '').trim();
+    const weeksParsed = Number.parseInt(weeksRaw, 10);
+    editRegistrationCloseWeeks = Number.isFinite(weeksParsed) && weeksParsed >= 1 && weeksParsed <= 4
+        ? weeksParsed
+        : null;
+    if (registrationCloseExtendInput) {
+        const extendRaw = String(btnEdit.dataset.registration_close_extend_days || '0').trim();
+        const extendParsed = Number.parseInt(extendRaw, 10);
+        registrationCloseExtendInput.value = [0, 1, 2, 3].includes(extendParsed) ? String(extendParsed) : '0';
+    }
+    refreshRegistrationClosePreview();
+
     let sessions = [];
     try {
         sessions = JSON.parse(btnEdit.dataset.sessions || '[]');
@@ -1230,6 +1309,10 @@ if (btnEdit) {
 
   btnClose.addEventListener('click', closeIt);
   backdrop.addEventListener('click', closeIt);
+
+  document.getElementById('start_at_local')?.addEventListener('change', refreshRegistrationClosePreview);
+  document.getElementById('start_at_local')?.addEventListener('input', refreshRegistrationClosePreview);
+  registrationCloseExtendInput?.addEventListener('change', refreshRegistrationClosePreview);
 }
 
 // Save Edit
@@ -1251,7 +1334,7 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       start_at: sd.toISOString(),
       end_at: ed.toISOString(),
       event_mode: eventModeInput?.value || 'simple',
-
+      registration_close_extend_days: Number(registrationCloseExtendInput?.value || 0),
       csrf_token: window.CSRF_TOKEN
     };
 
@@ -1291,9 +1374,6 @@ const btnToggleReg = document.getElementById('btnToggleReg');
 const publishModal = document.getElementById('confirmRegModal');
 const btnConfirmReg = document.getElementById('btnConfirmReg');
 const btnCancelReg = document.getElementById('btnCancelReg');
-const btnImportRegistrationAccess = document.getElementById('btnImportRegistrationAccess');
-const inputRegistrationAccessFile = document.getElementById('inputRegistrationAccessFile');
-const msgRegistrationAccess = document.getElementById('msgRegistrationAccess');
 
 if (btnToggleReg && publishModal) {
     btnToggleReg.addEventListener('click', () => {
@@ -1316,6 +1396,7 @@ if (btnToggleReg && publishModal) {
 
     btnConfirmReg.addEventListener('click', () => {
         publishModal.classList.add('hidden');
+        publishModal.classList.remove('flex');
         triggerRegistrationAccessUpdate(true);
     });
 }
@@ -1338,83 +1419,6 @@ async function triggerRegistrationAccessUpdate(allowRegistration) {
         }
         alert(data.error || 'Failed to update registration access.');
     } catch(err) { alert('Network Error'); }
-}
-
-if (btnImportRegistrationAccess && inputRegistrationAccessFile) {
-  btnImportRegistrationAccess.addEventListener('click', () => {
-    inputRegistrationAccessFile.click();
-  });
-
-  inputRegistrationAccessFile.addEventListener('change', async () => {
-    const file = inputRegistrationAccessFile.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    if (msgRegistrationAccess) {
-      msgRegistrationAccess.textContent = 'Importing paid list...';
-      msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-orange-700';
-    }
-
-    btnImportRegistrationAccess.disabled = true;
-    btnImportRegistrationAccess.classList.add('opacity-70', 'cursor-not-allowed');
-
-    try {
-      const formData = new FormData();
-      formData.append('event_id', <?= json_encode($id) ?>);
-      formData.append('csrf_token', window.CSRF_TOKEN || '');
-      formData.append('registration_file', file);
-
-      const res = await fetch('/api/event_registration_access_import.php', {
-        method: 'POST',
-        body: formData
-      });
-      const raw = await res.text();
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch (_) {
-        const cleaned = raw
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        throw new Error(cleaned || 'Import failed. The server returned an invalid response.');
-      }
-      if (!data.ok) {
-        throw new Error(data.error || 'Import failed.');
-      }
-
-      if (msgRegistrationAccess) {
-        const matched = Number(data.matched ?? 0);
-        const approved = Number(data.approved ?? 0);
-        const skipped = Number(data.skipped ?? 0);
-
-        if (approved <= 0) {
-          msgRegistrationAccess.textContent = `Import finished, but 0 students were approved. Check the Paid? column and make sure the marked student is part of this event target list. Matched: ${matched}, Skipped: ${skipped}.`;
-          msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-red-600';
-        } else {
-          const approvedNames = Array.isArray(data.approved_names) ? data.approved_names.filter(Boolean) : [];
-          const approvedLabel = approvedNames.length > 0
-            ? ` Approved: ${approvedNames.slice(0, 3).join(', ')}${approvedNames.length > 3 ? '...' : ''}.`
-            : '';
-          msgRegistrationAccess.textContent = `Imported ${matched} matched students. ${approved} are now approved to register.${approvedLabel}`;
-          msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-emerald-700';
-        }
-      }
-
-      setTimeout(() => window.location.reload(), 1400);
-    } catch (err) {
-      if (msgRegistrationAccess) {
-        msgRegistrationAccess.textContent = err?.message || 'Import failed.';
-        msgRegistrationAccess.className = 'mt-2 text-[12px] font-bold text-red-600';
-      }
-    } finally {
-      btnImportRegistrationAccess.disabled = false;
-      btnImportRegistrationAccess.classList.remove('opacity-70', 'cursor-not-allowed');
-      inputRegistrationAccessFile.value = '';
-    }
-  });
 }
 
 // ------------------------------------------------------------------
@@ -2542,5 +2546,478 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
 });
 <?php endif; ?>
 </script>
+
+<?php if ($showDocumentReviewModal): ?>
+<div id="documentReviewShell" class="fixed inset-0 z-[70] hidden items-center justify-center p-3 sm:p-5 bg-black/50 backdrop-blur-sm">
+  <div class="w-full max-w-5xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-zinc-200 shrink-0">
+      <div class="min-w-0">
+        <h3 class="text-lg font-bold text-zinc-900">Document Review</h3>
+        <p id="docReviewSubtitle" class="mt-1 text-sm text-zinc-500 truncate"><?= htmlspecialchars((string) ($event['title'] ?? 'Event')) ?></p>
+        <div id="docReviewCounts" class="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold"></div>
+      </div>
+      <button type="button" id="btnCloseDocumentReviewShell" class="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition" title="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="px-5 py-3 border-b border-zinc-100 flex flex-col sm:flex-row gap-2 shrink-0">
+      <input type="search" id="docReviewSearch" placeholder="Search name, email, ID…"
+        class="w-full sm:w-64 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20">
+      <select id="docReviewStatusFilter"
+        class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20">
+        <option value="all">All statuses</option>
+        <option value="pending_review" selected>Pending only</option>
+        <option value="approved">Approved only</option>
+        <option value="declined">Declined only</option>
+      </select>
+    </div>
+
+    <div id="docReviewBody" class="flex-1 overflow-y-auto px-5 py-4">
+      <div id="docReviewLoading" class="py-12 text-center text-sm text-zinc-500">Loading submissions…</div>
+      <div id="docReviewEmpty" class="hidden py-12 text-center text-sm text-zinc-500">No submissions yet.</div>
+      <div id="docReviewTableWrap" class="hidden rounded-xl border border-zinc-200 overflow-hidden">
+        <table class="min-w-full divide-y divide-zinc-200 text-sm">
+          <thead class="bg-zinc-50">
+            <tr>
+              <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Student</th>
+              <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Status</th>
+              <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500 hidden sm:table-cell">Submitted</th>
+              <th class="px-3 py-2 text-center text-[11px] font-bold uppercase tracking-wider text-zinc-500 w-16">View</th>
+            </tr>
+          </thead>
+          <tbody id="docReviewTableBody" class="divide-y divide-zinc-100"></tbody>
+        </table>
+      </div>
+      <div id="docReviewFilterEmpty" class="hidden py-8 text-center text-sm text-zinc-500">No submissions match your search or filter.</div>
+    </div>
+  </div>
+</div>
+
+<div id="docReviewDetailModal" class="fixed inset-0 z-[80] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-zinc-200 shrink-0">
+      <div class="min-w-0">
+        <h3 id="docReviewDetailName" class="text-lg font-bold text-zinc-900 truncate"></h3>
+        <p id="docReviewDetailMeta" class="mt-1 text-sm text-zinc-500"></p>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <span id="docReviewDetailStatus" class="inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"></span>
+          <span id="docReviewDetailSubmitted" class="text-xs text-zinc-400"></span>
+        </div>
+      </div>
+      <button type="button" id="btnCloseDocReviewDetail" class="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50" title="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto px-5 py-4">
+      <div id="docReviewDetailDeclineReason" class="hidden mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"></div>
+      <div id="docReviewDetailDocuments" class="space-y-2"></div>
+      <div id="docReviewDeclineForm" class="hidden mt-4 rounded-xl border border-red-200 bg-red-50/50 p-4">
+        <label for="docReviewDeclineReason" class="block text-sm font-semibold text-red-800">Decline reason</label>
+        <p class="mt-1 text-xs text-red-600">The student will see this in the app.</p>
+        <textarea id="docReviewDeclineReason" rows="3" class="mt-2 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400" placeholder="Explain what needs to be fixed…"></textarea>
+      </div>
+    </div>
+    <div id="docReviewDetailActions" class="shrink-0 flex items-center justify-end gap-2 px-5 py-4 border-t border-zinc-200 bg-zinc-50">
+      <button type="button" id="btnDocReviewCancelDecline" class="hidden rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Back</button>
+      <button type="button" id="btnDocReviewApprove" class="rounded-lg border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Approve</button>
+      <button type="button" id="btnDocReviewDecline" class="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100">Decline</button>
+      <button type="button" id="btnDocReviewConfirmDecline" class="hidden rounded-lg border border-red-600 bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700">Confirm Decline</button>
+    </div>
+  </div>
+</div>
+
+<div id="docFilePreviewModal" class="fixed inset-0 z-[90] hidden items-center justify-center p-3 sm:p-6 bg-black/70 backdrop-blur-sm">
+  <div class="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-200 shrink-0 bg-zinc-50">
+      <div class="min-w-0">
+        <div id="docFilePreviewLabel" class="text-[11px] font-bold uppercase tracking-wide text-zinc-500 truncate"></div>
+        <div id="docFilePreviewName" class="text-sm font-bold text-zinc-900 truncate"></div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <a id="docFilePreviewOpenTab" href="#" target="_blank" rel="noopener" class="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Open tab</a>
+        <button type="button" id="btnCloseDocFilePreview" class="flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-white" title="Close">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="docFilePreviewBody" class="flex-1 overflow-auto bg-zinc-100 min-h-[50vh] flex items-center justify-center p-2"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const EVENT_ID = <?= json_encode($id, JSON_UNESCAPED_SLASHES) ?>;
+  const shell = document.getElementById('documentReviewShell');
+  const detailModal = document.getElementById('docReviewDetailModal');
+  const fileModal = document.getElementById('docFilePreviewModal');
+  const fileBody = document.getElementById('docFilePreviewBody');
+  const fileLabel = document.getElementById('docFilePreviewLabel');
+  const fileName = document.getElementById('docFilePreviewName');
+  const fileOpenTab = document.getElementById('docFilePreviewOpenTab');
+
+  let reviewData = {};
+  let activeStudentId = '';
+  let loaded = false;
+
+  const statusClasses = {
+    approved: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    declined: 'border-red-200 bg-red-50 text-red-700',
+    pending_review: 'border-amber-200 bg-amber-50 text-amber-700',
+  };
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function showEl(el, asFlex = false) {
+    if (!el) return;
+    el.classList.remove('hidden');
+    if (asFlex) el.classList.add('flex');
+  }
+
+  function hideEl(el) {
+    if (!el) return;
+    el.classList.add('hidden');
+    el.classList.remove('flex');
+  }
+
+  function isPreviewable(doc) {
+    const mime = String(doc?.mime_type || '').toLowerCase();
+    const url = String(doc?.file_url || '').toLowerCase();
+    if (mime.startsWith('image/') || mime === 'application/pdf') return true;
+    return /\.(png|jpe?g|webp|gif|pdf)(\?|$)/i.test(url);
+  }
+
+  function openFilePreview(doc) {
+    const url = String(doc?.file_url || '').trim();
+    if (!url) return;
+    const mime = String(doc?.mime_type || '').toLowerCase();
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+
+    if (fileLabel) fileLabel.textContent = doc.label || 'Document';
+    if (fileName) fileName.textContent = doc.file_name || 'Preview';
+    if (fileOpenTab) fileOpenTab.href = url;
+
+    if (!fileBody) return;
+    if (isImage) {
+      fileBody.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(doc.file_name || 'Document')}" class="max-h-[75vh] max-w-full object-contain rounded-lg shadow-sm bg-white" />`;
+    } else if (isPdf) {
+      fileBody.innerHTML = `<iframe src="${escapeHtml(url)}" title="${escapeHtml(doc.file_name || 'PDF')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>`;
+    } else {
+      fileBody.innerHTML = `<div class="text-center p-8"><p class="text-sm text-zinc-600 mb-3">Preview not available for this file type.</p><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="inline-flex rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700">Open file</a></div>`;
+    }
+    showEl(fileModal, true);
+  }
+
+  function closeFilePreview() {
+    hideEl(fileModal);
+    if (fileBody) fileBody.innerHTML = '';
+  }
+
+  function renderCounts(counts) {
+    const el = document.getElementById('docReviewCounts');
+    if (!el) return;
+    const pending = Number(counts?.pending || 0);
+    const approved = Number(counts?.approved || 0);
+    const declined = Number(counts?.declined || 0);
+    const total = Number(counts?.total || 0);
+    el.innerHTML = `
+      <span class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-800">Pending <span class="rounded bg-amber-200/80 px-1.5 py-0.5 text-[11px] font-bold">${pending}</span></span>
+      <span class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-800">Approved <span class="rounded bg-emerald-200/80 px-1.5 py-0.5 text-[11px] font-bold">${approved}</span></span>
+      <span class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-red-800">Declined <span class="rounded bg-red-200/80 px-1.5 py-0.5 text-[11px] font-bold">${declined}</span></span>
+      <span class="text-zinc-400">·</span>
+      <span class="text-zinc-500">${total} submission${total === 1 ? '' : 's'}</span>`;
+  }
+
+  function applyFilters() {
+    const query = (document.getElementById('docReviewSearch')?.value || '').trim().toLowerCase();
+    const status = document.getElementById('docReviewStatusFilter')?.value || 'all';
+    const rows = Array.from(document.querySelectorAll('#docReviewTableBody .doc-review-row'));
+    let visible = 0;
+    rows.forEach((row) => {
+      const rowStatus = row.dataset.status || '';
+      const rowSearch = row.dataset.search || '';
+      const match = (status === 'all' || rowStatus === status) && (!query || rowSearch.includes(query));
+      row.classList.toggle('hidden', !match);
+      if (match) visible += 1;
+    });
+    document.getElementById('docReviewFilterEmpty')?.classList.toggle('hidden', visible !== 0 || rows.length === 0);
+    document.getElementById('docReviewTableWrap')?.classList.toggle('hidden', rows.length === 0);
+  }
+
+  function renderList() {
+    const tbody = document.getElementById('docReviewTableBody');
+    const loading = document.getElementById('docReviewLoading');
+    const empty = document.getElementById('docReviewEmpty');
+    const wrap = document.getElementById('docReviewTableWrap');
+    if (loading) loading.classList.add('hidden');
+
+    const entries = Object.values(reviewData);
+    if (!entries.length) {
+      empty?.classList.remove('hidden');
+      wrap?.classList.add('hidden');
+      return;
+    }
+    empty?.classList.add('hidden');
+    wrap?.classList.remove('hidden');
+
+    tbody.innerHTML = entries.map((item) => {
+      const search = [item.display_name, item.email, item.student_no, item.section_name].join(' ').toLowerCase();
+      const statusClass = statusClasses[item.status] || statusClasses.pending_review;
+      return `
+        <tr class="doc-review-row hover:bg-zinc-50/80" data-status="${escapeHtml(item.status)}" data-search="${escapeHtml(search)}" data-student-id="${escapeHtml(item.student_id)}">
+          <td class="px-3 py-2 min-w-0">
+            <div class="font-semibold text-zinc-900 truncate max-w-[260px]">${escapeHtml(item.display_name || 'Student')}</div>
+            <div class="text-xs text-zinc-500 truncate max-w-[260px]">${escapeHtml(item.email || '—')}</div>
+          </td>
+          <td class="px-3 py-2">
+            <span class="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${statusClass}">${escapeHtml(item.status_label || 'Pending')}</span>
+          </td>
+          <td class="px-3 py-2 text-xs text-zinc-500 whitespace-nowrap hidden sm:table-cell">${escapeHtml(item.submitted_at || '—')}</td>
+          <td class="px-3 py-2 text-center">
+            <button type="button" class="btn-doc-review-view inline-flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 bg-white text-zinc-600 hover:bg-sky-50 hover:border-sky-200 hover:text-sky-700 transition" data-student-id="${escapeHtml(item.student_id)}" title="View submission">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('.btn-doc-review-view').forEach((btn) => {
+      btn.addEventListener('click', () => openDetail(btn.dataset.studentId || ''));
+    });
+    applyFilters();
+  }
+
+  async function loadReviewData(force = false) {
+    if (loaded && !force) return;
+    const loading = document.getElementById('docReviewLoading');
+    loading?.classList.remove('hidden');
+    document.getElementById('docReviewEmpty')?.classList.add('hidden');
+    document.getElementById('docReviewTableWrap')?.classList.add('hidden');
+
+    const res = await fetch('/api/student_requirements_review_list.php?event_id=' + encodeURIComponent(EVENT_ID));
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to load document reviews.');
+
+    reviewData = data.submissions || {};
+    renderCounts(data.counts || {});
+    if (data.event?.title) {
+      const sub = document.getElementById('docReviewSubtitle');
+      if (sub) sub.textContent = data.event.title;
+    }
+    loaded = true;
+    renderList();
+  }
+
+  function resetDeclineForm() {
+    document.getElementById('docReviewDeclineForm')?.classList.add('hidden');
+    const reason = document.getElementById('docReviewDeclineReason');
+    if (reason) reason.value = '';
+    document.getElementById('btnDocReviewApprove')?.classList.remove('hidden');
+    document.getElementById('btnDocReviewDecline')?.classList.remove('hidden');
+    document.getElementById('btnDocReviewConfirmDecline')?.classList.add('hidden');
+    document.getElementById('btnDocReviewCancelDecline')?.classList.add('hidden');
+  }
+
+  function openDetail(studentId) {
+    const data = reviewData[studentId];
+    if (!data) return;
+    activeStudentId = studentId;
+    resetDeclineForm();
+
+    const status = data.status || 'pending_review';
+    document.getElementById('docReviewDetailName').textContent = data.display_name || 'Student';
+    document.getElementById('docReviewDetailMeta').textContent = [data.email, data.student_no, data.section_name].filter(Boolean).join(' · ') || '—';
+    const statusEl = document.getElementById('docReviewDetailStatus');
+    statusEl.textContent = data.status_label || 'Pending';
+    statusEl.className = 'inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ' + (statusClasses[status] || statusClasses.pending_review);
+    document.getElementById('docReviewDetailSubmitted').textContent = data.submitted_at ? `Submitted ${data.submitted_at}` : '';
+
+    const declineBox = document.getElementById('docReviewDetailDeclineReason');
+    if (status === 'declined' && data.decline_reason) {
+      declineBox.textContent = `Decline reason: ${data.decline_reason}`;
+      declineBox.classList.remove('hidden');
+    } else {
+      declineBox.textContent = '';
+      declineBox.classList.add('hidden');
+    }
+
+    const docsEl = document.getElementById('docReviewDetailDocuments');
+    const docs = Array.isArray(data.documents) ? data.documents : [];
+    if (!docs.length) {
+      docsEl.innerHTML = '<p class="text-sm text-zinc-500">No documents uploaded.</p>';
+    } else {
+      docsEl.innerHTML = docs.map((doc, index) => {
+        const label = escapeHtml(doc.label || 'Requirement');
+        if (doc.uploaded && doc.file_url) {
+          const name = escapeHtml(doc.file_name || 'View document');
+          return `
+            <button type="button" class="btn-preview-doc w-full text-left flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 hover:bg-sky-50 hover:border-sky-200 transition" data-doc-index="${index}">
+              <span class="flex items-center justify-center w-8 h-8 rounded-lg border border-sky-200 bg-sky-100 text-sky-700 shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              </span>
+              <span class="min-w-0">
+                <span class="block text-[11px] font-bold uppercase tracking-wide text-zinc-500">${label}</span>
+                <span class="block text-sm font-semibold text-sky-700 truncate">${name}</span>
+                <span class="block text-[11px] text-zinc-400">${isPreviewable(doc) ? 'Tap to preview' : 'Tap to open'}</span>
+              </span>
+            </button>`;
+        }
+        return `
+          <div class="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 opacity-70">
+            <span class="flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 bg-white text-zinc-400 shrink-0">—</span>
+            <span class="min-w-0">
+              <span class="block text-[11px] font-bold uppercase tracking-wide text-zinc-500">${label}</span>
+              <span class="block text-sm text-zinc-400">Not uploaded</span>
+            </span>
+          </div>`;
+      }).join('');
+
+      docsEl.querySelectorAll('.btn-preview-doc').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.docIndex || -1);
+          const doc = docs[idx];
+          if (doc) openFilePreview(doc);
+        });
+      });
+    }
+
+    const actions = document.getElementById('docReviewDetailActions');
+    actions?.classList.toggle('hidden', status !== 'pending_review');
+    showEl(detailModal, true);
+  }
+
+  function closeDetail() {
+    hideEl(detailModal);
+    activeStudentId = '';
+    resetDeclineForm();
+  }
+
+  async function openShell() {
+    showEl(shell, true);
+    try {
+      await loadReviewData(true);
+    } catch (err) {
+      document.getElementById('docReviewLoading').textContent = err.message || 'Failed to load.';
+    }
+  }
+
+  function closeShell() {
+    hideEl(shell);
+    closeDetail();
+    closeFilePreview();
+  }
+
+  async function reviewSubmission(action, reason = '') {
+    const res = await fetch('/api/student_requirements_review.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: EVENT_ID,
+        student_id: activeStudentId,
+        action,
+        reason,
+        csrf_token: window.CSRF_TOKEN,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Review failed.');
+    return data;
+  }
+
+  document.querySelectorAll('[data-document-review-modal]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      openShell();
+    });
+  });
+
+  document.getElementById('btnCloseDocumentReviewShell')?.addEventListener('click', closeShell);
+  shell?.addEventListener('click', (event) => {
+    if (event.target === shell) closeShell();
+  });
+
+  document.getElementById('btnCloseDocReviewDetail')?.addEventListener('click', closeDetail);
+  detailModal?.addEventListener('click', (event) => {
+    if (event.target === detailModal) closeDetail();
+  });
+
+  document.getElementById('btnCloseDocFilePreview')?.addEventListener('click', closeFilePreview);
+  fileModal?.addEventListener('click', (event) => {
+    if (event.target === fileModal) closeFilePreview();
+  });
+
+  document.getElementById('docReviewSearch')?.addEventListener('input', applyFilters);
+  document.getElementById('docReviewStatusFilter')?.addEventListener('change', applyFilters);
+
+  document.getElementById('btnDocReviewApprove')?.addEventListener('click', async () => {
+    if (!activeStudentId) return;
+    const name = reviewData[activeStudentId]?.display_name || 'this student';
+    if (!confirm(`Approve documents for ${name}?`)) return;
+    const btn = document.getElementById('btnDocReviewApprove');
+    btn.disabled = true;
+    try {
+      await reviewSubmission('approve');
+      await loadReviewData(true);
+      closeDetail();
+    } catch (err) {
+      alert(err.message || 'Failed to approve.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('btnDocReviewDecline')?.addEventListener('click', () => {
+    document.getElementById('docReviewDeclineForm')?.classList.remove('hidden');
+    document.getElementById('btnDocReviewApprove')?.classList.add('hidden');
+    document.getElementById('btnDocReviewDecline')?.classList.add('hidden');
+    document.getElementById('btnDocReviewConfirmDecline')?.classList.remove('hidden');
+    document.getElementById('btnDocReviewCancelDecline')?.classList.remove('hidden');
+    document.getElementById('docReviewDeclineReason')?.focus();
+  });
+
+  document.getElementById('btnDocReviewCancelDecline')?.addEventListener('click', resetDeclineForm);
+
+  document.getElementById('btnDocReviewConfirmDecline')?.addEventListener('click', async () => {
+    if (!activeStudentId) return;
+    const reason = (document.getElementById('docReviewDeclineReason')?.value || '').trim();
+    if (!reason) {
+      alert('Please enter a decline reason.');
+      return;
+    }
+    const btn = document.getElementById('btnDocReviewConfirmDecline');
+    btn.disabled = true;
+    try {
+      await reviewSubmission('decline', reason);
+      await loadReviewData(true);
+      closeDetail();
+    } catch (err) {
+      alert(err.message || 'Failed to decline.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (!fileModal?.classList.contains('hidden')) {
+      closeFilePreview();
+      return;
+    }
+    if (!detailModal?.classList.contains('hidden')) {
+      closeDetail();
+      return;
+    }
+    if (!shell?.classList.contains('hidden')) closeShell();
+  });
+})();
+</script>
+<?php endif; ?>
 
 <?php render_footer(); ?>
