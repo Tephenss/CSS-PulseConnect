@@ -7,7 +7,6 @@ session_bootstrap();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
-require_once __DIR__ . '/includes/attendance_backfill.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
@@ -46,7 +45,6 @@ if ($role === 'student' && (string) ($event['status'] ?? '') !== 'published') {
 }
 
 $sessions = fetch_event_sessions($id, $headers);
-attendance_backfill_for_event($event, $headers, $sessions);
 $sessionsJsonForAttr = htmlspecialchars(
     (string) (json_encode($sessions, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'),
     ENT_QUOTES
@@ -100,38 +98,44 @@ if (strtolower(trim((string) ($event['status'] ?? ''))) === 'published'
     }
 }
 
-// 2. Fetch Participants to compute statistics
-$childSelect = 'select=id,student_id,tickets(attendance(status))';
-$partUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?' . $childSelect . '&event_id=eq.' . rawurlencode($id);
-$partRes = supabase_request('GET', $partUrl, $headers);
-$participants = $partRes['ok'] ? json_decode((string) $partRes['body'], true) : [];
-
-$totalRegistered = count(is_array($participants) ? $participants : []);
-$completedCount = 0;
-$nonCompletedCount = 0;
-$studentRegistrationAccess = null;
-
-if (is_array($participants)) {
-    foreach ($participants as $p) {
-        $statusStr = '';
-        $tickets = $p['tickets'] ?? null;
-        if (is_array($tickets) && isset($tickets[0])) {
-            $atts = $tickets[0]['attendance'] ?? null;
-            if (is_array($atts)) {
-                // attendance can be an array of objects or a single object depending on Supabase version/Prefer header.
-                // In our participants filtering we check if it's an array.
-                $firstAtt = isset($atts[0]) ? $atts[0] : $atts;
-                $statusStr = (string)($firstAtt['status'] ?? '');
+// 2. Registration / attendance stats (counts only — no full participant dump).
+$totalRegistered = fetch_event_registration_count($id, $headers, is_array($event) ? $event : null);
+$completedCount = supabase_exact_count(
+    'attendance',
+    $headers,
+    'status=neq.unscanned&tickets.event_registrations.event_id=eq.' . rawurlencode($id)
+);
+// If embed filter is unsupported, fall back to a minimal status-only download.
+if ($totalRegistered > 0 && $completedCount === 0) {
+    $probeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=' . rawurlencode('tickets(attendance(status))')
+        . '&event_id=eq.' . rawurlencode($id)
+        . '&limit=5000';
+    $probeRes = supabase_request('GET', $probeUrl, $headers);
+    $probeRows = $probeRes['ok'] ? json_decode((string) $probeRes['body'], true) : null;
+    if (is_array($probeRows)) {
+        $completedCount = 0;
+        foreach ($probeRows as $p) {
+            if (!is_array($p)) {
+                continue;
             }
-        }
-        
-        if ($statusStr !== '' && $statusStr !== 'unscanned') {
-            $completedCount++;
-        } else {
-            $nonCompletedCount++;
+            $statusStr = '';
+            $tickets = $p['tickets'] ?? null;
+            if (is_array($tickets) && isset($tickets[0]) && is_array($tickets[0])) {
+                $atts = $tickets[0]['attendance'] ?? null;
+                if (is_array($atts)) {
+                    $firstAtt = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
+                    $statusStr = (string) ($firstAtt['status'] ?? '');
+                }
+            }
+            if ($statusStr !== '' && $statusStr !== 'unscanned') {
+                $completedCount++;
+            }
         }
     }
 }
+$nonCompletedCount = max(0, $totalRegistered - $completedCount);
+$studentRegistrationAccess = null;
 
 if ($role === 'student') {
     $studentProfile = fetch_student_profile_by_id((string) ($user['id'] ?? ''), $headers);
@@ -247,6 +251,10 @@ $isFinishedEvent = strtolower(trim($status)) === 'finished';
 $isRegistrationAllowed = event_allows_open_registration($event);
 $canToggleRegistration = $status === 'published';
 $isPaidEvent = !event_is_free_registration_event($event);
+$eventStatusLower = strtolower(trim($status));
+$showEventQr = in_array($role, ['admin', 'teacher'], true)
+    && in_array($eventStatusLower, ['published', 'finished', 'expired'], true);
+$eventQrPayload = 'PULSE-EVENT-' . $id;
 
 $statusColor = match($status) {
     'published' => 'bg-emerald-100 text-emerald-900 border-emerald-200',
@@ -501,7 +509,47 @@ render_header('Event Details', $user);
         <!-- RIGHT SIDEBAR (Stats & Controls) -->
         <?php if ($role === 'admin' || $role === 'teacher'): ?>
         <div class="w-full xl:w-80 flex-shrink-0 flex flex-col gap-4 xl:mt-16">
-            
+
+            <?php if ($showEventQr): ?>
+            <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+                <div class="text-[11px] font-black text-zinc-500 uppercase tracking-wider mb-3">Event QR Code</div>
+                <div class="flex flex-col items-center">
+                    <div id="eventQrCode" class="bg-white p-3 rounded-xl border border-zinc-100 flex items-center justify-center min-h-[224px] min-w-[224px]"></div>
+                    <p class="text-[11px] text-zinc-500 font-medium text-center mt-3 leading-relaxed">
+                        Students scan this for time-in (grace) and time-out (end + 1 hour, or Early Out).
+                    </p>
+                    <button
+                        type="button"
+                        id="btnDownloadEventQr"
+                        class="mt-4 w-full rounded-xl border border-zinc-300 bg-zinc-50 px-4 py-2.5 text-sm font-bold text-zinc-800 hover:bg-white transition shadow-sm"
+                    >
+                        Download QR
+                    </button>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-[11px] font-black text-zinc-500 uppercase tracking-wider mb-1">Early Out</div>
+                        <p id="earlyOutHint" class="text-[11px] text-zinc-500 font-medium leading-relaxed">
+                            Available after the grace period ends. Opens time-out for 1 hour.
+                        </p>
+                    </div>
+                        <button
+                        type="button"
+                        id="btnEarlyOutToggle"
+                        data-event-id="<?= htmlspecialchars((string) ($event['id'] ?? ''), ENT_QUOTES) ?>"
+                        data-start-at="<?= htmlspecialchars((string) ($event['start_at'] ?? ''), ENT_QUOTES) ?>"
+                        data-end-at="<?= htmlspecialchars((string) ($event['end_at'] ?? ''), ENT_QUOTES) ?>"
+                        data-grace-minutes="<?= htmlspecialchars((string) max(0, (int) ($event['grace_time'] ?? 30)), ENT_QUOTES) ?>"
+                        class="rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sky-600 min-w-[7.5rem] inline-flex items-center justify-center gap-2"
+                    >
+                        Enable
+                    </button>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- Cards from manual -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm hover:border-emerald-300 transition-all group flex items-center gap-4">
                 <div class="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0 text-emerald-600">
@@ -638,20 +686,23 @@ render_header('Event Details', $user);
             <div>
               <div class="text-xs font-bold uppercase tracking-wide text-sky-800">Extend Registration Close Limit</div>
               <p class="text-[11px] text-sky-800/80 mt-1 leading-relaxed">
-                Keeps the original close rule set when the event was created
+                Keeps the original close rule
                 (<span id="registrationCloseBaseLabel" class="font-semibold">—</span>).
-                After a reschedule, you may extend that deadline by up to 3 days.
+                If that date is not yet past, extra days are added to it.
+                If it is already past, counting starts from <span class="font-semibold">today</span>.
+                Absolute maximum: <span class="font-semibold">3 days before event start</span>.
               </p>
             </div>
             <div>
-              <label for="registration_close_extend_days" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Extension</label>
-              <select id="registration_close_extend_days" name="registration_close_extend_days"
-                class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
-                <option value="0">No extension</option>
-                <option value="1">+1 day</option>
-                <option value="2">+2 days</option>
-                <option value="3">+3 days</option>
-              </select>
+              <label for="registration_close_extend_days" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Add days</label>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-bold text-zinc-500">+</span>
+                <input id="registration_close_extend_days" name="registration_close_extend_days" type="number" min="0" max="60" step="1" value="0"
+                  class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+                <span class="text-sm font-semibold text-zinc-500 shrink-0">day(s)</span>
+              </div>
+              <p id="registrationCloseExtendHint" class="text-[11px] text-zinc-500 mt-1.5"></p>
+              <p id="registrationCloseExtendError" class="hidden text-[12px] font-semibold text-red-600 mt-1.5"></p>
             </div>
             <p id="registrationClosePreview" class="text-[12px] font-semibold text-sky-900">Registration closes: —</p>
           </div>
@@ -1019,7 +1070,13 @@ render_header('Event Details', $user);
     <div class="p-6 pb-5 text-center">
         <div class="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-4 text-emerald-500 text-3xl font-black">?</div>
         <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none mb-2">Open Registration?</h3>
-        <p class="text-sm font-medium text-zinc-500 leading-relaxed">Are you sure you want to let all targeted students register instantly for this event?</p>
+        <p class="text-sm font-medium text-zinc-500 leading-relaxed">
+          <?php if (is_event_registration_window_closed($event)): ?>
+            The registration close date already passed. Re-opening will turn Allow Registration back on and <span class="font-semibold text-zinc-700">will no longer follow the previous close-limit schedule</span>.
+          <?php else: ?>
+            Are you sure you want to let all targeted students register instantly for this event?
+          <?php endif; ?>
+        </p>
     </div>
     <div class="flex border-t border-zinc-200">
         <button id="btnCancelReg" class="flex-1 py-3 text-sm font-bold text-zinc-600 hover:bg-zinc-50 border-r border-zinc-200 transition">Cancel</button>
@@ -1098,7 +1155,10 @@ const registrationCloseExtendInput = document.getElementById('registration_close
 const registrationCloseBaseLabel = document.getElementById('registrationCloseBaseLabel');
 const registrationClosePreview = document.getElementById('registrationClosePreview');
 const registrationCloseExtendSection = document.getElementById('registrationCloseExtendSection');
+const registrationCloseExtendHint = document.getElementById('registrationCloseExtendHint');
+const registrationCloseExtendError = document.getElementById('registrationCloseExtendError');
 let editRegistrationCloseWeeks = null;
+let editRegistrationCloseExtendValid = true;
 
 let mainIsExpanded = false;
 let originalMainDesc = '';
@@ -1147,46 +1207,199 @@ function formatManilaDateLabel(dateObj) {
     });
 }
 
-function computeRegistrationCloseDate(startLocalValue, weeks, extendDays) {
-    if (!startLocalValue || !weeks || weeks < 1) return null;
-    const start = new Date(startLocalValue);
-    if (Number.isNaN(start.getTime())) return null;
+function manilaTodayUtcDate() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date());
+    const y = Number(parts.find((p) => p.type === 'year')?.value);
+    const m = Number(parts.find((p) => p.type === 'month')?.value);
+    const d = Number(parts.find((p) => p.type === 'day')?.value);
+    return new Date(Date.UTC(y, m - 1, d));
+}
 
-    // Use Manila calendar date from the local picker value (YYYY-MM-DD).
-    const datePart = String(startLocalValue).slice(0, 10);
+function parseLocalDateUtc(startLocalValue) {
+    const datePart = String(startLocalValue || '').slice(0, 10);
     const parts = datePart.split('-').map((n) => Number(n));
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     const [year, month, day] = parts;
-    const base = new Date(Date.UTC(year, month - 1, day));
-    base.setUTCDate(base.getUTCDate() - (weeks * 7));
-    const extend = Math.max(0, Math.min(3, Number(extendDays) || 0));
-    if (extend > 0) {
-        base.setUTCDate(base.getUTCDate() + extend);
+    return new Date(Date.UTC(year, month - 1, day));
+}
+
+function daysBetweenUtc(a, b) {
+    return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+/** End datetime-local selection must start at (and not precede) start. */
+function syncEndMinFromStart(startInput, endInput) {
+    if (!startInput || !endInput) return;
+    const startValue = String(startInput.value || '').trim();
+    if (!startValue) {
+        endInput.removeAttribute('min');
+        return;
     }
-    return base;
+    endInput.min = startValue;
+    const endValue = String(endInput.value || '').trim();
+    if (endValue && endValue < startValue) {
+        endInput.value = startValue;
+    }
+}
+
+function syncMainEventEndMin() {
+    syncEndMinFromStart(
+        document.getElementById('start_at_local'),
+        document.getElementById('end_at_local'),
+    );
+}
+
+function syncSeminarEndMin(prefix) {
+    syncEndMinFromStart(
+        document.getElementById(`${prefix}_start_local`),
+        document.getElementById(`${prefix}_end_local`),
+    );
+}
+
+/** Resolve user-facing +N days from anchor → stored offset from base + preview. */
+function resolveRegistrationCloseExtend(startLocalValue, weeks, requestedFromAnchor) {
+    const startDate = parseLocalDateUtc(startLocalValue);
+    if (!startDate || !weeks || weeks < 1) {
+        return { ok: false, error: 'Set a start date to preview the registration close date.' };
+    }
+    const base = new Date(startDate.getTime());
+    base.setUTCDate(base.getUTCDate() - (weeks * 7));
+    const maxLast = new Date(startDate.getTime());
+    maxLast.setUTCDate(maxLast.getUTCDate() - 3);
+
+    const today = manilaTodayUtcDate();
+    const anchor = today.getTime() > base.getTime() ? today : base;
+    const requested = Number(requestedFromAnchor);
+    if (!Number.isFinite(requested) || !Number.isInteger(requested)) {
+        return { ok: false, error: 'Extension days must be a whole number (0 or greater).' };
+    }
+    if (requested < 0) {
+        return { ok: false, error: 'Extension days cannot be negative.' };
+    }
+    if (requested > 60) {
+        return { ok: false, error: 'Extension days cannot be more than 60.' };
+    }
+
+    const proposed = new Date(anchor.getTime());
+    proposed.setUTCDate(proposed.getUTCDate() + requested);
+
+    if (proposed.getTime() > maxLast.getTime()) {
+        const maxFromAnchor = daysBetweenUtc(anchor, maxLast);
+        if (maxFromAnchor < 0) {
+            return {
+                ok: false,
+                error: `Registration can only stay open until 3 days before the event start (${formatManilaDateLabel(maxLast)}). That date has already passed for this schedule.`,
+                base,
+                anchor,
+                maxLast,
+            };
+        }
+        return {
+            ok: false,
+            error: `Too many extension days. Maximum close date is 3 days before start (${formatManilaDateLabel(maxLast)}). From ${formatManilaDateLabel(anchor)} you can add at most +${maxFromAnchor} day${maxFromAnchor === 1 ? '' : 's'}.`,
+            base,
+            anchor,
+            maxLast,
+            maxFromAnchor,
+        };
+    }
+
+    let stored = daysBetweenUtc(base, proposed);
+    if (stored < 0) stored = 0;
+    return {
+        ok: true,
+        storedDays: stored,
+        lastDay: proposed,
+        base,
+        anchor,
+        maxLast,
+        requested,
+    };
+}
+
+function displayExtendDaysFromStored(startLocalValue, weeks, storedExtend) {
+    const startDate = parseLocalDateUtc(startLocalValue);
+    if (!startDate || !weeks || weeks < 1) return 0;
+    const base = new Date(startDate.getTime());
+    base.setUTCDate(base.getUTCDate() - (weeks * 7));
+    const last = new Date(base.getTime());
+    const stored = Math.max(0, Number(storedExtend) || 0);
+    last.setUTCDate(last.getUTCDate() + stored);
+    const today = manilaTodayUtcDate();
+    const anchor = today.getTime() > base.getTime() ? today : base;
+    const n = daysBetweenUtc(anchor, last);
+    return n > 0 ? n : 0;
+}
+
+function setRegistrationCloseExtendError(message) {
+    if (!registrationCloseExtendError) return;
+    if (!message) {
+        registrationCloseExtendError.textContent = '';
+        registrationCloseExtendError.classList.add('hidden');
+        registrationCloseExtendInput?.classList.remove('border-red-400', 'ring-2', 'ring-red-200');
+        return;
+    }
+    registrationCloseExtendError.textContent = message;
+    registrationCloseExtendError.classList.remove('hidden');
+    registrationCloseExtendInput?.classList.add('border-red-400', 'ring-2', 'ring-red-200');
 }
 
 function refreshRegistrationClosePreview() {
     if (!registrationClosePreview) return;
     const startLocal = document.getElementById('start_at_local')?.value || '';
     const weeks = editRegistrationCloseWeeks;
-    const extendDays = Number(registrationCloseExtendInput?.value || 0);
+    const requestedRaw = registrationCloseExtendInput?.value;
     if (!weeks) {
         registrationCloseExtendSection?.classList.add('hidden');
         registrationClosePreview.textContent = 'Registration closes: no close limit set for this event.';
+        editRegistrationCloseExtendValid = true;
+        setRegistrationCloseExtendError('');
+        if (registrationCloseExtendHint) registrationCloseExtendHint.textContent = '';
         return;
     }
     registrationCloseExtendSection?.classList.remove('hidden');
     if (registrationCloseBaseLabel) {
         registrationCloseBaseLabel.textContent = `${weeks} week${weeks === 1 ? '' : 's'} before event start`;
     }
-    const closeDate = computeRegistrationCloseDate(startLocal, weeks, extendDays);
-    if (!closeDate) {
+
+    const resolved = resolveRegistrationCloseExtend(startLocal, weeks, requestedRaw === '' ? 0 : requestedRaw);
+    if (!startLocal) {
         registrationClosePreview.textContent = 'Registration closes: set a start date to preview.';
+        editRegistrationCloseExtendValid = false;
+        setRegistrationCloseExtendError('');
+        if (registrationCloseExtendHint) registrationCloseExtendHint.textContent = '';
         return;
     }
-    const extendNote = extendDays > 0 ? ` (includes +${extendDays} day${extendDays === 1 ? '' : 's'} extension)` : '';
-    registrationClosePreview.textContent = `Registration closes: ${formatManilaDateLabel(closeDate)}${extendNote}`;
+
+    if (registrationCloseExtendHint && resolved.anchor && resolved.maxLast) {
+        const maxFromAnchor = daysBetweenUtc(resolved.anchor, resolved.maxLast);
+        registrationCloseExtendHint.textContent = maxFromAnchor < 0
+            ? `Anchor: ${formatManilaDateLabel(resolved.anchor)} · Max close already passed (${formatManilaDateLabel(resolved.maxLast)}).`
+            : `Counting from ${formatManilaDateLabel(resolved.anchor)} · Max +${maxFromAnchor} day${maxFromAnchor === 1 ? '' : 's'} (until ${formatManilaDateLabel(resolved.maxLast)}).`;
+    }
+
+    if (!resolved.ok) {
+        editRegistrationCloseExtendValid = false;
+        setRegistrationCloseExtendError(resolved.error || 'Invalid extension.');
+        registrationClosePreview.textContent = 'Registration closes: fix the extension to continue.';
+        registrationClosePreview.classList.remove('text-sky-900');
+        registrationClosePreview.classList.add('text-red-600');
+        return;
+    }
+
+    editRegistrationCloseExtendValid = true;
+    setRegistrationCloseExtendError('');
+    registrationClosePreview.classList.remove('text-red-600');
+    registrationClosePreview.classList.add('text-sky-900');
+    const extendNote = resolved.requested > 0
+        ? ` ( +${resolved.requested} day${resolved.requested === 1 ? '' : 's'} from ${formatManilaDateLabel(resolved.anchor)} )`
+        : '';
+    registrationClosePreview.textContent = `Registration closes: ${formatManilaDateLabel(resolved.lastDay)}${extendNote}`;
 }
 
 function clearSeminarEditor(prefix) {
@@ -1199,6 +1412,7 @@ function fillSeminarEditor(prefix, session) {
     document.getElementById(`${prefix}_title`).value = session?.title || '';
     document.getElementById(`${prefix}_start_local`).value = toLocalInput(session?.start_at || '');
     document.getElementById(`${prefix}_end_local`).value = toLocalInput(session?.end_at || '');
+    syncSeminarEndMin(prefix);
 }
 
 function setSeminar2Visible(visible) {
@@ -1254,6 +1468,7 @@ if (btnEdit) {
     
     document.getElementById('start_at_local').value = toLocalInput(btnEdit.dataset.start_at);
     document.getElementById('end_at_local').value = toLocalInput(btnEdit.dataset.end_at);
+    syncMainEventEndMin();
 
     const weeksRaw = String(btnEdit.dataset.registration_close_weeks || '').trim();
     const weeksParsed = Number.parseInt(weeksRaw, 10);
@@ -1262,8 +1477,16 @@ if (btnEdit) {
         : null;
     if (registrationCloseExtendInput) {
         const extendRaw = String(btnEdit.dataset.registration_close_extend_days || '0').trim();
-        const extendParsed = Number.parseInt(extendRaw, 10);
-        registrationCloseExtendInput.value = [0, 1, 2, 3].includes(extendParsed) ? String(extendParsed) : '0';
+        const storedExtend = Number.parseInt(extendRaw, 10);
+        const startLocal = document.getElementById('start_at_local').value;
+        const weeks = editRegistrationCloseWeeks;
+        registrationCloseExtendInput.value = String(
+            displayExtendDaysFromStored(
+                startLocal,
+                weeks,
+                Number.isFinite(storedExtend) ? storedExtend : 0,
+            ),
+        );
     }
     refreshRegistrationClosePreview();
 
@@ -1310,21 +1533,58 @@ if (btnEdit) {
   btnClose.addEventListener('click', closeIt);
   backdrop.addEventListener('click', closeIt);
 
-  document.getElementById('start_at_local')?.addEventListener('change', refreshRegistrationClosePreview);
-  document.getElementById('start_at_local')?.addEventListener('input', refreshRegistrationClosePreview);
+  const startAtLocal = document.getElementById('start_at_local');
+  const endAtLocal = document.getElementById('end_at_local');
+  startAtLocal?.addEventListener('change', () => {
+    syncMainEventEndMin();
+    refreshRegistrationClosePreview();
+  });
+  startAtLocal?.addEventListener('input', () => {
+    syncMainEventEndMin();
+    refreshRegistrationClosePreview();
+  });
+  endAtLocal?.addEventListener('change', syncMainEventEndMin);
+  endAtLocal?.addEventListener('focus', syncMainEventEndMin);
   registrationCloseExtendInput?.addEventListener('change', refreshRegistrationClosePreview);
+  registrationCloseExtendInput?.addEventListener('input', refreshRegistrationClosePreview);
+
+  ['seminar1', 'seminar2'].forEach((prefix) => {
+    const sStart = document.getElementById(`${prefix}_start_local`);
+    const sEnd = document.getElementById(`${prefix}_end_local`);
+    sStart?.addEventListener('change', () => syncSeminarEndMin(prefix));
+    sStart?.addEventListener('input', () => syncSeminarEndMin(prefix));
+    sEnd?.addEventListener('change', () => syncSeminarEndMin(prefix));
+    sEnd?.addEventListener('focus', () => syncSeminarEndMin(prefix));
+  });
 }
 
 // Save Edit
 document.getElementById('btnSubmitForm')?.addEventListener('click', async () => {
     const msg = document.getElementById('formMsg');
+    syncMainEventEndMin();
     const start_local = document.getElementById('start_at_local').value;
     const end_local = document.getElementById('end_at_local').value;
 
     if (!start_local || !end_local) { msg.textContent = 'Please fill all fields.'; return; }
 
+    if (end_local < start_local) {
+        msg.textContent = 'End date/time must be on or after the start date/time.';
+        return;
+    }
+
+    refreshRegistrationClosePreview();
+    if (editRegistrationCloseWeeks && !editRegistrationCloseExtendValid) {
+        msg.textContent = registrationCloseExtendError?.textContent
+            || 'Fix the registration close extension before saving.';
+        return;
+    }
+
     const sd = new Date(start_local);
     const ed = new Date(end_local);
+    if (!(ed > sd)) {
+        msg.textContent = 'End date/time must be after the start date/time.';
+        return;
+    }
 
     const payload = {
       event_id: document.getElementById('event_id').value,
@@ -1334,6 +1594,7 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       start_at: sd.toISOString(),
       end_at: ed.toISOString(),
       event_mode: eventModeInput?.value || 'simple',
+      // User-facing days from anchor; API converts to stored base offset.
       registration_close_extend_days: Number(registrationCloseExtendInput?.value || 0),
       csrf_token: window.CSRF_TOKEN
     };
@@ -1518,10 +1779,10 @@ function renderPendingStudents(items) {
     }
 
     pendingCertList.innerHTML = items.map((item) => {
-        const label = item?.label || item?.name || 'Student';
+        const label = escapeHtml(item?.label || item?.name || 'Student');
         const reasons = Array.isArray(item?.reasons) ? item.reasons : [];
         const reasonsHtml = reasons.length > 0
-            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${reason}</span>`).join('')}</div>`
+            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${escapeHtml(reason)}</span>`).join('')}</div>`
             : '';
 
         return `
@@ -1543,10 +1804,10 @@ function renderTemplatePendingStudents(items) {
 
     templateCertPendingWrap.classList.remove('hidden');
     templateCertPendingList.innerHTML = items.map((item) => {
-        const label = item?.label || item?.name || 'Student';
+        const label = escapeHtml(item?.label || item?.name || 'Student');
         const reasons = Array.isArray(item?.reasons) ? item.reasons : [];
         const reasonsHtml = reasons.length > 0
-            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${reason}</span>`).join('')}</div>`
+            ? `<div class="mt-2 flex flex-wrap gap-2">${reasons.map((reason) => `<span class="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 border border-amber-200">${escapeHtml(reason)}</span>`).join('')}</div>`
             : '';
 
         return `
@@ -2693,15 +2954,47 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
     return /\.(png|jpe?g|webp|gif|pdf)(\?|$)/i.test(url);
   }
 
-  function openFilePreview(doc) {
-    const url = String(doc?.file_url || '').trim();
-    if (!url) return;
+  async function openFilePreview(doc) {
+    const rawUrl = String(doc?.file_url || '').trim();
+    const objectPath = String(doc?.file_path || '').trim();
+    if (!rawUrl && !objectPath) return;
     const mime = String(doc?.mime_type || '').toLowerCase();
-    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
-    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
 
     if (fileLabel) fileLabel.textContent = doc.label || 'Document';
     if (fileName) fileName.textContent = doc.file_name || 'Preview';
+    if (fileBody) {
+      fileBody.innerHTML = `<div class="text-sm font-medium text-zinc-500 py-10">Loading secure preview…</div>`;
+    }
+    showEl(fileModal, true);
+
+    let url = rawUrl;
+    try {
+      const res = await fetch('/api/storage_signed_url.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'student-documents',
+          path: objectPath,
+          url: rawUrl,
+          expires_in: 3600,
+          csrf_token: window.CSRF_TOKEN || '',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.ok && data?.signed_url) {
+        url = String(data.signed_url);
+      }
+    } catch (_) {}
+
+    if (!url) {
+      if (fileBody) {
+        fileBody.innerHTML = `<div class="text-center p-8 text-sm text-red-600 font-semibold">Unable to open file (private storage).</div>`;
+      }
+      return;
+    }
+
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
     if (fileOpenTab) fileOpenTab.href = url;
 
     if (!fileBody) return;
@@ -2712,7 +3005,6 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
     } else {
       fileBody.innerHTML = `<div class="text-center p-8"><p class="text-sm text-zinc-600 mb-3">Preview not available for this file type.</p><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="inline-flex rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700">Open file</a></div>`;
     }
-    showEl(fileModal, true);
   }
 
   function closeFilePreview() {
@@ -3015,6 +3307,261 @@ document.getElementById('btnRegister')?.addEventListener('click', async () => {
       return;
     }
     if (!shell?.classList.contains('hidden')) closeShell();
+  });
+})();
+</script>
+<?php endif; ?>
+
+<?php if (in_array($role, ['admin', 'teacher'], true)): ?>
+<script>
+(() => {
+  const eventId = <?= json_encode($id) ?>;
+  if (!eventId || !window.CSRF_TOKEN) return;
+  const run = () => {
+    fetch('/api/attendance_backfill_run.php', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ event_id: eventId, csrf_token: window.CSRF_TOKEN })
+    }).catch(() => {});
+  };
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(run, { timeout: 2500 });
+  } else {
+    setTimeout(run, 1200);
+  }
+})();
+</script>
+<?php endif; ?>
+
+<?php if (!empty($showEventQr)): ?>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+(() => {
+  const mount = document.getElementById('eventQrCode');
+  if (!mount || typeof QRCode === 'undefined') return;
+
+  const payload = <?= json_encode($eventQrPayload) ?>;
+  const title = <?= json_encode((string) ($event['title'] ?? 'Event')) ?>;
+  const logoUrl = '/assets/CCS.png';
+  const qrSize = 200;
+
+  // eslint-disable-next-line no-new
+  new QRCode(mount, {
+    text: payload,
+    width: qrSize,
+    height: qrSize,
+    correctLevel: QRCode.CorrectLevel.H,
+  });
+
+  const drawRoundedRect = (ctx, x, y, width, height, radius) => {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + width, y, x + width, y + height, r);
+    ctx.arcTo(x + width, y + height, x, y + height, r);
+    ctx.arcTo(x, y + height, x, y, r);
+    ctx.arcTo(x, y, x + width, y, r);
+    ctx.closePath();
+  };
+
+  const compositeLogo = () => {
+    const sourceCanvas = mount.querySelector('canvas');
+    const sourceImg = mount.querySelector('img');
+
+    const output = document.createElement('canvas');
+    output.width = qrSize;
+    output.height = qrSize;
+    const ctx = output.getContext('2d');
+    if (!ctx) return;
+
+    if (sourceCanvas) {
+      ctx.drawImage(sourceCanvas, 0, 0, qrSize, qrSize);
+    } else if (sourceImg && sourceImg.complete && sourceImg.naturalWidth > 0) {
+      ctx.drawImage(sourceImg, 0, 0, qrSize, qrSize);
+    } else {
+      return;
+    }
+
+    const logo = new Image();
+    logo.crossOrigin = 'anonymous';
+    logo.onload = () => {
+      const logoSize = Math.round(qrSize * 0.22);
+      const pad = 6;
+      const boxSize = logoSize + (pad * 2);
+      const x = (qrSize - boxSize) / 2;
+      const y = (qrSize - boxSize) / 2;
+
+      ctx.fillStyle = '#ffffff';
+      drawRoundedRect(ctx, x, y, boxSize, boxSize, 8);
+      ctx.fill();
+
+      ctx.drawImage(logo, x + pad, y + pad, logoSize, logoSize);
+
+      mount.replaceChildren(output);
+      mount.dataset.qrDataUrl = output.toDataURL('image/png');
+    };
+    logo.onerror = () => {
+      if (sourceCanvas) {
+        mount.replaceChildren(sourceCanvas);
+        mount.dataset.qrDataUrl = sourceCanvas.toDataURL('image/png');
+      }
+    };
+    logo.src = logoUrl;
+  };
+
+  window.setTimeout(compositeLogo, 60);
+
+  const btn = document.getElementById('btnDownloadEventQr');
+  if (!btn) return;
+
+  btn.addEventListener('click', () => {
+    const canvas = mount.querySelector('canvas');
+    const dataUrl = mount.dataset.qrDataUrl
+      || (canvas ? canvas.toDataURL('image/png') : '');
+    if (!dataUrl) return;
+
+    const link = document.createElement('a');
+    const safeTitle = String(title).replace(/[^\w\-]+/g, '_').slice(0, 40) || 'event';
+    link.download = safeTitle + '_event_qr.png';
+    link.href = dataUrl;
+    link.click();
+  });
+})();
+</script>
+<script>
+(() => {
+  const btn = document.getElementById('btnEarlyOutToggle');
+  const hint = document.getElementById('earlyOutHint');
+  if (!btn || !window.CSRF_TOKEN) return;
+  const eventId = btn.getAttribute('data-event-id') || '';
+  if (!eventId) return;
+
+  const startAt = Date.parse(btn.getAttribute('data-start-at') || '');
+  const endAt = Date.parse(btn.getAttribute('data-end-at') || '');
+  const graceMinutes = Math.max(0, Number.parseInt(btn.getAttribute('data-grace-minutes') || '30', 10) || 30);
+  let enabled = false;
+  let expiresAt = null;
+  let graceEndsAt = null;
+  let canEnableFromServer = null;
+  let loading = false;
+
+  const graceEndsMs = () => {
+    if (!Number.isFinite(startAt)) return NaN;
+    return startAt + (graceMinutes * 60 * 1000);
+  };
+
+  // Clickable only after grace period ends, until event end.
+  const canEnableEarlyOut = () => {
+    if (canEnableFromServer === true) return true;
+    if (canEnableFromServer === false) return false;
+    if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) return false;
+    const now = Date.now();
+    const graceEnd = graceEndsMs();
+    return Number.isFinite(graceEnd) && now >= graceEnd && now <= endAt;
+  };
+
+  const formatGraceHint = () => {
+    const raw = graceEndsAt || (Number.isFinite(graceEndsMs()) ? new Date(graceEndsMs()).toISOString() : '');
+    if (!raw) {
+      return 'Available only after the grace period ends.';
+    }
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) {
+      return 'Available only after the grace period ends.';
+    }
+    return 'Available after grace ends (' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ').';
+  };
+
+  const applyUi = () => {
+    const canEnable = canEnableEarlyOut();
+    const label = enabled ? 'Disable' : 'Enable';
+    btn.classList.toggle('bg-sky-600', !enabled);
+    btn.classList.toggle('hover:bg-sky-700', !enabled);
+    btn.classList.toggle('bg-zinc-700', enabled);
+    btn.classList.toggle('hover:bg-zinc-800', enabled);
+
+    // Enable only after grace; Disable allowed while Early Out is ON.
+    btn.disabled = loading || (!enabled && !canEnable);
+
+    if (loading) {
+      btn.innerHTML = '<svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg><span>Saving…</span>';
+    } else {
+      btn.textContent = label;
+    }
+
+    if (!hint) return;
+    if (enabled && expiresAt) {
+      const d = new Date(expiresAt);
+      hint.textContent = 'Early Out ON — auto-off at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ' (1 hour from enable).';
+    } else if (!canEnable) {
+      hint.textContent = formatGraceHint();
+    } else {
+      hint.textContent = 'Opens time-out for 1 hour from enable (not limited to event end).';
+    }
+  };
+
+  const paint = (status) => {
+    enabled = !!(status && status.enabled);
+    expiresAt = status && status.expires_at ? status.expires_at : null;
+    graceEndsAt = status && status.grace_ends_at ? status.grace_ends_at : null;
+    if (status && typeof status.can_enable === 'boolean') {
+      canEnableFromServer = status.can_enable;
+    }
+    applyUi();
+  };
+
+  const call = async (payload) => {
+    const res = await fetch('api/event_early_out.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: eventId,
+        csrf_token: window.CSRF_TOKEN,
+        ...payload,
+      }),
+    });
+    return res.json();
+  };
+
+  call({ action: 'status' }).then((data) => {
+    paint((data && data.ok && data.early_out) ? data.early_out : {});
+  }).catch(() => paint({}));
+
+  window.setInterval(() => {
+    if (!loading) {
+      // Re-check local schedule so the button unlocks when grace ends.
+      canEnableFromServer = null;
+      applyUi();
+      call({ action: 'status' }).then((data) => {
+        if (data && data.ok && data.early_out) paint(data.early_out);
+      }).catch(() => {});
+    }
+  }, 30000);
+
+  btn.addEventListener('click', async () => {
+    if (loading) return;
+    if (!enabled && !canEnableEarlyOut()) {
+      applyUi();
+      return;
+    }
+    loading = true;
+    applyUi();
+    try {
+      const data = await call({ action: 'set', enabled: !enabled });
+      if (data && data.ok) {
+        paint(data.early_out || {});
+      } else {
+        alert((data && data.error) || 'Failed to update Early Out.');
+        applyUi();
+      }
+    } catch (e) {
+      alert('Failed to update Early Out.');
+      applyUi();
+    } finally {
+      loading = false;
+      applyUi();
+    }
   });
 })();
 </script>

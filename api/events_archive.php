@@ -64,4 +64,17 @@ if (!$res['ok']) {
 
 $rows = json_decode((string) $res['body'], true);
 $event = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
+
+if (is_array($event) || $status === 'archived') {
+    require_once __DIR__ . '/../includes/firestore_catalog.php';
+    if ($status === 'archived') {
+        firestore_catalog_remove_event($eventId);
+    } elseif (is_array($event)) {
+        firestore_catalog_sync_event($event);
+    }
+}
+
+require_once __DIR__ . '/../includes/api_cache.php';
+api_cache_bump_generation('manage_events');
+
 json_response(['ok' => true, 'event' => $event], 200);

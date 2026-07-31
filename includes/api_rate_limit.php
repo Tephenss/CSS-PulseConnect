@@ -16,13 +16,14 @@ function api_rate_limit_allow(string $bucketKey, int $maxHits, int $windowSecond
     $hits = [];
 
     $fh = @fopen($path, 'c+');
+    // Fail closed: if we cannot track hits, deny the request.
     if ($fh === false) {
-        return true;
+        return false;
     }
 
     if (!@flock($fh, LOCK_EX)) {
         fclose($fh);
-        return true;
+        return false;
     }
 
     $raw = stream_get_contents($fh);

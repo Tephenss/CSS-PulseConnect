@@ -8,13 +8,17 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
 
+require_once __DIR__ . '/../includes/mobile_session.php';
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
+$sessionUser = mobile_api_require_user($data);
+$userId = (string) ($sessionUser['id'] ?? '');
+
 $eventId = trim((string) ($data['event_id'] ?? ''));
-$userId = trim((string) ($data['user_id'] ?? ''));
 if ($eventId === '' || $userId === '') {
-    json_response(['ok' => false, 'error' => 'event_id and user_id are required.'], 400);
+    json_response(['ok' => false, 'error' => 'event_id and authenticated user are required.'], 400);
 }
 
 $headers = mobile_api_supabase_headers();
@@ -36,7 +40,13 @@ if (!($summary['complete'] ?? false)) {
 $submission = fetch_student_submissions_map([$eventId], $headers, $userId)[$eventId][$userId] ?? null;
 $currentStatus = is_array($submission) ? strtolower(trim((string) ($submission['status'] ?? ''))) : '';
 if ($currentStatus === 'pending_review') {
-    json_response(['ok' => false, 'error' => 'Your documents are already under review.'], 400);
+    // Idempotent — student UI may resubmit after a successful first click.
+    json_response([
+        'ok' => true,
+        'already_pending' => true,
+        'submission' => $submission,
+        'summary' => $summary,
+    ], 200);
 }
 if ($currentStatus === 'approved') {
     json_response(['ok' => true, 'already_approved' => true, 'submission' => $submission], 200);

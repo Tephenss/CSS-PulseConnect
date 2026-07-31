@@ -95,7 +95,7 @@ function web_fetch_admin_notifications(array $headers): array
 
     if ($creatorIds !== []) {
         $inList = '(' . implode(',', array_map('rawurlencode', $creatorIds)) . ')';
-        $userUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id,full_name&id=in.' . $inList;
+        $userUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id,first_name,middle_name,last_name,suffix&id=in.' . $inList;
         $userRes = supabase_request('GET', $userUrl, $headers);
         $userRows = $userRes['ok'] ? json_decode((string) $userRes['body'], true) : [];
         if (is_array($userRows)) {
@@ -105,7 +105,12 @@ function web_fetch_admin_notifications(array $headers): array
                 }
                 $id = trim((string) ($row['id'] ?? ''));
                 if ($id !== '') {
-                    $creatorMap[$id] = trim((string) ($row['full_name'] ?? ''));
+                    $creatorMap[$id] = build_display_name(
+                        (string) ($row['first_name'] ?? ''),
+                        (string) ($row['middle_name'] ?? ''),
+                        (string) ($row['last_name'] ?? ''),
+                        (string) ($row['suffix'] ?? '')
+                    );
                 }
             }
         }

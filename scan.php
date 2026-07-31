@@ -395,8 +395,8 @@ render_header('QR Scanner', $user);
     }
 
     refreshContext();
-    // Context API is TTL-cached (~8s); 20s poll keeps scanner state fresh without hammering DB.
-    pollTimer = setInterval(refreshContext, 20000);
+    // Context API is TTL-cached (~15s); 30s poll keeps scanner state fresh without hammering DB.
+    pollTimer = setInterval(refreshContext, 30000);
     drainScanWriteQueue();
     const drainTimer = setInterval(drainScanWriteQueue, 30000);
 

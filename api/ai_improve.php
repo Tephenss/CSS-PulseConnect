@@ -72,6 +72,11 @@ while ($attempt < $maxAttempts) {
     if (defined('SUPABASE_DEV_SKIP_SSL_VERIFY') && SUPABASE_DEV_SKIP_SSL_VERIFY) {
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+    } elseif (function_exists('apply_curl_ssl_policy')) {
+        apply_curl_ssl_policy($ch);
+    } else {
+        require_once __DIR__ . '/../includes/curl_ssl.php';
+        apply_curl_ssl_policy($ch);
     }
 
     $response = (string) curl_exec($ch);

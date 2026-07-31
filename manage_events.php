@@ -9,10 +9,12 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/registration_access.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/proposal_requirements.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/manage_events_live.php';
+require_once __DIR__ . '/includes/api_cache.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -38,27 +40,62 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
 {
   $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $selectColumns;
   if ($role === 'admin') {
-    return $base . '&status=neq.archived&order=created_at.desc&limit=250';
+    return $base . '&status=neq.archived&order=created_at.desc&limit=120';
   }
 
   // Teacher sees their own events OR any published events.
-  return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc&limit=250';
+  return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc&limit=120';
 }
 
-$eventSelectVariants = [
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,registration_close_weeks,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_structure,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,users:created_by(first_name,last_name,suffix)',
-  'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,users:created_by(first_name,last_name,suffix)',
-];
+/**
+ * Production events select (migrations through 045). Do not walk fallbacks —
+ * each missing-column GET is a Postgres ERROR on the dashboard.
+ */
+function manage_events_production_select(): string
+{
+  return 'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)';
+}
+
+/**
+ * @param list<array<string, mixed>> $events
+ * @return array{0: list<string>, 1: list<string>}
+ */
+function manage_events_enrichment_ids(array $events, string $role, string $userId): array
+{
+  $proposalIds = [];
+  $studentIds = [];
+
+  foreach ($events as $event) {
+    if (!is_array($event)) {
+      continue;
+    }
+    $eventId = trim((string) ($event['id'] ?? ''));
+    if ($eventId === '') {
+      continue;
+    }
+
+    $status = strtolower(trim((string) ($event['status'] ?? '')));
+    $createdBy = trim((string) ($event['created_by'] ?? ''));
+    $proposalStage = strtolower(trim((string) ($event['proposal_stage'] ?? '')));
+
+    // Proposal docs matter for pending / in-review flows, not every published campus event.
+    $needsProposal = $status === 'pending'
+      || in_array($proposalStage, ['pending_requirements', 'requirements_requested', 'under_review'], true);
+    if ($needsProposal) {
+      $proposalIds[] = $eventId;
+    }
+
+    // Student registration requirements on the list page: review pipeline only.
+    // Skip bulk published campus events (open event_view for those details).
+    $owns = $createdBy !== '' && $createdBy === $userId;
+    $needsStudent = $owns || ($role === 'admin' && in_array($status, ['pending', 'approved'], true));
+    if ($needsStudent && in_array($status, ['pending', 'approved'], true)) {
+      $studentIds[] = $eventId;
+    }
+  }
+
+  return [array_values(array_unique($proposalIds)), array_values(array_unique($studentIds))];
+}
 
 $headers = [
   'Accept: application/json',
@@ -68,25 +105,36 @@ $headers = [
 
 // Auto-finish events that have already ended (throttled to reduce DB writes).
 pulse_auto_finish_published_events($headers);
+pulse_auto_close_registration_windows($headers);
 
-$events = [];
-foreach ($eventSelectVariants as $selectColumns) {
-  $eventsUrl = build_manage_events_url($selectColumns, $role, $userId);
+// Short TTL list cache — sidebar revisits should not re-query the full events set every time.
+$listGen = api_cache_generation('manage_events');
+$listCacheKey = 'manage_events_list_v2_g' . $listGen . '_' . $role . '_' . substr(hash('sha256', $userId), 0, 16);
+$listCached = api_cache_remember($listCacheKey, 25, static function () use ($headers, $role, $userId): array {
+  $workingSelect = manage_events_production_select();
+  $eventsUrl = build_manage_events_url($workingSelect, $role, $userId);
   $res = supabase_request('GET', $eventsUrl, $headers);
-
+  $events = [];
   if ($res['ok']) {
     $decoded = json_decode((string) $res['body'], true);
     $events = is_array($decoded) ? $decoded : [];
-    break;
+  } else {
+    error_log('manage_events list select failed: ' . substr((string) ($res['body'] ?? ''), 0, 300));
+    $workingSelect = '';
   }
 
-  if (!events_missing_column_error($res)) {
-    break;
+  if (!empty($events)) {
+    $events = attach_event_sessions_to_events($events, $headers);
   }
-}
-if (!empty($events)) {
-  $events = attach_event_sessions_to_events($events, $headers);
-}
+
+  return [
+    'events' => $events,
+    'select' => $workingSelect,
+  ];
+});
+
+$events = is_array($listCached['events'] ?? null) ? $listCached['events'] : [];
+$workingSelect = (string) ($listCached['select'] ?? '');
 
 $proposalRequirementMap = [];
 $proposalSubmissionMap = [];
@@ -94,36 +142,44 @@ $proposalVisibleSubmissionMap = [];
 $proposalSummaryMap = [];
 $studentRequirementMap = [];
 if (!empty($events)) {
-  $eventIds = array_values(array_filter(array_map(
-    static fn(array $event): string => trim((string) ($event['id'] ?? '')),
-    $events
-  )));
-
+  [$proposalEventIds, $studentEventIds] = manage_events_enrichment_ids($events, $role, $userId);
+  // Hard cap enrichment fan-out so a large catalog cannot stall the page.
+  $proposalEventIds = array_slice($proposalEventIds, 0, 40);
+  $studentEventIds = array_slice($studentEventIds, 0, 40);
   $proposalHeaders = proposal_requirement_headers();
-  $proposalRequirementMap = fetch_proposal_requirements_map($eventIds, $proposalHeaders);
-  $proposalSubmissionMap = fetch_proposal_submissions_map($eventIds, $proposalHeaders);
-  $proposalVisibleSubmissionMap = filter_visible_proposal_submissions_map($proposalSubmissionMap);
-  $studentRequirementMap = fetch_student_requirements_map($eventIds, student_requirement_headers());
 
-  foreach ($eventIds as $eventId) {
-    $proposalSummaryMap[$eventId] = build_proposal_requirement_summary(
-      $proposalRequirementMap[$eventId] ?? [],
-      $proposalSubmissionMap[$eventId] ?? []
-    );
+  if ($proposalEventIds !== []) {
+    $proposalRequirementMap = fetch_proposal_requirements_map($proposalEventIds, $proposalHeaders);
+    $proposalSubmissionMap = fetch_proposal_submissions_map($proposalEventIds, $proposalHeaders);
+    $proposalVisibleSubmissionMap = filter_visible_proposal_submissions_map($proposalSubmissionMap);
+    foreach ($proposalEventIds as $eventId) {
+      $proposalSummaryMap[$eventId] = build_proposal_requirement_summary(
+        $proposalRequirementMap[$eventId] ?? [],
+        $proposalSubmissionMap[$eventId] ?? []
+      );
+    }
+  }
+
+  if ($studentEventIds !== []) {
+    $studentRequirementMap = fetch_student_requirements_map($studentEventIds, student_requirement_headers());
   }
 }
 
 $teacherAccounts = [];
 if ($role === 'admin') {
-  $teachersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
-    . '?select=id,first_name,middle_name,last_name,suffix,email'
-    . '&role=eq.teacher'
-    . '&order=last_name.asc,first_name.asc';
-  $teachersRes = supabase_request('GET', $teachersUrl, $headers);
-  if ($teachersRes['ok']) {
+  $teacherCache = api_cache_remember('manage_events_teachers', 120, static function () use ($headers): array {
+    $teachersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+      . '?select=id,first_name,middle_name,last_name,suffix,email'
+      . '&role=eq.teacher'
+      . '&order=last_name.asc,first_name.asc';
+    $teachersRes = supabase_request('GET', $teachersUrl, $headers);
+    if (!$teachersRes['ok']) {
+      return ['rows' => []];
+    }
     $teacherRows = json_decode((string) $teachersRes['body'], true);
-    $teacherAccounts = is_array($teacherRows) ? $teacherRows : [];
-  }
+    return ['rows' => is_array($teacherRows) ? $teacherRows : []];
+  });
+  $teacherAccounts = is_array($teacherCache['rows'] ?? null) ? $teacherCache['rows'] : [];
 }
 
 render_header('Manage Events', $user);
@@ -817,7 +873,7 @@ render_header('Manage Events', $user);
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <input id="grace_time" name="grace_time" type="number" min="0" value="15"
+              <input id="grace_time" name="grace_time" type="number" min="0" value="30"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
             </div>
           </div>
@@ -1861,7 +1917,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
             data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
             data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
-            data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+            data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>"
             data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
             data-event_fee="<?= htmlspecialchars((string) ($e['event_fee'] ?? '')) ?>"
             data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
@@ -1938,7 +1994,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                       </span>
                       <span
                         class="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-100">
-                        Grace: <?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>m
+                        Grace: <?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>m
                       </span>
                       <span class="flex items-center gap-1">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -2071,7 +2127,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                     data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
                     data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                     data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
-                    data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '15')) ?>"
+                    data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>"
                     data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
                     data-event_fee="<?= htmlspecialchars((string) ($e['event_fee'] ?? '')) ?>"
                     data-registration_limit="<?= htmlspecialchars((string) ($e['registration_limit'] ?? '')) ?>"
@@ -2527,14 +2583,64 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   const proposalFilePreviewName = document.getElementById('proposalFilePreviewName');
   const proposalFilePreviewOpenTab = document.getElementById('proposalFilePreviewOpenTab');
 
-  function openProposalFilePreview({ url, label = '', fileName = '', mimeType = '' } = {}) {
+  async function resolvePrivateStorageUrl({ url = '', path = '', bucket = 'proposal-documents' } = {}) {
     const fileUrl = String(url || '').trim();
-    if (!fileUrl || !proposalFilePreviewModal || !proposalFilePreviewBody) return;
+    const objectPath = String(path || '').trim();
+    if (!fileUrl && !objectPath) return '';
+    try {
+      const res = await fetch('/api/storage_signed_url.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          bucket: bucket || 'proposal-documents',
+          path: objectPath,
+          url: fileUrl,
+          expires_in: 3600,
+          csrf_token: window.CSRF_TOKEN || '',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.ok && data?.signed_url) {
+        return String(data.signed_url);
+      }
+      console.warn('storage_signed_url failed', data?.error || res.status);
+    } catch (err) {
+      console.warn('storage_signed_url error', err);
+    }
+    return fileUrl;
+  }
+
+  async function openProposalFilePreview({ url, path = '', bucket = 'proposal-documents', label = '', fileName = '', mimeType = '' } = {}) {
+    const rawUrl = String(url || '').trim();
+    const objectPath = String(path || '').trim();
+    if ((!rawUrl && !objectPath) || !proposalFilePreviewModal || !proposalFilePreviewBody) return;
+
+    proposalFilePreviewBody.innerHTML = `
+      <div class="text-sm font-medium text-zinc-500 py-10">Loading secure preview…</div>
+    `;
+    proposalFilePreviewModal.classList.remove('hidden');
+    proposalFilePreviewModal.classList.add('flex');
+
+    const fileUrl = await resolvePrivateStorageUrl({
+      url: rawUrl,
+      path: objectPath,
+      bucket: bucket || 'proposal-documents',
+    });
+    if (!fileUrl) {
+      proposalFilePreviewBody.innerHTML = `
+        <div class="text-center p-8">
+          <p class="text-sm text-red-600 font-semibold mb-2">Unable to open file</p>
+          <p class="text-xs text-zinc-500">Confirm the proposal-documents bucket exists in Supabase Storage.</p>
+        </div>
+      `;
+      return;
+    }
 
     const mime = String(mimeType || '').toLowerCase();
-    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(fileUrl);
-    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(fileUrl);
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(fileUrl) || /\.pdf(\?|$)/i.test(fileName);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(fileUrl) || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(fileName);
     const isDoc = /\.(docx?|DOCX?)(\?|$)/i.test(fileUrl)
+      || /\.(docx?)(\?|$)/i.test(fileName)
       || mime.includes('msword')
       || mime.includes('officedocument.wordprocessingml');
 
@@ -2549,11 +2655,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     } else if (isPdf) {
       proposalFilePreviewBody.innerHTML = `<iframe src="${escapeHtml(fileUrl)}" title="${escapeHtml(fileName || 'PDF')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>`;
     } else if (isDoc) {
-      // Office docs: embed via Microsoft Office Online viewer when URL is publicly reachable.
-      const officeViewer = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
+      // Office Online cannot reach private signed URLs reliably — prefer Open tab.
       proposalFilePreviewBody.innerHTML = `
-        <iframe src="${escapeHtml(officeViewer)}" title="${escapeHtml(fileName || 'Document')}" class="w-full h-[75vh] rounded-lg bg-white border border-zinc-200"></iframe>
-        <p class="mt-2 text-center text-[11px] text-zinc-500">If the preview is blank (local/private URL), use Open tab.</p>`;
+        <div class="text-center p-8">
+          <p class="text-sm text-zinc-600 mb-3">Word files open best in a new tab (private storage).</p>
+          <a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener"
+            class="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Open in new tab</a>
+        </div>`;
     } else {
       proposalFilePreviewBody.innerHTML = `
         <div class="text-center p-8">
@@ -2562,9 +2670,6 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             class="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">Open in new tab</a>
         </div>`;
     }
-
-    proposalFilePreviewModal.classList.remove('hidden');
-    proposalFilePreviewModal.classList.add('flex');
   }
 
   function closeProposalFilePreview() {
@@ -2585,6 +2690,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     e.preventDefault();
     openProposalFilePreview({
       url: btn.getAttribute('data-file-url') || '',
+      path: btn.getAttribute('data-file-path') || '',
+      bucket: btn.getAttribute('data-file-bucket') || 'proposal-documents',
       label: btn.getAttribute('data-file-label') || '',
       fileName: btn.getAttribute('data-file-name') || '',
       mimeType: btn.getAttribute('data-file-mime') || '',
@@ -2643,11 +2750,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const code = String(requirement?.code || 'DOC').trim() || 'DOC';
       const label = String(requirement?.label || code).trim() || code;
       const submission = requirementId ? submissionsByRequirement[requirementId] : null;
-      const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
+      const fileUrl = String(submission?.file_url || '').trim();
+      const filePath = String(submission?.file_path || '').trim();
       const fileName = String(submission?.file_name || '').trim();
       const mimeType = String(submission?.mime_type || '').trim();
       const uploadedAt = String(submission?.updated_at || submission?.uploaded_at || '').trim();
       const uploadedText = uploadedAt ? new Date(uploadedAt).toLocaleString() : '';
+      const hasFile = fileUrl !== '' || filePath !== '';
 
       const item = document.createElement('div');
       item.className = 'rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3';
@@ -2658,13 +2767,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             <div class="text-sm font-semibold text-zinc-900">${escapeHtml(label)}</div>
           </div>
           <div class="mt-1 text-xs text-zinc-500">
-            ${fileUrl ? `Uploaded${uploadedText ? ` • ${escapeHtml(uploadedText)}` : ''}` : 'Still waiting for teacher upload'}
+            ${hasFile ? `Uploaded${uploadedText ? ` • ${escapeHtml(uploadedText)}` : ''}` : 'Still waiting for teacher upload'}
           </div>
           <div class="mt-3">
-            ${fileUrl
+            ${hasFile
               ? `<button type="button"
                   data-proposal-file-preview
                   data-file-url="${escapeHtml(fileUrl)}"
+                  data-file-path="${escapeHtml(filePath)}"
+                  data-file-bucket="proposal-documents"
                   data-file-label="${escapeHtml(label)}"
                   data-file-name="${escapeHtml(fileName || label)}"
                   data-file-mime="${escapeHtml(mimeType)}"
@@ -3513,9 +3624,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const code = String(requirement?.code || `DOC${index + 1}`).trim() || `DOC${index + 1}`;
       const label = String(requirement?.label || code).trim() || code;
       const submission = requirementId ? submissionsByRequirement[requirementId] : null;
-      const fileUrl = String(submission?.file_url || submission?.file_path || '').trim();
+      const fileUrl = String(submission?.file_url || '').trim();
+      const filePath = String(submission?.file_path || '').trim();
       const fileName = String(submission?.file_name || '').trim();
       const mimeType = String(submission?.mime_type || '').trim();
+      const hasFile = fileUrl !== '' || filePath !== '';
 
       const row = document.createElement('div');
       row.className = 'rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm';
@@ -3528,15 +3641,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
               <div class="text-sm font-bold text-zinc-900">${escapeHtml(label)}</div>
             </div>
             <div class="mt-1 text-xs text-zinc-500">
-              ${fileUrl
+              ${hasFile
                 ? `Current file: ${escapeHtml(fileName || 'Uploaded document')}`
                 : 'No uploaded file found. Please upload one to continue.'}
             </div>
           </div>
-          ${fileUrl
+          ${hasFile
             ? `<button type="button"
                 data-proposal-file-preview
                 data-file-url="${escapeHtml(fileUrl)}"
+                data-file-path="${escapeHtml(filePath)}"
+                data-file-bucket="proposal-documents"
                 data-file-label="${escapeHtml(label)}"
                 data-file-name="${escapeHtml(fileName || label)}"
                 data-file-mime="${escapeHtml(mimeType)}"
@@ -3985,7 +4100,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const decodedTarget = decodeTargetParticipant(ds('event_for') || 'All');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
     setSelectedTargetYears(decodedTarget.years || ['ALL']);
-    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = ds('grace_time') || '15';
+    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = ds('grace_time') || '30';
     setRegistrationType((ds('is_free_event') || '1') !== '0' ? 'free' : 'paid');
     const feeInput = document.getElementById('event_fee');
     if (feeInput) {
@@ -4631,7 +4746,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     if (document.getElementById('event_type')) document.getElementById('event_type').value = 'Event';
     if (document.getElementById('target_course')) document.getElementById('target_course').value = 'ALL';
     setSelectedTargetYears(['ALL']);
-    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '15';
+    if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '30';
     setRegistrationType('free');
     const eventFeeInput = document.getElementById('event_fee');
     if (eventFeeInput) eventFeeInput.value = '';
@@ -4747,7 +4862,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const targetCourse = document.getElementById('target_course') ? document.getElementById('target_course').value : 'ALL';
       const targetYears = getSelectedTargetYears();
       const eventFor = encodeTargetParticipant(targetCourse, targetYears);
-      const graceTime = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '15';
+      const graceTime = document.getElementById('grace_time') ? document.getElementById('grace_time').value : '30';
 
       const eventMode = (eventModeInput?.value || 'simple').trim();
       const seminarCount = Number.parseInt(seminarCountInput?.value || '0', 10) || 0;
@@ -5266,6 +5381,20 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Failed to publish event.');
+      if (data.push) {
+        console.log('[publish push]', data.push);
+        if (data.push.attempted && !data.push.fcm_ok) {
+          const detail = [
+            'Event published, but push notification failed.',
+            'targets=' + (data.push.targets ?? 0),
+            'tokens=' + (data.push.tokens ?? 0),
+            'error=' + (data.push.error || 'unknown'),
+            data.push.http_status ? ('http=' + data.push.http_status) : null,
+            data.push.detail ? ('detail=' + data.push.detail) : null,
+          ].filter(Boolean).join('\n');
+          alert(detail);
+        }
+      }
       window.location.reload();
     } catch (e) {
       alert(e.message || 'Failed to publish event.');
@@ -6386,7 +6515,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     if (manageEventsLiveIntervalId) {
       window.clearInterval(manageEventsLiveIntervalId);
     }
-    const intervalMs = document.visibilityState === 'visible' ? 15000 : 60000;
+    const intervalMs = document.visibilityState === 'visible' ? 45000 : 120000;
     manageEventsLiveIntervalId = window.setInterval(refreshManageEventsLive, intervalMs);
   }
 

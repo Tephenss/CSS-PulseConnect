@@ -15,6 +15,10 @@ desktop.ini
 # Logs
 *.log
 
+# Node (Tailwind build); commit assets/css/tailwind.css
+node_modules/
+package-lock.json
+
 # Secrets
 .env
 api/service-account.json

@@ -214,7 +214,16 @@ function student_course_matches_target(string $studentCourse, string $studentSpe
 function student_matches_event_target(array $row, string $eventFor): bool
 {
     $normalizedTarget = strtoupper(trim($eventFor));
-    if ($normalizedTarget === '' || $normalizedTarget === 'ALL') {
+    // Treat common "everyone" aliases as ALL (encode_target_participant uses "All").
+    if (
+        $normalizedTarget === ''
+        || $normalizedTarget === 'ALL'
+        || $normalizedTarget === 'ALL LEVELS'
+        || $normalizedTarget === 'NONE'
+        || $normalizedTarget === 'ALL STUDENTS'
+        || $normalizedTarget === 'ALL COURSES'
+        || $normalizedTarget === 'ALL COURSES - ALL LEVELS'
+    ) {
         return true;
     }
 
@@ -223,7 +232,14 @@ function student_matches_event_target(array $row, string $eventFor): bool
     $studentSpec = extract_student_specialization($row);
 
     if (preg_match('/^(BSIT|BSCS)\s*-\s*([1-4])$/', $normalizedTarget, $matches)) {
-        return $studentCourse === $matches[1] && $studentYear === $matches[2];
+        if ($studentCourse !== $matches[1]) {
+            return false;
+        }
+        // Soft-match when section/year cannot be derived from profile.
+        if ($studentYear === '') {
+            return true;
+        }
+        return $studentYear === $matches[2];
     }
 
     $standaloneTarget = normalize_event_target_course($normalizedTarget);
@@ -232,6 +248,9 @@ function student_matches_event_target(array $row, string $eventFor): bool
     }
 
     if (in_array($normalizedTarget, ['1', '2', '3', '4'], true)) {
+        if ($studentYear === '') {
+            return true;
+        }
         return $studentYear === $normalizedTarget;
     }
 
@@ -266,7 +285,12 @@ function student_matches_event_target(array $row, string $eventFor): bool
             return true;
         }
 
-        return $studentYear !== '' && in_array($studentYear, $targetYears, true);
+        // Many student rows lack section/year — still notify on course match.
+        if ($studentYear === '') {
+            return true;
+        }
+
+        return in_array($studentYear, $targetYears, true);
     }
 
     return false;

@@ -20,8 +20,9 @@ $lite = isset($_GET['lite']) && (string) $_GET['lite'] === '1';
 $skipCache = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
 $userId = trim((string) ($user['id'] ?? ''));
 $role = trim((string) ($user['role'] ?? ''));
-$cacheKey = 'manage_events_live:' . $role . ':' . $userId . ':' . ($lite ? 'lite' : 'full');
-$ttl = $lite ? 10 : 8;
+$cacheGen = api_cache_generation('manage_events');
+$cacheKey = 'manage_events_live:g' . $cacheGen . ':' . $role . ':' . $userId . ':' . ($lite ? 'lite' : 'full');
+$ttl = $lite ? 30 : 25;
 
 try {
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -38,7 +39,7 @@ try {
         static function () use ($user, $lite): array {
             return manage_events_live_payload($user, $lite);
         },
-        15
+        40
     );
     json_response($payload, 200);
 } catch (Throwable $e) {

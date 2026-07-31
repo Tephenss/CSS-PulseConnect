@@ -32,6 +32,51 @@ if ($template_scope === 'session' && $session_id === '') {
     json_response(['ok' => false, 'error' => 'A seminar must be selected before saving this template.'], 400);
 }
 
+$role = strtolower(trim((string) ($user['role'] ?? '')));
+$userId = trim((string) ($user['id'] ?? ''));
+$headersRead = [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+
+// Teachers may only save templates for events they own or are assigned to.
+if ($role === 'teacher') {
+    $checkEventId = $event_id;
+    if ($template_scope === 'session' && $session_id !== '') {
+        $sessUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=event_id&id=eq.' . rawurlencode($session_id) . '&limit=1';
+        $sessRes = supabase_request('GET', $sessUrl, $headersRead);
+        $sessRows = json_decode((string) ($sessRes['body'] ?? ''), true);
+        $checkEventId = is_array($sessRows) && isset($sessRows[0]['event_id'])
+            ? (string) $sessRows[0]['event_id']
+            : '';
+    }
+    if ($checkEventId === '') {
+        json_response(['ok' => false, 'error' => 'event_id required for teacher template save.'], 400);
+    }
+    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,created_by&id=eq.' . rawurlencode($checkEventId) . '&limit=1';
+    $eventRes = supabase_request('GET', $eventUrl, $headersRead);
+    $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+    $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
+    $owned = is_array($event) && (string) ($event['created_by'] ?? '') === $userId;
+    if (!$owned) {
+        $assignUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+            . '?select=id&event_id=eq.' . rawurlencode($checkEventId)
+            . '&teacher_id=eq.' . rawurlencode($userId) . '&limit=1';
+        $assignRes = supabase_request('GET', $assignUrl, $headersRead);
+        $assignRows = json_decode((string) ($assignRes['body'] ?? ''), true);
+        $owned = is_array($assignRows) && count($assignRows) > 0;
+    }
+    if (!$owned) {
+        json_response(['ok' => false, 'error' => 'You do not have permission to save templates for this event.'], 403);
+    }
+    if ($event_id === '') {
+        $event_id = $checkEventId;
+    }
+}
+
 // Prepare payload
 $payload = [
     'title' => $name,

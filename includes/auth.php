@@ -28,6 +28,8 @@ function auth_verified_on_current_ph_day(?string $verifiedAtIso): bool
 
 /**
  * After 12:00 AM Manila, force admin/teacher sessions to re-verify via login OTP.
+ * Successful checks are cached in the PHP session (~10 min) so sidebar navigation
+ * does not re-hit Supabase on every page load. Cache is IP-bound and day-bound.
  */
 function auth_enforce_daily_web_verification(array $user): void
 {
@@ -48,6 +50,23 @@ function auth_enforce_daily_web_verification(array $user): void
     }
     if (!function_exists('device_trust_ip_key')) {
         require_once __DIR__ . '/device_trust.php';
+    }
+
+    $trustKey = device_trust_ip_key();
+    $phDay = (new DateTimeImmutable('now', auth_ph_timezone()))->format('Y-m-d');
+    $cacheTtlSeconds = 600; // 10 minutes
+    $cachedUser = (string) ($_SESSION['web_daily_ok_user'] ?? '');
+    $cachedTrust = (string) ($_SESSION['web_daily_ok_trust'] ?? '');
+    $cachedDay = (string) ($_SESSION['web_daily_ok_ph_day'] ?? '');
+    $cachedUntil = (int) ($_SESSION['web_daily_ok_until'] ?? 0);
+
+    if (
+        $cachedUser === $userId
+        && $cachedTrust === $trustKey
+        && $cachedDay === $phDay
+        && $cachedUntil > time()
+    ) {
+        return;
     }
 
     $headers = [
@@ -73,14 +92,25 @@ function auth_enforce_daily_web_verification(array $user): void
         }
     }
 
-    $trustKey = device_trust_ip_key();
     $trusted = device_trust_is_trusted($userId, $trustKey);
     $verifiedToday = auth_verified_on_current_ph_day($verifiedAt);
 
     if ($verifiedToday && $trusted) {
+        $_SESSION['web_daily_ok_user'] = $userId;
+        $_SESSION['web_daily_ok_trust'] = $trustKey;
+        $_SESSION['web_daily_ok_ph_day'] = $phDay;
+        $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
+        // Touch once per successful revalidation window (not every sidebar click).
         device_trust_touch($userId, $trustKey);
         return;
     }
+
+    unset(
+        $_SESSION['web_daily_ok_user'],
+        $_SESSION['web_daily_ok_trust'],
+        $_SESSION['web_daily_ok_ph_day'],
+        $_SESSION['web_daily_ok_until']
+    );
 
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {

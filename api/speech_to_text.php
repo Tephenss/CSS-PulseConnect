@@ -53,6 +53,9 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 if (defined('SUPABASE_DEV_SKIP_SSL_VERIFY') && SUPABASE_DEV_SKIP_SSL_VERIFY) {
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+} else {
+    require_once __DIR__ . '/../includes/curl_ssl.php';
+    apply_curl_ssl_policy($ch);
 }
 
 $response = curl_exec($ch);

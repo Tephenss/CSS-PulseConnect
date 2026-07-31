@@ -190,12 +190,12 @@ function fetch_event_for_approval(string $eventId, array $headers): ?array
     $supportsProposalStage = true;
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
         . '?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,allow_registration,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at'
+        . '&select=id,status,title,created_by,description,event_for,start_at,end_at,location,cover_image_url,event_type,allow_registration,is_free_event,registration_limit,proposal_stage,requirements_requested_at,requirements_submitted_at'
         . '&limit=1';
     $res = supabase_request('GET', $url, $headers);
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
-        if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage') || str_contains($message, 'requirements_requested_at') || str_contains($message, 'requirements_submitted_at') || str_contains($message, 'is_free_event') || str_contains($message, 'registration_limit'))
+        if ((str_contains($message, 'allow_registration') || str_contains($message, 'proposal_stage') || str_contains($message, 'requirements_requested_at') || str_contains($message, 'requirements_submitted_at') || str_contains($message, 'is_free_event') || str_contains($message, 'registration_limit') || str_contains($message, 'cover_image_url') || str_contains($message, 'event_type'))
             && (str_contains($message, 'column') || str_contains($message, 'does not exist') || str_contains($message, 'schema cache'))) {
             $supportsProposalStage = false;
             $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
@@ -445,7 +445,207 @@ if (!$res['ok']) {
 }
 
 $rows = json_decode((string) $res['body'], true);
-$event = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
+$event = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+// Prefer return=representation can occasionally be empty even when PATCH succeeded.
+// Never skip publish notifications because of that — fall back to the pre-update row.
+if (!is_array($event) && is_array($existingEvent)) {
+    $event = $existingEvent;
+    $event['status'] = $status;
+    $event['updated_at'] = gmdate('c');
+}
+$mergedEvent = is_array($event)
+    ? array_merge(is_array($existingEvent) ? $existingEvent : [], $event)
+    : null;
+if (is_array($mergedEvent)) {
+    $mergedEvent['status'] = $status;
+    $mergedEvent['id'] = $eventId;
+}
+
+/**
+ * Load student recipients for publish push (paginated; fail-open).
+ *
+ * @return list<string>
+ */
+$loadPublishStudentIds = static function (string $eventFor) use ($headers): array {
+    $targetUserIds = [];
+    $pageSize = 1000;
+    $offset = 0;
+
+    for ($page = 0; $page < 20; $page++) {
+        $rangeEnd = $offset + $pageSize - 1;
+        $pageHeaders = array_merge($headers, [
+            'Range-Unit: items',
+            'Range: ' . $offset . '-' . $rangeEnd,
+            'Prefer: count=exact',
+        ]);
+        $usersUrl = rtrim(SUPABASE_URL, '/')
+            . '/rest/v1/users?select=id,course,sections(name)&role=eq.student&order=id.asc';
+        $usersRes = supabase_request('GET', $usersUrl, $pageHeaders);
+        if (!($usersRes['ok'] ?? false)) {
+            // Fallback without section embed if join fails.
+            $fallbackUrl = rtrim(SUPABASE_URL, '/')
+                . '/rest/v1/users?select=id,course&role=eq.student&order=id.asc';
+            $usersRes = supabase_request('GET', $fallbackUrl, $pageHeaders);
+            if (!($usersRes['ok'] ?? false)) {
+                error_log('events_approve publish: failed to load students for FCM');
+                break;
+            }
+        }
+
+        $userRows = json_decode((string) ($usersRes['body'] ?? ''), true);
+        if (!is_array($userRows) || $userRows === []) {
+            break;
+        }
+
+        foreach ($userRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = trim((string) ($row['id'] ?? ''));
+            if ($id === '') {
+                continue;
+            }
+            if (student_matches_event_target($row, $eventFor)) {
+                $targetUserIds[$id] = true;
+            }
+        }
+
+        if (count($userRows) < $pageSize) {
+            break;
+        }
+        $offset += $pageSize;
+    }
+
+    return array_keys($targetUserIds);
+};
+
+// Student publish push FIRST — do not let catalog/Firestore delay or abort FCM.
+$publishPush = [
+    'attempted' => false,
+    'targets' => 0,
+    'tokens' => 0,
+    'inbox' => false,
+    'fcm_ok' => false,
+    'error' => null,
+    'event_for' => null,
+];
+if (is_array($mergedEvent)
+    && $status === 'published'
+    && in_array($previousStatus, ['approved', 'pending', 'draft', ''], true)
+    && $previousStatus !== 'published'
+) {
+    try {
+        @set_time_limit(180);
+        require_once __DIR__ . '/../includes/event_targeting.php';
+        require_once __DIR__ . '/../includes/user_notifications.php';
+
+        $eventFor = (string) ($mergedEvent['event_for'] ?? 'All');
+        $publishPush['attempted'] = true;
+        $publishPush['event_for'] = $eventFor;
+        $targetUserIds = [];
+        try {
+            $targetUserIds = $loadPublishStudentIds($eventFor);
+        } catch (Throwable $e) {
+            error_log('events_approve publish: load students exception: ' . $e->getMessage());
+            $publishPush['error'] = 'load_students_failed';
+        }
+
+        error_log(
+            'events_approve publish push: event=' . $eventId
+            . ' previous=' . $previousStatus
+            . ' targets=' . count($targetUserIds)
+            . ' event_for=' . $eventFor
+        );
+
+        // Fail-open: if targeting matched nobody, still broadcast to all students.
+        // Silent zero-target publishes are the #1 reason "push did not fire".
+        if ($targetUserIds === []) {
+            try {
+                $allUrl = rtrim(SUPABASE_URL, '/')
+                    . '/rest/v1/users?select=id&role=eq.student&order=id.asc&limit=5000';
+                $allRes = supabase_request('GET', $allUrl, $headers);
+                $allRows = json_decode((string) ($allRes['body'] ?? ''), true);
+                if (is_array($allRows)) {
+                    foreach ($allRows as $row) {
+                        if (!is_array($row)) {
+                            continue;
+                        }
+                        $id = trim((string) ($row['id'] ?? ''));
+                        if ($id !== '') {
+                            $targetUserIds[] = $id;
+                        }
+                    }
+                }
+                error_log('events_approve publish push: zero-match fallback targets=' . count($targetUserIds));
+                if ($targetUserIds !== []) {
+                    $publishPush['error'] = 'used_all_students_fallback';
+                }
+            } catch (Throwable $e) {
+                error_log('events_approve publish ALL fallback exception: ' . $e->getMessage());
+            }
+        }
+
+        if ($targetUserIds !== []) {
+            $eventTitle = (string) ($mergedEvent['title'] ?? 'Event');
+            $isFreeEvent = normalize_registration_bool($mergedEvent['is_free_event'] ?? true);
+            $notifBody = $isFreeEvent
+                ? '"' . $eventTitle . '" has been published. Registration is now open — you can register now.'
+                : '"' . $eventTitle . '" has been published. Payment approval is required before you can register.';
+            try {
+                $dispatch = dispatch_user_notifications_detailed(
+                    $targetUserIds,
+                    'New Event Published',
+                    $notifBody,
+                    [
+                        'event_id' => $eventId,
+                        'type' => 'event_published',
+                    ]
+                );
+                $publishPush['targets'] = (int) ($dispatch['targets'] ?? 0);
+                $publishPush['tokens'] = (int) ($dispatch['tokens'] ?? 0);
+                $publishPush['inbox'] = !empty($dispatch['inbox']);
+                $publishPush['fcm_ok'] = !empty($dispatch['fcm_ok']);
+                $publishPush['detail'] = $dispatch['detail'] ?? null;
+                $publishPush['http_status'] = $dispatch['http_status'] ?? null;
+                if (!empty($dispatch['error']) && ($publishPush['error'] === null || $publishPush['error'] === 'used_all_students_fallback')) {
+                    // Keep fallback note if present; otherwise record dispatch error.
+                    if ($publishPush['error'] === null) {
+                        $publishPush['error'] = (string) $dispatch['error'];
+                    } elseif (!$publishPush['fcm_ok']) {
+                        $publishPush['error'] = $publishPush['error'] . '+' . (string) $dispatch['error'];
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('events_approve publish FCM exception: ' . $e->getMessage());
+                $publishPush['error'] = 'exception:' . $e->getMessage();
+            }
+            error_log(
+                'events_approve publish push result: fcm=' . ($publishPush['fcm_ok'] ? 'ok' : 'fail')
+                . ' tokens=' . $publishPush['tokens']
+                . ' targets=' . $publishPush['targets']
+                . ' err=' . (string) ($publishPush['error'] ?? '')
+            );
+        } else {
+            $publishPush['error'] = 'no_students_in_database';
+            error_log('events_approve publish push skipped: no students found');
+        }
+    } catch (Throwable $e) {
+        error_log('events_approve publish push block exception: ' . $e->getMessage());
+        $publishPush['error'] = 'block_exception:' . $e->getMessage();
+    }
+}
+
+// Catalog sync AFTER push so Firestore slowness cannot block notifications.
+if (is_array($mergedEvent)) {
+    try {
+        require_once __DIR__ . '/../includes/firestore_catalog.php';
+        firestore_catalog_sync_event($mergedEvent);
+    } catch (Throwable $e) {
+        error_log('events_approve catalog sync exception: ' . $e->getMessage());
+    }
+}
+require_once __DIR__ . '/../includes/api_cache.php';
+api_cache_bump_generation('manage_events');
 
 $notifyTeacher = false;
 if ($status === 'approved') {
@@ -454,7 +654,7 @@ if ($status === 'approved') {
     $notifyTeacher = true;
 }
 
-if ($event && $notifyTeacher) {
+if (is_array($event) && $notifyTeacher) {
     $teacherId = trim((string) ($event['created_by'] ?? ''));
     if ($teacherId !== '') {
         $eventTitle = (string) ($event['title'] ?? 'your event proposal');
@@ -476,7 +676,7 @@ if ($event && $notifyTeacher) {
     }
 }
 
-if ($event && $initialPublishFlow && !empty($validTeacherIds)) {
+if (is_array($event) && $initialPublishFlow && !empty($validTeacherIds)) {
     $eventTitle = (string) ($event['title'] ?? 'Event');
     $body = 'You have been assigned to "' . $eventTitle . '".';
     send_notification_to_users($validTeacherIds, 'Assigned to Event', $body, [
@@ -485,68 +685,14 @@ if ($event && $initialPublishFlow && !empty($validTeacherIds)) {
     ]);
 }
 
-if ($event && in_array($status, ['published', 'draft'], true)) {
-    $eventFor = (string) ($event['event_for'] ?? 'All');
-
-    // Fetch all students with their section name and course
-    $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users?select=id,course,sections(name)&role=eq.student';
-
-    $usersRes = supabase_request('GET', $usersUrl, [
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY,
-    ]);
-
-    $targetUserIds = [];
-    if ($usersRes['ok']) {
-        $userRows = json_decode((string) $usersRes['body'], true);
-        if (is_array($userRows)) {
-            foreach ($userRows as $row) {
-                if (!is_array($row)) {
-                    continue;
-                }
-
-                $id = trim((string) ($row['id'] ?? ''));
-                if ($id === '') {
-                    continue;
-                }
-
-                if (student_matches_event_target($row, $eventFor)) {
-                    $targetUserIds[$id] = true;
-                }
-            }
-        }
-    }
-
-    if (!empty($targetUserIds)) {
-        $eventTitle = (string) ($event['title'] ?? 'Event');
-        $notifTitle = '';
-        $notifBody = '';
-        $notifType = '';
-
-        if ($status === 'published' && in_array($previousStatus, ['approved', 'pending', 'draft'], true)) {
-            $notifTitle = 'New Event Published';
-            $isFreeEvent = normalize_registration_bool($existingEvent['is_free_event'] ?? true);
-            if ($isFreeEvent) {
-                $notifBody = '"' . $eventTitle . '" has been published. Registration is now open — you can register now.';
-            } else {
-                $notifBody = '"' . $eventTitle . '" has been published. Payment approval is required before you can register.';
-            }
-            $notifType = 'event_published';
-        }
-
-        if ($notifTitle !== '' && $notifType !== '') {
-            send_notification_to_users(array_keys($targetUserIds), $notifTitle, $notifBody, [
-                'event_id' => $eventId,
-                'type' => $notifType,
-            ]);
-        }
-    }
-}
-
 // Seed default "common questions" on initial publish so evaluation isn't blank.
-if ($event && $initialPublishFlow) {
+if (is_array($event) && $initialPublishFlow) {
     evaluation_seed_event_questions_if_missing($eventId, $headers);
     evaluation_seed_session_questions_if_missing($eventId, $headers);
 }
 
-json_response(['ok' => true, 'event' => $event], 200);
+json_response([
+    'ok' => true,
+    'event' => $event,
+    'push' => $publishPush,
+], 200);

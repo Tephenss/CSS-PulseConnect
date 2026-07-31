@@ -7,6 +7,7 @@ session_bootstrap();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
+require_once __DIR__ . '/includes/api_cache.php';
 require_once __DIR__ . '/includes/layout.php';
 
 $user = require_role(['admin']);
@@ -17,50 +18,52 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-function safe_count($resBody): int
-{
-    if (!is_array($resBody)) return 0;
-    return count($resBody);
-}
+$metrics = api_cache_remember('admin_analytics_metrics', 60, static function () use ($headers): array {
+    $totalEvents = supabase_exact_count('events', $headers);
+    $pendingEvents = supabase_exact_count('events', $headers, 'status=eq.pending');
+    $publishedEvents = supabase_exact_count('events', $headers, 'status=eq.published');
+    $regs = supabase_exact_count('event_registrations', $headers);
+    $certs = supabase_exact_count('certificates', $headers);
 
-// Global counts (best-effort).
-$eventsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,status&limit=10000';
-$eventsRes = supabase_request('GET', $eventsUrl, $headers);
-$events = $eventsRes['ok'] ? json_decode((string) $eventsRes['body'], true) : [];
-$events = is_array($events) ? $events : [];
+    $checkedIn = supabase_exact_count('attendance', $headers, 'check_in_at=not.is.null');
+    $early = supabase_exact_count('attendance', $headers, 'status=eq.early');
+    $present = supabase_exact_count('attendance', $headers, 'status=in.(present,late)');
+    $absent = supabase_exact_count('attendance', $headers, 'status=eq.absent');
+    $invalid = supabase_exact_count('attendance', $headers, 'status=eq.invalid');
+    $unscanned = supabase_exact_count('attendance', $headers, 'status=eq.unscanned');
+    $totalAtt = supabase_exact_count('attendance', $headers);
 
-$pendingEvents = 0;
-$publishedEvents = 0;
-foreach ($events as $e) {
-    $s = (string) ($e['status'] ?? '');
-    if ($s === 'pending') $pendingEvents++;
-    if ($s === 'published') $publishedEvents++;
-}
+    // Fold legacy late into present for the status bars (matches previous UI).
+    $counts = [
+        'present' => $present,
+        'early' => $early,
+        'absent' => $absent,
+        'invalid' => $invalid,
+        'unscanned' => $unscanned,
+    ];
 
-$regsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations?select=id&limit=100000';
-$regsRes = supabase_request('GET', $regsUrl, $headers);
-$regs = $regsRes['ok'] ? json_decode((string) $regsRes['body'], true) : [];
-$regs = is_array($regs) ? $regs : [];
+    return [
+        'total_events' => $totalEvents,
+        'pending_events' => $pendingEvents,
+        'published_events' => $publishedEvents,
+        'regs' => $regs,
+        'certs' => $certs,
+        'checked_in' => $checkedIn,
+        'early' => $early,
+        'total_att' => $totalAtt,
+        'counts' => $counts,
+    ];
+});
 
-$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,status,check_in_at&limit=100000';
-$attRes = supabase_request('GET', $attUrl, $headers);
-$att = $attRes['ok'] ? json_decode((string) $attRes['body'], true) : [];
-$att = is_array($att) ? $att : [];
-
-$checkedIn = 0;
-$early = 0;
-foreach ($att as $a) {
-    $checkInAt = $a['check_in_at'] ?? null;
-    if (!empty($checkInAt)) {
-        $checkedIn++;
-        if ((string) ($a['status'] ?? '') === 'early') $early++;
-    }
-}
-
-$certUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates?select=id&limit=100000';
-$certRes = supabase_request('GET', $certUrl, $headers);
-$certRows = $certRes['ok'] ? json_decode((string) $certRes['body'], true) : [];
-$certs = is_array($certRows) ? count($certRows) : 0;
+$totalEvents = (int) ($metrics['total_events'] ?? 0);
+$pendingEvents = (int) ($metrics['pending_events'] ?? 0);
+$publishedEvents = (int) ($metrics['published_events'] ?? 0);
+$regs = (int) ($metrics['regs'] ?? 0);
+$certs = (int) ($metrics['certs'] ?? 0);
+$checkedIn = (int) ($metrics['checked_in'] ?? 0);
+$early = (int) ($metrics['early'] ?? 0);
+$totalAtt = (int) ($metrics['total_att'] ?? 0);
+$counts = is_array($metrics['counts'] ?? null) ? $metrics['counts'] : [];
 
 render_header('Analytics', $user);
 ?>
@@ -79,7 +82,7 @@ render_header('Analytics', $user);
         <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
      </div>
      <div class="z-10 min-w-0">
-        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) count($events)) ?></div>
+        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) $totalEvents) ?></div>
         <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold truncate">Total Events</div>
         <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate"><span class="text-amber-800"><?= $pendingEvents ?> Pending</span> · <span class="text-emerald-800"><?= $publishedEvents ?> Active</span></div>
      </div>
@@ -91,7 +94,7 @@ render_header('Analytics', $user);
         <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
      </div>
      <div class="z-10 min-w-0">
-        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) count($regs)) ?></div>
+        <div class="text-3xl font-bold text-zinc-900"><?= htmlspecialchars((string) $regs) ?></div>
         <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold truncate">Registrations</div>
         <div class="text-[10px] text-zinc-600 mt-1 font-medium truncate">All-time issued tickets</div>
      </div>
@@ -135,82 +138,50 @@ render_header('Analytics', $user);
     </div>
     <div class="px-5 py-2.5 rounded-2xl bg-zinc-100 border border-zinc-200 flex items-center gap-3">
        <span class="text-xs font-bold text-zinc-600 uppercase tracking-wider">Total Logs</span>
-       <span class="text-xl font-bold text-zinc-900 leading-none"><?= count($att) ?></span>
+       <span class="text-xl font-bold text-zinc-900 leading-none"><?= (int) $totalAtt ?></span>
     </div>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-16 gap-y-7 px-2">
     <?php
-      $counts = [];
-      foreach ($att as $a) {
-          $s = (string) ($a['status'] ?? 'unscanned');
-          if ($s === 'late') {
-              // Legacy late logs are folded into present since late is no longer an active status.
-              $s = 'present';
-          }
-          if (!isset($counts[$s])) $counts[$s] = 0;
-          $counts[$s]++;
-      }
-      $totalAtt = max(1, count($att));
-      
+      $totalForPct = max(1, $totalAtt);
       $statusGradients = [
           'early' => 'from-sky-500 to-blue-600',
           'present' => 'from-emerald-500 to-emerald-700',
           'invalid' => 'from-red-500 to-red-700',
           'unscanned' => 'from-zinc-400 to-zinc-600',
-      ];
-      $statusColors = [
-          'early' => 'text-sky-800',
-          'present' => 'text-emerald-800',
-          'invalid' => 'text-red-800',
-          'unscanned' => 'text-zinc-700',
+          'absent' => 'from-amber-500 to-amber-700',
       ];
       $statusDots = [
           'early' => 'bg-sky-500',
           'present' => 'bg-emerald-500',
           'invalid' => 'bg-red-500',
           'unscanned' => 'bg-zinc-500',
+          'absent' => 'bg-amber-500',
       ];
-      
-      $order = ['present','early','unscanned','invalid'];
+
+      $order = ['present', 'early', 'unscanned', 'invalid', 'absent'];
       foreach ($order as $s) {
-          if (!isset($counts[$s]) && $s !== 'present') continue; 
-          $c = $counts[$s] ?? 0;
-          $pct = round($c / $totalAtt * 100);
+          $c = (int) ($counts[$s] ?? 0);
+          if ($c <= 0 && $s !== 'present') {
+              continue;
+          }
+          $pct = (int) round($c / $totalForPct * 100);
           $grad = $statusGradients[$s] ?? 'from-zinc-500 to-zinc-600';
-          $color = $statusColors[$s] ?? 'text-zinc-700';
           $dot = $statusDots[$s] ?? 'bg-zinc-500';
-          
+
           echo '<div class="group">';
           echo '  <div class="flex items-center justify-between mb-2.5">';
           echo '    <span class="text-sm font-bold text-zinc-800 capitalize flex items-center gap-2">';
           echo '       <span class="w-1.5 h-1.5 rounded-full ' . $dot . '"></span>' . htmlspecialchars($s);
           echo '    </span>';
           echo '    <div class="flex items-baseline gap-2.5">';
-          echo '       <span class="text-lg font-bold text-zinc-900">' . htmlspecialchars((string)$c) . '</span>';
+          echo '       <span class="text-lg font-bold text-zinc-900">' . htmlspecialchars((string) $c) . '</span>';
           echo '       <span class="text-xs font-bold text-zinc-600 w-8 text-right">' . $pct . '%</span>';
           echo '    </div>';
           echo '  </div>';
           echo '  <div class="h-3 w-full rounded-full bg-zinc-200 overflow-hidden p-[2px]">';
           echo '    <div class="h-full rounded-full bg-gradient-to-r ' . $grad . ' transition-all duration-[1200ms] ease-out w-0 stat-bar" data-width="' . $pct . '"></div>';
-          echo '  </div>';
-          echo '</div>';
-          unset($counts[$s]); // mark processed
-      }
-      
-      // Irregular statuses
-      foreach ($counts as $s => $c) {
-          $pct = round($c / $totalAtt * 100);
-          echo '<div class="group">';
-          echo '  <div class="flex items-center justify-between mb-2.5">';
-          echo '    <span class="text-sm font-bold text-zinc-800 capitalize flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>' . htmlspecialchars($s) . '</span>';
-          echo '    <div class="flex items-baseline gap-2.5">';
-          echo '       <span class="text-lg font-bold text-zinc-900">' . htmlspecialchars((string)$c) . '</span>';
-          echo '       <span class="text-xs font-bold text-zinc-600 w-8 text-right">' . $pct . '%</span>';
-          echo '    </div>';
-          echo '  </div>';
-          echo '  <div class="h-3 w-full rounded-full bg-zinc-200 overflow-hidden p-[2px]">';
-          echo '    <div class="h-full rounded-full bg-gradient-to-r from-zinc-500 to-zinc-600 transition-all duration-[1200ms] ease-out w-0 stat-bar" data-width="' . $pct . '"></div>';
           echo '  </div>';
           echo '</div>';
       }
@@ -219,7 +190,6 @@ render_header('Analytics', $user);
 </div>
 
 <script>
-  // Animate stat bars on load
   setTimeout(() => {
     document.querySelectorAll('.stat-bar').forEach(bar => {
       bar.style.width = bar.dataset.width + '%';

@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/api_cache.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -16,7 +17,7 @@ $role = (string) ($user['role'] ?? 'teacher');
 // Load events to show on homepage (students see published only).
 $select = 'select=id,title,description,location,start_at,end_at,status';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
-$url = $role === 'student' ? $base . '&status=eq.published&limit=100' : $base . '&status=neq.archived&limit=100';
+$url = $role === 'student' ? $base . '&status=eq.published&limit=60' : $base . '&status=neq.archived&limit=60';
 
 $headers = [
   'Accept: application/json',
@@ -24,12 +25,15 @@ $headers = [
   'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$events = [];
-$res = supabase_request('GET', $url, $headers);
-if ($res['ok']) {
+$homeCache = api_cache_remember('home_events:' . $role, 30, static function () use ($url, $headers): array {
+  $res = supabase_request('GET', $url, $headers);
+  if (!$res['ok']) {
+    return ['events' => []];
+  }
   $decoded = json_decode((string) $res['body'], true);
-  $events = is_array($decoded) ? $decoded : [];
-}
+  return ['events' => is_array($decoded) ? $decoded : []];
+});
+$events = is_array($homeCache['events'] ?? null) ? $homeCache['events'] : [];
 
 $manilaTz = new DateTimeZone('Asia/Manila');
 
@@ -39,43 +43,6 @@ render_header('Dashboard', $user);
 ?>
 
 <style>
-  /* MacBook Animation Styles */
-  .macbook {
-    width: 150px;
-    height: 96px;
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    margin: -60px 0 0 -75px;
-    perspective: 500px;
-    transform: scale(1.1);
-  }
-
-  .mac-shadow {
-    position: absolute;
-    width: 60px;
-    height: 0px;
-    left: 40px;
-    top: 160px;
-    transform: rotateX(80deg) rotateY(0deg) rotateZ(0deg);
-    box-shadow: 0 0 60px 40px rgba(0, 0, 0, 0.3);
-    animation: mac-shadow infinite 7s ease;
-  }
-
-  .mac-inner {
-    z-index: 20;
-    position: absolute;
-    width: 150px;
-    height: 96px;
-    left: 0;
-    top: 0;
-    transform-style: preserve-3d;
-    transform: rotateX(-20deg) rotateY(0deg) rotateZ(0deg);
-    animation: mac-rotate infinite 7s ease;
-  }
-
-  <style>
-
   /* MacBook Animation Styles */
   .macbook {
     width: 150px;

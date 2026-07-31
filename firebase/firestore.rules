@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public published-event catalog (assist cache only — no PII).
+    // Writes: PHP service account only. Clients: read-only.
+    match /public_catalog_events/{eventId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /public_catalog_meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Scan ingress signals (no PII): live pending-count per event for UI/backpressure.
+  match /scan_ingress_signals/{eventId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Scan ingress jobs: server-only; clients must not read/write.
+    match /scan_ingress_jobs/{jobId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

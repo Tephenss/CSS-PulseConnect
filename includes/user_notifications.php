@@ -33,7 +33,7 @@ function user_notification_type_from_payload(array $data): string
     return match ($type) {
         'event_published', 'reg_open', 'proposal-documents', 'proposal_requirements_requested' => 'info',
         'reg_approved', 'certificate_ready', 'certificate' => 'success',
-        'proposal-rejected', 'proposal_rejected' => 'warning',
+        'proposal-rejected', 'proposal_rejected', 'eval_open' => 'warning',
         default => 'info',
     };
 }
@@ -79,11 +79,44 @@ function persist_user_notifications(array $userIds, string $title, string $body,
         return;
     }
 
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/user_notifications?on_conflict=user_id,dedupe_key';
-    supabase_request('POST', $url, user_notification_headers(), $payload);
+    // Partial unique index (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+    // cannot be targeted by PostgREST on_conflict → 42P10 ERROR spam.
+    // Delete matching dedupe rows then insert.
+    $headers = user_notification_headers();
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $uid = trim((string) ($row['user_id'] ?? ''));
+        $dedupe = trim((string) ($row['dedupe_key'] ?? ''));
+        if ($uid !== '' && $dedupe !== '') {
+            supabase_request(
+                'DELETE',
+                rtrim(SUPABASE_URL, '/') . '/rest/v1/user_notifications'
+                    . '?user_id=eq.' . rawurlencode($uid)
+                    . '&dedupe_key=eq.' . rawurlencode($dedupe),
+                $headers
+            );
+        }
+    }
+    supabase_request(
+        'POST',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/user_notifications',
+        $headers,
+        $payload
+    );
 }
 
 function dispatch_user_notifications(array $userIds, string $title, string $body, array $data = []): bool
+{
+    $result = dispatch_user_notifications_detailed($userIds, $title, $body, $data);
+    return !empty($result['fcm_ok']);
+}
+
+/**
+ * @return array{targets:int,tokens:int,inbox:bool,fcm_ok:bool,error:?string}
+ */
+function dispatch_user_notifications_detailed(array $userIds, string $title, string $body, array $data = []): array
 {
     $userIds = array_values(array_unique(array_filter(array_map(
         static fn ($value): string => trim((string) $value),
@@ -91,29 +124,41 @@ function dispatch_user_notifications(array $userIds, string $title, string $body
     ))));
 
     if ($userIds === []) {
-        return false;
+        return [
+            'targets' => 0,
+            'tokens' => 0,
+            'inbox' => false,
+            'fcm_ok' => false,
+            'error' => 'no_targets',
+        ];
     }
 
     persist_user_notifications($userIds, $title, $body, $data);
 
-    $inList = '(' . implode(',', array_map('rawurlencode', $userIds)) . ')';
-    $tokensRes = supabase_request(
-        'GET',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
-        [
-            'Accept: application/json',
-            'apikey: ' . SUPABASE_KEY,
-            'Authorization: Bearer ' . SUPABASE_KEY,
-        ]
-    );
-
-    if (!($tokensRes['ok'] ?? false)) {
-        return false;
-    }
-
-    $tokenRows = json_decode((string) ($tokensRes['body'] ?? ''), true);
     $tokens = [];
-    if (is_array($tokenRows)) {
+    $chunkSize = 80;
+    for ($offset = 0; $offset < count($userIds); $offset += $chunkSize) {
+        $chunk = array_slice($userIds, $offset, $chunkSize);
+        $inList = '(' . implode(',', $chunk) . ')';
+        $tokensRes = supabase_request(
+            'GET',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?select=token&user_id=in.' . $inList,
+            [
+                'Accept: application/json',
+                'apikey: ' . SUPABASE_KEY,
+                'Authorization: Bearer ' . SUPABASE_KEY,
+            ]
+        );
+
+        if (!($tokensRes['ok'] ?? false)) {
+            error_log('dispatch_user_notifications: fcm_tokens lookup failed for chunk offset ' . $offset . ' body=' . substr((string) ($tokensRes['body'] ?? ''), 0, 300));
+            continue;
+        }
+
+        $tokenRows = json_decode((string) ($tokensRes['body'] ?? ''), true);
+        if (!is_array($tokenRows)) {
+            continue;
+        }
         foreach ($tokenRows as $row) {
             if (!is_array($row)) {
                 continue;
@@ -125,9 +170,30 @@ function dispatch_user_notifications(array $userIds, string $title, string $body
         }
     }
 
-    if ($tokens === []) {
-        return false;
+    $tokenCount = count($tokens);
+    if ($tokenCount === 0) {
+        error_log('dispatch_user_notifications: no FCM tokens for ' . count($userIds) . ' users');
+        return [
+            'targets' => count($userIds),
+            'tokens' => 0,
+            'inbox' => true,
+            'fcm_ok' => false,
+            'error' => 'no_fcm_tokens',
+            'detail' => null,
+            'http_status' => null,
+        ];
     }
 
-    return send_fcm_notification(array_keys($tokens), $title, $body, $data) === true;
+    $fcm = send_fcm_notification_detailed(array_keys($tokens), $title, $body, $data);
+    return [
+        'targets' => count($userIds),
+        'tokens' => $tokenCount,
+        'inbox' => true,
+        'fcm_ok' => !empty($fcm['ok']),
+        'error' => !empty($fcm['ok']) ? null : (string) ($fcm['error'] ?? 'fcm_send_failed'),
+        'detail' => $fcm['detail'] ?? null,
+        'http_status' => $fcm['http_status'] ?? null,
+        'fcm_sent' => (int) ($fcm['sent'] ?? 0),
+        'fcm_failed' => (int) ($fcm['failed'] ?? 0),
+    ];
 }

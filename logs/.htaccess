@@ -1,0 +1,2 @@
+# Deny web access to publish/debug logs.
+Require all denied

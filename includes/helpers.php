@@ -274,14 +274,43 @@ function pulse_auto_finish_published_events(array $headers, int $ttlSeconds = 30
         $nowUtc = gmdate('c');
         $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
             . '?status=eq.published'
-            . '&end_at=lt.' . rawurlencode($nowUtc);
+            . '&end_at=lt.' . rawurlencode($nowUtc)
+            . '&select=id,status,title,description,location,start_at,end_at,cover_image_url,event_type,event_for,updated_at';
         $finishHeaders = array_merge($headers, [
             'Content-Type: application/json',
-            'Prefer: return=minimal',
+            'Prefer: return=representation',
         ]);
         $finishPayload = json_encode(['status' => 'finished'], JSON_UNESCAPED_SLASHES);
-        if (is_string($finishPayload)) {
-            supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
+        if (!is_string($finishPayload)) {
+            api_cache_write('auto_finish_published_events', ['ok' => true, 'at' => gmdate('c')]);
+            return;
+        }
+
+        $finishRes = supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
+        $finishedRows = [];
+        if (($finishRes['ok'] ?? false) === true) {
+            $decoded = json_decode((string) ($finishRes['body'] ?? ''), true);
+            if (is_array($decoded)) {
+                $finishedRows = $decoded;
+            }
+        }
+
+        // Catalog can lag behind Supabase status — drop finished docs so Events
+        // "Published" does not keep showing the same event.
+        if ($finishedRows !== []) {
+            if (!function_exists('firestore_catalog_sync_event')) {
+                require_once __DIR__ . '/firestore_catalog.php';
+            }
+            foreach ($finishedRows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $row['status'] = 'finished';
+                firestore_catalog_sync_event($row, false);
+            }
+            if (function_exists('firestore_catalog_bump_signals')) {
+                firestore_catalog_bump_signals();
+            }
         }
     } catch (Throwable $e) {
         // Best-effort only.

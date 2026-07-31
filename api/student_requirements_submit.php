@@ -42,7 +42,12 @@ if (!($summary['complete'] ?? false)) {
 $submission = fetch_student_submissions_map([$eventId], $headers, $studentId)[$eventId][$studentId] ?? null;
 $currentStatus = is_array($submission) ? strtolower(trim((string) ($submission['status'] ?? ''))) : '';
 if ($currentStatus === 'pending_review') {
-    json_response(['ok' => false, 'error' => 'Your documents are already under review.'], 400);
+    json_response([
+        'ok' => true,
+        'already_pending' => true,
+        'submission' => $submission,
+        'summary' => $summary,
+    ], 200);
 }
 if ($currentStatus === 'approved') {
     json_response(['ok' => true, 'already_approved' => true, 'submission' => $submission], 200);

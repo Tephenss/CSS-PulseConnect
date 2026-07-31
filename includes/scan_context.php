@@ -1,11 +1,33 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/event_sessions.php';
+
+$attendanceWindowsPath = __DIR__ . '/event_attendance_windows.php';
+if (is_file($attendanceWindowsPath)) {
+    require_once $attendanceWindowsPath;
+}
+
 /**
- * For simple events, scanning is allowed from start_at up to +30 minutes.
+ * Default time-in window (minutes) when events.grace_time is missing/invalid.
  * Seminar-based events use per-session scan_window_minutes.
  */
 const SIMPLE_EVENT_SCAN_WINDOW_MINUTES = 30;
+
+/**
+ * Resolve simple-event time-in window minutes from stored grace_time.
+ */
+function simple_event_grace_minutes(array $event): int
+{
+    if (!array_key_exists('grace_time', $event) || $event['grace_time'] === null || $event['grace_time'] === '') {
+        return SIMPLE_EVENT_SCAN_WINDOW_MINUTES;
+    }
+    $parsed = (int) $event['grace_time'];
+    if ($parsed <= 0) {
+        return SIMPLE_EVENT_SCAN_WINDOW_MINUTES;
+    }
+    return max(1, $parsed);
+}
 
 function scan_context_event_summary(array $event): array
 {
@@ -31,17 +53,19 @@ function scan_context_session_summary(array $session): array
     ];
 }
 
-function parse_iso_datetime(string $raw): ?DateTimeImmutable
-{
-    $raw = trim($raw);
-    if ($raw === '') {
-        return null;
-    }
+if (!function_exists('parse_iso_datetime')) {
+    function parse_iso_datetime(?string $raw): ?DateTimeImmutable
+    {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return null;
+        }
 
-    try {
-        return new DateTimeImmutable($raw);
-    } catch (Throwable $e) {
-        return null;
+        try {
+            return new DateTimeImmutable($raw);
+        } catch (Throwable $e) {
+            return null;
+        }
     }
 }
 
@@ -200,15 +224,19 @@ function resolve_simple_event_scan_context(array $event, DateTimeImmutable $nowU
             'session' => null,
             'opens_at' => null,
             'closes_at' => null,
-            'window_minutes' => SIMPLE_EVENT_SCAN_WINDOW_MINUTES,
+            'window_minutes' => simple_event_grace_minutes($event),
             'message' => 'Event start time is missing.',
         ];
     }
 
-    $windowMinutes = SIMPLE_EVENT_SCAN_WINDOW_MINUTES;
+    $windowMinutes = simple_event_grace_minutes($event);
     $windowEnd = $startAt->modify('+' . $windowMinutes . ' minutes');
 
     if ($nowUtc < $startAt) {
+        $startClock = function_exists('attendance_format_manila_time')
+            ? attendance_format_manila_time($startAt)
+            : $startAt->setTimezone(new DateTimeZone('Asia/Manila'))->format('g:i A');
+        $sameDay = function_exists('attendance_same_manila_day') && attendance_same_manila_day($nowUtc, $startAt);
         return [
             'status' => 'waiting',
             'source' => 'event',
@@ -217,7 +245,9 @@ function resolve_simple_event_scan_context(array $event, DateTimeImmutable $nowU
             'opens_at' => $startAt->format('c'),
             'closes_at' => $windowEnd->format('c'),
             'window_minutes' => $windowMinutes,
-            'message' => 'Waiting for event scan window.',
+            'message' => $sameDay
+                ? ('Too early to time in. Wait for the scheduled start (' . $startClock . ').')
+                : 'Too early to time in. Wait for the scheduled start.',
         ];
     }
 
@@ -230,8 +260,61 @@ function resolve_simple_event_scan_context(array $event, DateTimeImmutable $nowU
             'opens_at' => $startAt->format('c'),
             'closes_at' => $windowEnd->format('c'),
             'window_minutes' => $windowMinutes,
+            'scan_mode' => 'check_in',
             'message' => 'Event scanning is open.',
         ];
+    }
+
+    // After time-in grace: keep scanner open for Early Out / normal time-out.
+    if (function_exists('attendance_check_out_window')) {
+        $endAt = parse_iso_datetime((string) ($event['end_at'] ?? ''));
+        $outWin = attendance_check_out_window(
+            $endAt,
+            isset($event['early_out_enabled_at']) ? (string) $event['early_out_enabled_at'] : null,
+            $nowUtc
+        );
+        if (($outWin['open'] ?? false) === true) {
+            return [
+                'status' => 'open',
+                'source' => 'event',
+                'event' => $eventSummary,
+                'session' => null,
+                'opens_at' => $outWin['opens_at'] ?? null,
+                'closes_at' => $outWin['closes_at'] ?? null,
+                'window_minutes' => 60,
+                'scan_mode' => 'check_out',
+                'message' => (string) ($outWin['message'] ?? 'Time-out is open.'),
+            ];
+        }
+
+        // Between grace end and scheduled end (no Early Out): explain time-out wait.
+        $outStatus = (string) ($outWin['status'] ?? 'closed');
+        if ($outStatus === 'too_early_checkout') {
+            return [
+                'status' => 'closed',
+                'source' => 'event',
+                'event' => $eventSummary,
+                'session' => null,
+                'opens_at' => $outWin['opens_at'] ?? $startAt->format('c'),
+                'closes_at' => $outWin['closes_at'] ?? $windowEnd->format('c'),
+                'window_minutes' => $windowMinutes,
+                'scan_mode' => 'check_out',
+                'message' => (string) ($outWin['message'] ?? 'Too early to time out.'),
+            ];
+        }
+        if ($outStatus === 'closed' && trim((string) ($outWin['message'] ?? '')) !== '') {
+            return [
+                'status' => 'closed',
+                'source' => 'event',
+                'event' => $eventSummary,
+                'session' => null,
+                'opens_at' => $outWin['opens_at'] ?? $startAt->format('c'),
+                'closes_at' => $outWin['closes_at'] ?? $windowEnd->format('c'),
+                'window_minutes' => $windowMinutes,
+                'scan_mode' => 'check_out',
+                'message' => (string) $outWin['message'],
+            ];
+        }
     }
 
     try {
@@ -248,7 +331,11 @@ function resolve_simple_event_scan_context(array $event, DateTimeImmutable $nowU
         'opens_at' => $startAt->format('c'),
         'closes_at' => $windowEnd->format('c'),
         'window_minutes' => $windowMinutes,
-        'message' => 'Event scan window has closed.',
+        'message' => 'Time-in grace ended at '
+            . (function_exists('attendance_format_manila_time')
+                ? attendance_format_manila_time($windowEnd)
+                : $windowEnd->format('g:i A'))
+            . '. You can no longer time in for this schedule.',
     ];
 }
 
@@ -264,7 +351,7 @@ function sync_simple_event_absences(array $event, DateTimeImmutable $nowUtc): vo
         return;
     }
 
-    $windowEnd = $startAt->modify('+' . SIMPLE_EVENT_SCAN_WINDOW_MINUTES . ' minutes');
+    $windowEnd = $startAt->modify('+' . simple_event_grace_minutes($event) . ' minutes');
     if ($nowUtc <= $windowEnd) {
         return;
     }
@@ -446,9 +533,8 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
     }
 
     $sessionFilter = implode(',', $sessionIds);
-    // Some deployments store per-session attendance rows in `public.attendance`
-    // (using the `session_id` column) instead of `public.event_session_attendance`.
-    // Auto-absent must work for both schemas.
+    // Production stores per-session rows in event_session_attendance only.
+    // Do not fall back to attendance.session_id (column does not exist → 42703 ERROR).
     $store = 'event_session_attendance';
     $attendanceRows = [];
     $attendanceRes = null;
@@ -461,26 +547,6 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
     if ($attendanceRes['ok']) {
         $decoded = json_decode((string) $attendanceRes['body'], true);
         $attendanceRows = is_array($decoded) ? $decoded : [];
-    } else {
-        $status = (int) ($attendanceRes['status'] ?? 0);
-        $bodyText = (string) ($attendanceRes['body'] ?? '');
-        $looksLikeMissingTable =
-            $status >= 400
-            && (stripos($bodyText, 'event_session_attendance') !== false
-                || stripos($bodyText, 'relation') !== false
-                || stripos($bodyText, '42P01') !== false);
-        if ($looksLikeMissingTable) {
-            $store = 'attendance';
-            $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-                . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
-                . '&session_id=in.(' . $sessionFilter . ')'
-                . '&limit=5000';
-            $fallbackRes = supabase_request('GET', $fallbackUrl, $headers);
-            if ($fallbackRes['ok']) {
-                $decoded = json_decode((string) $fallbackRes['body'], true);
-                $attendanceRows = is_array($decoded) ? $decoded : [];
-            }
-        }
     }
 
     $selectFields = $store === 'event_session_attendance'

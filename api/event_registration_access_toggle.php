@@ -56,22 +56,46 @@ if (strtolower(trim((string) ($event['status'] ?? ''))) !== 'published') {
 }
 
 $previousAllowRegistration = event_allows_open_registration($event);
+$clearCloseLimitOnReopen = $allowRegistration
+    && !$previousAllowRegistration
+    && is_event_registration_window_closed($event);
 
 $updateHeaders = $headers;
 $updateHeaders[] = 'Prefer: return=representation';
 $updateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
     . '?id=eq.' . rawurlencode($eventId)
-    . '&select=id,title,status,event_for,event_type,start_at,end_at,created_by,allow_registration';
-$payload = json_encode([
+    . '&select=id,title,status,event_for,event_type,start_at,end_at,created_by,allow_registration,registration_close_weeks,registration_close_extend_days';
+
+$updateFields = [
     'allow_registration' => $allowRegistration,
     'updated_at' => gmdate('c'),
-], JSON_UNESCAPED_SLASHES);
+];
+// Re-opening after the scheduled close date: drop the close-limit so Allow
+// Registration alone controls access going forward.
+if ($clearCloseLimitOnReopen) {
+    $updateFields['registration_close_weeks'] = null;
+    $updateFields['registration_close_extend_days'] = 0;
+}
+
+$payload = json_encode($updateFields, JSON_UNESCAPED_SLASHES);
 
 if (!is_string($payload)) {
     json_response(['ok' => false, 'error' => 'Failed to prepare registration access update.'], 500);
 }
 
 $res = supabase_request('PATCH', $updateUrl, $updateHeaders, $payload);
+if (!$res['ok'] && $clearCloseLimitOnReopen) {
+    // Older DBs may lack extend column — retry clearing weeks only.
+    $retryFields = [
+        'allow_registration' => $allowRegistration,
+        'registration_close_weeks' => null,
+        'updated_at' => gmdate('c'),
+    ];
+    $retryPayload = json_encode($retryFields, JSON_UNESCAPED_SLASHES);
+    if (is_string($retryPayload)) {
+        $res = supabase_request('PATCH', $updateUrl, $updateHeaders, $retryPayload);
+    }
+}
 if (!$res['ok']) {
     $message = (string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? '');
     if (registration_access_missing_column_message($message, 'allow_registration')) {
@@ -90,6 +114,10 @@ if (!$res['ok']) {
 $rows = json_decode((string) $res['body'], true);
 $updatedEvent = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : $event;
 $updatedEvent['allow_registration'] = $allowRegistration;
+if ($clearCloseLimitOnReopen) {
+    $updatedEvent['registration_close_weeks'] = null;
+    $updatedEvent['registration_close_extend_days'] = 0;
+}
 
 if ($previousAllowRegistration !== $allowRegistration) {
     $targetStudents = fetch_target_students_for_event($updatedEvent, [
@@ -124,4 +152,5 @@ json_response([
     'ok' => true,
     'event' => $updatedEvent,
     'allow_registration' => $allowRegistration,
+    'registration_close_limit_cleared' => $clearCloseLimitOnReopen,
 ], 200);

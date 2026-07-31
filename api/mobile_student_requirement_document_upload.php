@@ -8,19 +8,22 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
 
+require_once __DIR__ . '/../includes/mobile_session.php';
+
 mobile_api_handle_preflight();
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
 }
 
 mobile_api_validate_key($_POST);
+$sessionUser = mobile_api_require_user_from_post();
+$studentId = (string) ($sessionUser['id'] ?? '');
 
 $eventId = trim((string) ($_POST['event_id'] ?? ''));
 $requirementId = trim((string) ($_POST['requirement_id'] ?? ''));
-$studentId = trim((string) ($_POST['user_id'] ?? $_POST['student_id'] ?? ''));
 
 if ($eventId === '' || $requirementId === '' || $studentId === '') {
-    json_response(['ok' => false, 'error' => 'event_id, requirement_id, and user_id are required.'], 400);
+    json_response(['ok' => false, 'error' => 'event_id, requirement_id, and authenticated user are required.'], 400);
 }
 
 if (!isset($_FILES['student_file']) || !is_array($_FILES['student_file'])) {

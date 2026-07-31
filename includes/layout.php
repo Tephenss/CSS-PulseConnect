@@ -27,14 +27,21 @@ function render_header(string $title, ?array $user): void
     echo '<!doctype html><html lang="en"><head>';
     echo '<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>';
     echo '<title>' . htmlspecialchars($title) . ' — PulseCONNECT</title>';
-    echo '<script src="https://cdn.tailwindcss.com"></script>';
+    // Stable asset versions (filemtime) so browsers can cache CSS across navigations.
+    // Avoid ?v=time() — that forced a full CSS redownload on every click.
+    $assetVersion = static function (string $relativePath): string {
+        $full = dirname(__DIR__) . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        $mtime = is_file($full) ? (int) @filemtime($full) : 1;
+        return (string) max(1, $mtime);
+    };
+    echo '<link rel="stylesheet" href="/assets/css/tailwind.css?v=' . $assetVersion('/assets/css/tailwind.css') . '">';
     echo '<link rel="preconnect" href="https://fonts.googleapis.com">';
     echo '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>';
-    echo '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">';
-    echo '<link rel="stylesheet" href="/assets/css/app.css?v=' . time() . '">';
-    echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . time() . '">';
+    echo '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">';
+    echo '<link rel="stylesheet" href="/assets/css/app.css?v=' . $assetVersion('/assets/css/app.css') . '">';
+    echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . $assetVersion('/assets/css/layout.css') . '">';
     $roleClass = $role === 'teacher' ? 'role-teacher' : ($role === 'admin' ? 'role-admin' : 'role-student');
-    echo '<link rel="stylesheet" href="/assets/css/auth.css">';
+    echo '<link rel="stylesheet" href="/assets/css/auth.css?v=' . $assetVersion('/assets/css/auth.css') . '">';
     echo '</head><body class="min-h-screen bg-zinc-50 text-zinc-900 ' . $roleClass . '">';
 
     // Mobile overlay
@@ -709,8 +716,8 @@ function render_header(string $title, ?array $user): void
             if (pendingPreviewQueue.length > 0) {
                 window.setTimeout(flushPendingPreviews, 500);
             }
-            fetchNotifications(true);
-            setInterval(function () { fetchNotifications(false); }, 15000);
+            fetchNotifications(false);
+            setInterval(function () { fetchNotifications(false); }, 45000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     syncNotificationsOnFocus();
@@ -974,11 +981,11 @@ function render_footer(): void
         function initManageEventsBadgePolling() {
             if (!manageEventsBadgeEl) return;
             polledManageEventsSignalIds = loadPolledManageEventsSignalIds();
-            // Initial + focus use fresh; periodic polls rely on API TTL cache.
-            refreshManageEventsBadge(true);
+            // Initial + periodic polls use API TTL cache; focus/catch-up may force fresh.
+            refreshManageEventsBadge(false);
             manageEventsBadgePolling = window.setInterval(function () {
                 refreshManageEventsBadge(false);
-            }, 15000);
+            }, 45000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     refreshManageEventsBadge(true);
@@ -986,7 +993,7 @@ function render_footer(): void
             });
             if (manageEventsLinkEl) {
                 manageEventsLinkEl.addEventListener("click", function () {
-                    fetch("/api/manage_events_live.php?lite=1&fresh=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
+                    fetch("/api/manage_events_live.php?lite=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
                         .then(function (resp) { return resp.json(); })
                         .then(function (data) {
                             if (data && data.ok) {

@@ -7,13 +7,14 @@ session_bootstrap();
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
-require_once __DIR__ . '/includes/attendance_backfill.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/api_cache.php';
+require_once __DIR__ . '/includes/storage_signed.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -43,8 +44,19 @@ $eventLookup = fetch_event_row_by_id(
         'apikey: ' . SUPABASE_KEY,
         'Authorization: Bearer ' . SUPABASE_KEY,
     ],
-    'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration'
+    'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration,early_out_enabled_at'
 );
+if (!$eventLookup['ok']) {
+    $eventLookup = fetch_event_row_by_id(
+        $eventId,
+        [
+            'Accept: application/json',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+        ],
+        'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration'
+    );
+}
 if (!$eventLookup['ok']) {
     $status = (int) ($eventLookup['status'] ?? 503);
     http_response_code($status === 404 ? 404 : 503);
@@ -70,7 +82,6 @@ if ($role === 'teacher') {
 
 $sessions = fetch_event_sessions($eventId, $headers);
 $eventUsesSessions = count($sessions) > 0;
-attendance_backfill_for_event($event, $headers, $eventUsesSessions ? $sessions : []);
 $usesSessions = count($sessions) > 0;
 $isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
 $participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_GET['participant_tab'])) : 'participants';
@@ -87,6 +98,37 @@ $isPaidEvent = !event_is_free_registration_event($event);
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+$resetIsTimeoutPhase = false;
+$earlyOutRawForReset = trim((string) ($event['early_out_enabled_at'] ?? ''));
+if ($earlyOutRawForReset !== '') {
+    $attendanceWindowsPath = __DIR__ . '/includes/event_attendance_windows.php';
+    if (is_file($attendanceWindowsPath)) {
+        require_once $attendanceWindowsPath;
+        if (function_exists('attendance_early_out_is_active')) {
+            $resetIsTimeoutPhase = attendance_early_out_is_active($earlyOutRawForReset, $nowUtc);
+        }
+    }
+}
+if (!$resetIsTimeoutPhase) {
+    $endRawForReset = trim((string) ($event['end_at'] ?? ''));
+    if ($endRawForReset !== '') {
+        try {
+            $eventEndUtcForReset = (new DateTimeImmutable($endRawForReset))->setTimezone(new DateTimeZone('UTC'));
+            if ($nowUtc >= $eventEndUtcForReset) {
+                $resetIsTimeoutPhase = true;
+            }
+        } catch (Throwable $e) {
+            // Keep time-in phase.
+        }
+    }
+}
+$resetConfirmMessage = $resetIsTimeoutPhase
+    ? 'Reset this participant time-out? Check-in will be kept so they can be timed out again.'
+    : 'Reset this participant time-in? This clears check-in (and any time-out).';
+$resetButtonLabel = $resetIsTimeoutPhase ? '↺ Reset Time-Out' : '↺ Reset Time-In';
+$resetButtonShort = $resetIsTimeoutPhase ? '↺ Out' : '↺ In';
+
 $attendanceCountsAsPresent = static function (?array $row): bool {
     if (!is_array($row)) {
         return false;
@@ -205,24 +247,28 @@ if ($usesSessions) {
                 . '&session_id=in.(' . $sessionFilter . ')';
             $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
             $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
+            $primaryAttendanceCount = 0;
             if (is_array($attendanceRows)) {
                 foreach ($attendanceRows as $row) {
                     if (is_array($row)) {
                         $attachAttendanceRow($row);
+                        $primaryAttendanceCount++;
                     }
                 }
             }
 
-            // Fallback storage used by older seminar migrations.
-            $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-                . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
-                . '&session_id=in.(' . $sessionFilter . ')';
-            $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
-            $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
-            if (is_array($legacyAttendanceRows)) {
-                foreach ($legacyAttendanceRows as $row) {
-                    if (is_array($row)) {
-                        $attachAttendanceRow($row);
+            // Fallback storage used by older seminar migrations — skip when primary already has rows.
+            if ($primaryAttendanceCount === 0) {
+                $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+                    . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
+                    . '&session_id=in.(' . $sessionFilter . ')';
+                $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
+                $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
+                if (is_array($legacyAttendanceRows)) {
+                    foreach ($legacyAttendanceRows as $row) {
+                        if (is_array($row)) {
+                            $attachAttendanceRow($row);
+                        }
                     }
                 }
             }
@@ -278,7 +324,11 @@ if ($usesSessions) {
         'Authorization: Bearer ' . SUPABASE_KEY,
         'Prefer: return=representation',
     ];
-    foreach ($participants as $participant) {
+    // Throttle absent write-stampede when many teachers open Participants at once.
+    $absentSyncLockKey = 'participants_absent_sync_' . $eventId;
+    $shouldSyncAbsents = api_cache_try_lock($absentSyncLockKey, 60);
+    if ($shouldSyncAbsents) {
+        foreach ($participants as $participant) {
         if (!is_array($participant)) {
             continue;
         }
@@ -408,6 +458,9 @@ if ($usesSessions) {
                 $attendanceMap[$registrationId][$sessionId] = $updatedRow;
             }
         }
+    }
+        api_cache_write($absentSyncLockKey, ['synced_at' => time()]);
+        api_cache_release_lock($absentSyncLockKey);
     }
 
     $sessionCounts = [];
@@ -631,7 +684,7 @@ if ($usesSessions) {
                   <?php endforeach; ?>
                   <td class="px-4 py-4">
                     <button class="btnResetAttendance rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
-                      Reset Attendance
+                      <?= htmlspecialchars($resetButtonLabel) ?>
                     </button>
                   </td>
                 </tr>
@@ -777,7 +830,7 @@ if ($usesSessions) {
 
       document.querySelectorAll('.btnResetAttendance').forEach(btn => {
         btn.addEventListener('click', async () => {
-          const ok = confirm('Reset this participant attendance? This clears all seminar attendance records for the selected participant.');
+          const ok = confirm(<?= json_encode($resetConfirmMessage) ?>);
           if (!ok) return;
 
           btn.disabled = true;
@@ -829,11 +882,20 @@ if (!$usesSessions) {
 // Load participants
 $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,photo_url,sections(name)),'
-    . 'tickets(id,token,attendance(id,check_in_at,status,last_scanned_at))'
+    . 'tickets(id,token,attendance(id,check_in_at,check_out_at,status,last_scanned_at))'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&order=registered_at.desc';
 
 $pRes = supabase_request('GET', $pUrl, $headers);
+if (!($pRes['ok'] ?? false)) {
+    // Older DBs may lack check_out_at on attendance.
+    $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,photo_url,sections(name)),'
+        . 'tickets(id,token,attendance(id,check_in_at,status,last_scanned_at))'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&order=registered_at.desc';
+    $pRes = supabase_request('GET', $pUrl, $headers);
+}
 $participants = [];
 if ($pRes['ok']) {
     $decoded = json_decode((string) $pRes['body'], true);
@@ -1415,7 +1477,7 @@ render_event_tabs([
   box-shadow: rgba(234, 88, 12, 0.22) 0px 5px 5px 0px inset;
   overflow: hidden;
   transition: all 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) 0s;
-  padding: 12px 14px 20px 14px;
+  padding: 10px 12px 12px 12px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -1505,39 +1567,53 @@ render_event_tabs([
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.4rem;
   margin-top: auto;
-  padding-top: 6px;
+  padding-top: 8px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .pc-card .bottom .att-badge {
-  font-size: 0.6rem;
+  font-size: 0.58rem;
   font-weight: 800;
-  padding: 0.35rem 0.75rem;
-  border-radius: 20px;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pc-card .bottom .admin-btns {
   display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
 }
 
 .pc-card .bottom .admin-btns button {
   background: rgba(255,255,255,0.18);
   color: white;
   border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 14px;
+  border-radius: 999px;
   font-size: 0.58rem;
   font-weight: 700;
-  padding: 0.3rem 0.6rem;
+  line-height: 1;
+  padding: 0.38rem 0.55rem;
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pc-card .bottom .admin-btns button.btnRemove {
+  padding: 0.38rem 0.5rem;
 }
 
 .pc-card .bottom .admin-btns button:hover {
@@ -1580,6 +1656,7 @@ render_event_tabs([
 .att-absent   { background: #fee2e2; color: #991b1b; }
 .att-late     { background: #fef3c7; color: #92400e; }
 .att-early    { background: #e0f2fe; color: #075985; }
+.att-timed-out{ background: #dbeafe; color: #1e3a8a; }
 .att-unscanned{ background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); }
 </style>
 
@@ -1616,6 +1693,7 @@ render_event_tabs([
       }
 
       $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
+      $checkOutRaw = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
       $attStatus  = is_array($attendance) ? ($attendance['status'] ?? '') : '';
       if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
           $attStatus = 'absent';
@@ -1627,14 +1705,22 @@ render_event_tabs([
       foreach ($nameParts as $p) { $initials .= mb_strtoupper(mb_substr($p, 0, 1)); if (mb_strlen($initials) >= 2) break; }
       if (mb_strlen($initials) === 0) $initials = '?';
 
-      // Check-in time
-      $checkInFormat = '—';
+      // Check-in / check-out times (compact one-line for hover)
+      $checkInShort = '—';
+      $checkOutShort = '—';
       if ($checkInRaw) {
           try {
               $checkInLocal = $toLocalDt((string) $checkInRaw);
-              if ($checkInLocal) $checkInFormat = $checkInLocal->format('M d, g:i A');
+              if ($checkInLocal) $checkInShort = $checkInLocal->format('g:i A');
           } catch (Throwable $e) {}
       }
+      if (trim((string) $checkOutRaw) !== '') {
+          try {
+              $checkOutLocal = $toLocalDt((string) $checkOutRaw);
+              if ($checkOutLocal) $checkOutShort = $checkOutLocal->format('g:i A');
+          } catch (Throwable $e) {}
+      }
+      $attendanceTimeLine = $checkInShort . ' / ' . $checkOutShort;
 
       $sec     = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
       $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
@@ -1646,16 +1732,20 @@ render_event_tabs([
       }
 
       $attStatusNorm = strtolower(trim((string)$attStatus));
+      if ($checkOutShort !== '—' && in_array($attStatusNorm, ['present', 'scanned', 'completed', 'late', 'early', ''], true)) {
+          $attStatusNorm = 'timed out';
+      }
       $attBadgeClass = match($attStatusNorm) {
           'present','scanned','completed' => 'att-present',
           'absent'  => 'att-absent',
           'late'    => 'att-late',
           'early'   => 'att-early',
+          'timed out' => 'att-timed-out',
           default   => 'att-unscanned',
       };
       $attLabel = $attStatusNorm !== '' ? ucfirst($attStatusNorm) : 'Unscanned';
 
-      $avatarUrl = trim((string) ($u['photo_url'] ?? ''));
+      $avatarUrl = storage_resolve_avatar_url((string) ($u['photo_url'] ?? ''));
       $studentId = (string) ($u['student_id'] ?? 'N/A');
       $email     = (string) ($u['email'] ?? '');
       $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName);
@@ -1666,7 +1756,13 @@ render_event_tabs([
       <!-- Profile picture / initials -->
       <div class="profile-pic">
         <?php if ($avatarUrl !== ''): ?>
-          <img src="<?= htmlspecialchars($avatarUrl) ?>" alt="<?= htmlspecialchars($name) ?>" loading="lazy">
+          <img
+            src="<?= htmlspecialchars($avatarUrl) ?>"
+            alt="<?= htmlspecialchars($name) ?>"
+            loading="lazy"
+            onerror="this.style.display='none'; const fb=this.nextElementSibling; if(fb) fb.style.display='flex';"
+          >
+          <div class="profile-initials" style="display:none;"><?= htmlspecialchars($initials) ?></div>
         <?php else: ?>
           <div class="profile-initials"><?= htmlspecialchars($initials) ?></div>
         <?php endif; ?>
@@ -1688,7 +1784,7 @@ render_event_tabs([
             </span>
             <span class="pinfo-badge">🏛 <?= htmlspecialchars($secName) ?></span>
             <span class="pinfo-badge">📅 <?= htmlspecialchars($yearLvl) ?></span>
-            <span class="pinfo-badge">⏰ <?= htmlspecialchars($checkInFormat) ?></span>
+            <span class="pinfo-badge" title="Time In / Time Out">⏰ <?= htmlspecialchars($attendanceTimeLine) ?></span>
           </div>
         </div>
 
@@ -1696,8 +1792,20 @@ render_event_tabs([
           <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
           <?php if ($role === 'admin'): ?>
             <div class="admin-btns">
-              <button class="btnResetAttendance" data-id="<?= htmlspecialchars($registrationId) ?>" title="Reset attendance">↺ Reset</button>
-              <button class="btnRemove" data-id="<?= htmlspecialchars($registrationId) ?>" title="Remove participant">✕ Remove</button>
+              <button
+                type="button"
+                class="btnResetAttendance"
+                data-id="<?= htmlspecialchars($registrationId) ?>"
+                title="<?= htmlspecialchars($resetConfirmMessage) ?>"
+                aria-label="<?= htmlspecialchars($resetButtonLabel) ?>"
+              ><?= htmlspecialchars($resetButtonShort) ?></button>
+              <button
+                type="button"
+                class="btnRemove"
+                data-id="<?= htmlspecialchars($registrationId) ?>"
+                title="Remove participant"
+                aria-label="Remove participant"
+              >✕</button>
             </div>
           <?php endif; ?>
         </div>
@@ -1866,7 +1974,7 @@ render_event_tabs([
 
   document.querySelectorAll('.btnResetAttendance').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const ok = confirm('Reset this participant attendance? This will clear status and check-in.');
+      const ok = confirm(<?= json_encode($resetConfirmMessage) ?>);
       if (!ok) return;
       btn.disabled = true;
       try {
@@ -1948,5 +2056,25 @@ render_event_tabs([
   }
 </script>
 <?php endif; ?>
+
+<script>
+(() => {
+  const eventId = <?= json_encode($eventId) ?>;
+  if (!eventId || !window.CSRF_TOKEN) return;
+  const run = () => {
+    fetch('/api/attendance_backfill_run.php', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ event_id: eventId, csrf_token: window.CSRF_TOKEN })
+    }).catch(() => {});
+  };
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(run, { timeout: 2500 });
+  } else {
+    setTimeout(run, 1200);
+  }
+})();
+</script>
 
 <?php render_footer(); ?>

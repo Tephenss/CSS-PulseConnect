@@ -175,6 +175,30 @@ if (!$patchRes['ok']) {
 $rows = json_decode((string) ($patchRes['body'] ?? ''), true);
 $updated = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
 
+// Keep Firestore public catalog in sync so /events.php shows the new cover.
+try {
+    require_once __DIR__ . '/../includes/firestore_catalog.php';
+    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,title,description,location,start_at,end_at,status,cover_image_url,event_type,event_for,updated_at'
+        . '&id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $eventRes = supabase_request('GET', $eventUrl, [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ]);
+    if ($eventRes['ok']) {
+        $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+        if (is_array($eventRows) && isset($eventRows[0]) && is_array($eventRows[0])) {
+            $catalogEvent = $eventRows[0];
+            $catalogEvent['cover_image_url'] = $coverUrl;
+            firestore_catalog_sync_event($catalogEvent);
+        }
+    }
+} catch (Throwable $e) {
+    // Fail-open: cover is already saved in Supabase.
+}
+
 json_response([
     'ok' => true,
     'cover_image_url' => $coverUrl,

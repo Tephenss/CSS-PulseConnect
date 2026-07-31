@@ -49,7 +49,7 @@ $startAt = isset($data['start_at']) ? (string) $data['start_at'] : '';
 $endAt = isset($data['end_at']) ? (string) $data['end_at'] : '';
 $eventType = isset($data['event_type']) ? clean_string((string) $data['event_type']) : 'Event';
 $eventFor = isset($data['event_for']) ? clean_string((string) $data['event_for']) : 'All';
-$graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_time']) : '15';
+$graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_time']) : '30';
 $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 $eventMode = normalize_event_mode(isset($data['event_mode']) ? (string) $data['event_mode'] : 'simple');
 $sessions = normalize_event_sessions($data['sessions'] ?? null, $location);
@@ -289,6 +289,9 @@ if ($role === 'teacher' && is_array($event) && !empty($event['id'])) {
         $event['student_requirements'] = $studentSave['requirements'] ?? [];
     }
 }
+
+require_once __DIR__ . '/../includes/api_cache.php';
+api_cache_bump_generation('manage_events');
 
 json_response(['ok' => true, 'event' => $event], 200);
 

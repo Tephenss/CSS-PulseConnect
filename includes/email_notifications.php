@@ -111,6 +111,48 @@ function send_student_application_status_email(
     );
 }
 
+function smtp_ssl_context_options(string $host): array
+{
+    require_once __DIR__ . '/curl_ssl.php';
+
+    if (defined('SMTP_DEV_SKIP_SSL_VERIFY') && SMTP_DEV_SKIP_SSL_VERIFY) {
+        return [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true,
+            'SNI_enabled' => true,
+            'peer_name' => $host,
+        ];
+    }
+
+    $opts = [
+        'verify_peer' => true,
+        'verify_peer_name' => true,
+        'allow_self_signed' => false,
+        'SNI_enabled' => true,
+        'peer_name' => $host,
+    ];
+
+    $ca = curl_ssl_ca_bundle_path();
+    if ($ca !== null) {
+        $opts['cafile'] = $ca;
+    }
+
+    // Prefer TLS 1.2+ when negotiating STARTTLS.
+    $cryptoMethod = 0;
+    if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
+        $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+    }
+    if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
+        $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+    }
+    if ($cryptoMethod !== 0) {
+        $opts['crypto_method'] = $cryptoMethod;
+    }
+
+    return $opts;
+}
+
 function smtp_send_mail(
     string $host,
     int $port,
@@ -130,18 +172,9 @@ function smtp_send_mail(
     $password = preg_replace('/\s+/', '', (string) $password);
 
     $transport = $encryption === 'ssl' ? 'ssl://' : '';
-    $streamContext = null;
-    if (defined('SMTP_DEV_SKIP_SSL_VERIFY') && SMTP_DEV_SKIP_SSL_VERIFY) {
-        $streamContext = stream_context_create([
-            'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true,
-                'SNI_enabled' => true,
-                'peer_name' => $host,
-            ],
-        ]);
-    }
+    $sslOpts = smtp_ssl_context_options($host);
+    $streamContext = stream_context_create(['ssl' => $sslOpts]);
+
     $socket = @stream_socket_client(
         $transport . $host . ':' . $port,
         $errno,
@@ -174,32 +207,86 @@ function smtp_send_mail(
             fclose($socket);
             return false;
         }
-        $cryptoMethod = 0;
-        // Prefer modern TLS on Windows/PHP builds where available.
-        if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
-            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+
+        // Ensure SSL options apply to STARTTLS upgrade (not only initial connect).
+        foreach ($sslOpts as $key => $value) {
+            @stream_context_set_option($socket, 'ssl', $key, $value);
         }
-        if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
-            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
-        }
-        if (defined('STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT')) {
-            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT;
-        }
-        if (defined('STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT')) {
-            $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT;
-        }
+
+        $cryptoMethod = (int) ($sslOpts['crypto_method'] ?? 0);
         if ($cryptoMethod === 0) {
-            $cryptoMethod = STREAM_CRYPTO_METHOD_TLS_CLIENT;
+            if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
+                $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+            }
+            if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
+                $cryptoMethod |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+            }
+            if ($cryptoMethod === 0) {
+                $cryptoMethod = STREAM_CRYPTO_METHOD_TLS_CLIENT;
+            }
         }
+
         if (!@stream_socket_enable_crypto($socket, true, $cryptoMethod)) {
-            $opensslError = smtp_collect_openssl_errors();
-            smtp_set_last_error(
-                $opensslError !== ''
-                    ? 'TLS negotiation failed: ' . $opensslError
-                    : 'TLS negotiation failed'
-            );
+            // Local Windows/XAMPP OpenSSL often fails peer verify. Reconnect once
+            // without verify so OTP mail still works in local dev. Hostinger
+            // Linux typically succeeds on the first attempt with cafile.
+            $isWindows = PHP_OS_FAMILY === 'Windows';
+            $skipAlready = defined('SMTP_DEV_SKIP_SSL_VERIFY') && SMTP_DEV_SKIP_SSL_VERIFY;
+            if (!($isWindows && !$skipAlready)) {
+                $opensslError = smtp_collect_openssl_errors();
+                smtp_set_last_error(
+                    $opensslError !== ''
+                        ? 'TLS negotiation failed: ' . $opensslError
+                        : 'TLS negotiation failed'
+                );
+                fclose($socket);
+                return false;
+            }
+
             fclose($socket);
-            return false;
+            $sslOpts = [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+                'SNI_enabled' => true,
+                'peer_name' => $host,
+                'crypto_method' => $cryptoMethod,
+            ];
+            $streamContext = stream_context_create(['ssl' => $sslOpts]);
+            $socket = @stream_socket_client(
+                $transport . $host . ':' . $port,
+                $errno,
+                $errstr,
+                12,
+                STREAM_CLIENT_CONNECT,
+                $streamContext
+            );
+            if (!$socket) {
+                smtp_set_last_error("Connect failed ({$errno}): {$errstr}");
+                return false;
+            }
+            stream_set_timeout($socket, 12);
+            if (!smtp_expect($socket, [220])
+                || !smtp_command($socket, 'EHLO pulseconnect.local', [250])
+                || !smtp_command($socket, 'STARTTLS', [220])
+            ) {
+                smtp_set_last_error('TLS negotiation failed');
+                fclose($socket);
+                return false;
+            }
+            foreach ($sslOpts as $key => $value) {
+                @stream_context_set_option($socket, 'ssl', $key, $value);
+            }
+            if (!@stream_socket_enable_crypto($socket, true, $cryptoMethod)) {
+                $opensslError = smtp_collect_openssl_errors();
+                smtp_set_last_error(
+                    $opensslError !== ''
+                        ? 'TLS negotiation failed: ' . $opensslError
+                        : 'TLS negotiation failed'
+                );
+                fclose($socket);
+                return false;
+            }
         }
         if (!smtp_command($socket, 'EHLO pulseconnect.local', [250])) {
             smtp_set_last_error('EHLO after STARTTLS rejected');
@@ -631,7 +718,8 @@ function send_mobile_email_verification_code_email(
     }
 
     $safeName = trim($fullName) !== '' ? trim($fullName) : 'CCS PulseConnect User';
-    $subject = 'CCS PulseConnect Email Verification Code';
+    // Include code in subject so Gmail thread subjects match the body code.
+    $subject = 'CCS PulseConnect Email Verification ' . $code;
     $textMessage = "Hello {$safeName},\n\n"
         . "Your verification code is: {$code}\n\n"
         . "This code expires in 5 minutes.\n"

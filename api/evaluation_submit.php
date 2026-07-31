@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/certificate_auto_issue.php';
 
 $user = require_role(['student']);
 $data = require_post_json();
@@ -46,6 +47,11 @@ function evaluation_attendance_counts_as_present(array $row): bool
     }
 
     return in_array($status, ['present', 'scanned', 'late', 'early'], true);
+}
+
+function evaluation_attendance_counts_as_checked_out(array $row): bool
+{
+    return trim((string) ($row['check_out_at'] ?? '')) !== '';
 }
 
 function evaluation_fetch_event_questions(string $eventId, array $headers): array
@@ -91,7 +97,7 @@ function evaluation_fetch_session_questions(string $sessionId, array $headers): 
 function evaluation_has_simple_attendance(string $eventId, string $studentId, array $headers): bool
 {
     $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-        . '?select=status,check_in_at,tickets(registration_id,event_registrations(student_id,event_id))'
+        . '?select=status,check_in_at,check_out_at,tickets(registration_id,event_registrations(student_id,event_id))'
         . '&tickets.event_registrations.event_id=eq.' . rawurlencode($eventId);
     $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
     if (!$attendanceRes['ok']) {
@@ -110,6 +116,9 @@ function evaluation_has_simple_attendance(string $eventId, string $studentId, ar
 
     foreach ($attendanceRows as $row) {
         if (!is_array($row) || !evaluation_attendance_counts_as_present($row)) {
+            continue;
+        }
+        if (!evaluation_attendance_counts_as_checked_out($row)) {
             continue;
         }
 
@@ -140,7 +149,7 @@ function evaluation_attended_session_ids(array $sessions, string $studentId, arr
     }
 
     $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-        . '?select=session_id,status,check_in_at,registration:event_registrations(student_id)'
+        . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
         . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')';
     $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
     if (!$attendanceRes['ok']) {
@@ -160,6 +169,9 @@ function evaluation_attended_session_ids(array $sessions, string $studentId, arr
     $present = [];
     foreach ($attendanceRows as $row) {
         if (!is_array($row) || !evaluation_attendance_counts_as_present($row)) {
+            continue;
+        }
+        if (!evaluation_attendance_counts_as_checked_out($row)) {
             continue;
         }
 
@@ -247,7 +259,7 @@ function evaluation_group_submissions(array $rawAnswers, string $legacySessionId
 }
 
 $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?select=id,event_mode,event_structure,uses_sessions'
+    . '?select=id,event_mode,event_structure'
     . '&id=eq.' . rawurlencode($eventId)
     . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
@@ -285,7 +297,7 @@ try {
     }
 
     if (!$eventEligible) {
-        json_response(['ok' => false, 'error' => 'Only attendees can submit evaluation for this event.'], 403);
+        json_response(['ok' => false, 'error' => 'Only attendees who timed out can submit evaluation for this event.'], 403);
     }
 
     $eventPayloads = [];
@@ -424,6 +436,7 @@ try {
         'ok' => true,
         'event_answers_saved' => count($eventPayloads),
         'session_answers_saved' => count($sessionPayloads),
+        'certificate' => certificate_auto_issue_for_student($eventId, $studentId, $headers),
     ], 200);
 } catch (RuntimeException $e) {
     json_response(['ok' => false, 'error' => $e->getMessage()], 500);

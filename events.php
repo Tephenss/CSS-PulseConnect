@@ -9,6 +9,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/firestore_catalog.php';
+require_once __DIR__ . '/includes/registration_access.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -25,12 +27,115 @@ $headers = [
 
 // Keep event status consistent across pages (throttled to reduce DB writes).
 pulse_auto_finish_published_events($headers);
+pulse_auto_close_registration_windows($headers);
 
-$events = [];
-$res = supabase_request('GET', $url, $headers);
-if ($res['ok']) {
-  $decoded = json_decode((string) $res['body'], true);
-  $events = is_array($decoded) ? $decoded : [];
+$events = firestore_catalog_list_events(120);
+if ($events === []) {
+  $res = supabase_request('GET', $url, $headers);
+  if ($res['ok']) {
+    $decoded = json_decode((string) $res['body'], true);
+    $events = is_array($decoded) ? $decoded : [];
+  }
+} else {
+  // Catalog can lag behind Supabase (covers + status/dates after auto-finish).
+  $catalogIds = [];
+  foreach ($events as $row) {
+    if (!is_array($row)) {
+      continue;
+    }
+    $id = trim((string) ($row['id'] ?? ''));
+    if ($id !== '') {
+      $catalogIds[] = $id;
+    }
+  }
+  $supabaseById = [];
+  if ($catalogIds !== []) {
+    $inList = implode(',', array_map(
+      static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+      $catalogIds
+    ));
+    $hydrateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+      . '?select=id,cover_image_url,status,start_at,end_at'
+      . '&id=in.(' . $inList . ')'
+      . '&limit=' . count($catalogIds);
+    $hydrateRes = supabase_request('GET', $hydrateUrl, $headers);
+    if ($hydrateRes['ok']) {
+      $hydrateRows = json_decode((string) ($hydrateRes['body'] ?? ''), true);
+      if (is_array($hydrateRows)) {
+        foreach ($hydrateRows as $hydrateRow) {
+          if (!is_array($hydrateRow)) {
+            continue;
+          }
+          $cid = trim((string) ($hydrateRow['id'] ?? ''));
+          if ($cid === '') {
+            continue;
+          }
+          $supabaseById[$cid] = $hydrateRow;
+        }
+      }
+    }
+  }
+
+  $livePublished = [];
+  foreach ($events as $eventRow) {
+    if (!is_array($eventRow)) {
+      continue;
+    }
+    $eid = trim((string) ($eventRow['id'] ?? ''));
+    if ($eid !== '' && isset($supabaseById[$eid])) {
+      $truth = $supabaseById[$eid];
+      $truthStatus = strtolower(trim((string) ($truth['status'] ?? '')));
+      // Drop stale catalog docs that are already finished/archived in Supabase.
+      if ($truthStatus !== 'published') {
+        continue;
+      }
+      $cover = trim((string) ($truth['cover_image_url'] ?? ''));
+      if ($cover !== '') {
+        $eventRow['cover_image_url'] = $cover;
+      }
+      if (trim((string) ($truth['start_at'] ?? '')) !== '') {
+        $eventRow['start_at'] = $truth['start_at'];
+      }
+      if (trim((string) ($truth['end_at'] ?? '')) !== '') {
+        $eventRow['end_at'] = $truth['end_at'];
+      }
+      $eventRow['status'] = 'published';
+    }
+    $livePublished[] = $eventRow;
+  }
+  $events = $livePublished;
+
+  // Catalog holds published only — append finished from Supabase (dedupe by id).
+  $finishedUrl = $base . '&status=eq.finished&limit=80';
+  $finishedRes = supabase_request('GET', $finishedUrl, $headers);
+  if ($finishedRes['ok']) {
+    $finishedRows = json_decode((string) $finishedRes['body'], true);
+    if (is_array($finishedRows)) {
+      $seenIds = [];
+      foreach ($events as $publishedRow) {
+        if (!is_array($publishedRow)) {
+          continue;
+        }
+        $pid = trim((string) ($publishedRow['id'] ?? ''));
+        if ($pid !== '') {
+          $seenIds[$pid] = true;
+        }
+      }
+      foreach ($finishedRows as $finishedRow) {
+        if (!is_array($finishedRow)) {
+          continue;
+        }
+        $fid = trim((string) ($finishedRow['id'] ?? ''));
+        if ($fid !== '' && isset($seenIds[$fid])) {
+          continue;
+        }
+        $events[] = $finishedRow;
+        if ($fid !== '') {
+          $seenIds[$fid] = true;
+        }
+      }
+    }
+  }
 }
 
 $now = new DateTimeImmutable('now');
@@ -74,101 +179,85 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
   $status = $isFinished ? 'finished' : (string) ($e['status'] ?? '');
 
   $statusConfig = match ($status) {
-    'published' => ['bg' => 'bg-emerald-100', 'text' => 'text-emerald-900', 'border' => 'border-emerald-200', 'accent' => 'border-b-emerald-500'],
-    'finished' => ['bg' => 'bg-zinc-200', 'text' => 'text-zinc-700', 'border' => 'border-zinc-300', 'accent' => 'border-b-zinc-500'],
-    'pending' => ['bg' => 'bg-amber-100', 'text' => 'text-amber-900', 'border' => 'border-amber-200', 'accent' => 'border-b-amber-500'],
-    'approved' => ['bg' => 'bg-sky-100', 'text' => 'text-sky-900', 'border' => 'border-sky-200', 'accent' => 'border-b-sky-500'],
-    'expired' => ['bg' => 'bg-zinc-200', 'text' => 'text-zinc-600', 'border' => 'border-zinc-300', 'accent' => 'border-b-zinc-500'],
-    default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-b-zinc-400'],
+    'published' => ['bg' => 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', 'dot' => '#10b981'],
+    'finished'  => ['bg' => 'bg-zinc-500/10 text-zinc-600 border-zinc-500/20',     'dot' => '#71717a'],
+    'pending'   => ['bg' => 'bg-amber-500/10 text-amber-700 border-amber-500/20',   'dot' => '#f59e0b'],
+    'approved'  => ['bg' => 'bg-sky-500/10 text-sky-700 border-sky-500/20',         'dot' => '#0ea5e9'],
+    'expired'   => ['bg' => 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20',     'dot' => '#a1a1aa'],
+    default     => ['bg' => 'bg-zinc-500/10 text-zinc-700 border-zinc-500/20',     'dot' => '#a1a1aa'],
   };
 
-  $rawDate = (string) ($e['start_at'] ?? '');
+  $rawDate       = (string) ($e['start_at'] ?? '');
   $formattedDate = $rawDate !== '' ? format_date_local($rawDate, 'M d, Y - g:i A') : 'TBA';
-
-  $for = (string) ($e['event_for'] ?? 'All');
-  $targetLabel = format_target_participant($for);
-  $coverUrl = trim((string) ($e['cover_image_url'] ?? ''));
+  $for           = (string) ($e['event_for'] ?? 'All');
+  $targetLabel   = format_target_participant($for);
+  $coverUrl      = trim((string) ($e['cover_image_url'] ?? ''));
+  $eventId       = htmlspecialchars((string) ($e['id'] ?? ''));
+  $title         = htmlspecialchars((string) ($e['title'] ?? 'Event'));
+  $desc          = htmlspecialchars((string) ($e['description'] ?? 'No description provided for this event.'));
+  $location      = htmlspecialchars((string) ($e['location'] ?? 'Location TBA'));
+  $evType        = htmlspecialchars((string) ($e['event_type'] ?? ''));
+  $statusLabel   = htmlspecialchars($status);
   ?>
-  <a href="/event_view.php?id=<?= htmlspecialchars((string) ($e['id'] ?? '')) ?>"
-    class="pc-event-card group relative flex flex-col overflow-hidden border border-zinc-200 bg-white border-b-[3px] shadow-sm hover:shadow-md <?= $statusConfig['accent'] ?>">
-    <?php if ($coverUrl !== ''): ?>
-      <div class="pc-event-card-cover relative aspect-[16/9] shrink-0 bg-zinc-100">
-        <img src="<?= htmlspecialchars($coverUrl) ?>" alt=""
-          class="h-full w-full object-cover" loading="lazy"
-          decoding="async" />
-        <div class="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent"></div>
-        <span
-          class="absolute right-3 top-3 text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 backdrop-blur-sm <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
-          <?= htmlspecialchars($status) ?>
+  <!-- 21st.dev 3D Card Container -->
+  <div class="pc-3d-card-container py-4 flex items-center justify-center">
+    <a href="/event_view.php?id=<?= $eventId ?>" class="pc-3d-card-body block relative bg-white border border-black/10 w-full rounded-2xl p-5 no-underline cursor-pointer" data-3d-card>
+      
+      <!-- CardItem translateZ="50": Status & Title -->
+      <div class="pc-3d-item pc-3d-title-box flex items-center justify-between gap-3 mb-1" data-tz="50">
+        <h4 class="text-lg font-bold text-neutral-800 line-clamp-1 flex-1 tracking-tight">
+          <?= $title ?>
+        </h4>
+        <span class="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider rounded-full border px-2.5 py-0.5 <?= $statusConfig['bg'] ?>">
+          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:<?= $statusConfig['dot'] ?>"></span>
+          <?= $statusLabel ?>
         </span>
       </div>
-    <?php endif; ?>
-    <div class="relative z-10 flex flex-col gap-4 p-5">
-      <div>
-        <div class="flex items-start justify-between gap-4 mb-2">
-          <h4 class="pc-shiny-title pc-shiny-title--on-light text-sm font-bold tracking-tight line-clamp-2">
-            <?= htmlspecialchars((string) ($e['title'] ?? 'Event')) ?></h4>
-          <?php if ($coverUrl === ''): ?>
-            <span
-              class="text-[10px] uppercase tracking-wider font-bold rounded-full border px-2.5 py-1 flex-shrink-0 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?>">
-              <?= htmlspecialchars($status) ?>
-            </span>
-          <?php endif; ?>
-        </div>
 
-        <p class="text-xs text-zinc-600 line-clamp-2 leading-relaxed">
-          <?= htmlspecialchars((string) ($e['description'] ?? 'No description provided for this event.')) ?>
-        </p>
+      <!-- CardItem translateZ="100": Image (Floating 100px above card with deep shadow) -->
+      <div class="pc-3d-item pc-3d-img-box w-full mt-4 relative overflow-hidden rounded-xl shadow-md" data-tz="100">
+        <?php if ($coverUrl !== ''): ?>
+          <img src="<?= htmlspecialchars($coverUrl) ?>" alt="<?= $title ?>" class="h-48 w-full object-cover rounded-xl transition-transform duration-500 ease-out" loading="lazy" decoding="async" />
+        <?php else: ?>
+          <div class="h-48 w-full bg-gradient-to-br from-orange-500/20 via-amber-500/10 to-red-500/20 rounded-xl flex items-center justify-center border border-orange-500/10">
+            <span class="text-orange-600 font-bold text-sm tracking-wide">PulseConnect Event</span>
+          </div>
+        <?php endif; ?>
       </div>
 
-      <div class="space-y-2.5">
-        <div class="flex items-center gap-2.5 text-xs font-medium text-zinc-800">
-          <div
-            class="w-7 h-7 rounded-full bg-orange-50 flex items-center justify-center flex-shrink-0 border border-orange-100">
-            <svg class="w-3.5 h-3.5 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5"
-              viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <?= htmlspecialchars($formattedDate) ?>
+      <!-- CardItem translateZ="40": Date & Location Meta -->
+      <div class="pc-3d-item pc-3d-meta-box mt-4 space-y-2 text-xs text-neutral-600" data-tz="40">
+        <div class="flex items-center gap-2 font-medium">
+          <svg class="w-4 h-4 text-orange-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span><?= htmlspecialchars($formattedDate) ?></span>
         </div>
-        <div class="flex items-center gap-2.5 text-xs text-zinc-600">
-          <div
-            class="w-7 h-7 rounded-full bg-emerald-50 flex items-center justify-center flex-shrink-0 border border-emerald-100">
-            <svg class="w-3.5 h-3.5 text-emerald-700" fill="none" stroke="currentColor" stroke-width="2"
-              viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round"
-                d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-            </svg>
-          </div>
-          <span class="truncate"><?= htmlspecialchars((string) ($e['location'] ?? 'Location TBA')) ?></span>
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+          </svg>
+          <span class="truncate"><?= $location ?></span>
         </div>
+      </div>
 
-        <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-zinc-100">
-          <span
-            class="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-1 rounded-md">
-            <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-            </svg>
-            <?= htmlspecialchars($targetLabel) ?>
+      <!-- CardItem translateZ="20": Bottom Footer Tags -->
+      <div class="pc-3d-item pc-3d-footer-box flex items-center justify-between mt-5 pt-3 border-t border-neutral-100" data-tz="20">
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-neutral-600 bg-neutral-100 px-2 py-0.5 rounded-md border border-neutral-200">
+            <?= $targetLabel ?>
           </span>
-          <?php if (!empty($e['event_type'])): ?>
-            <span
-              class="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-1 rounded-md">
-              <svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z" />
-              </svg>
-              <?= htmlspecialchars((string) $e['event_type']) ?>
+          <?php if ($evType !== ''): ?>
+            <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-neutral-600 bg-neutral-100 px-2 py-0.5 rounded-md border border-neutral-200">
+              <?= $evType ?>
             </span>
           <?php endif; ?>
         </div>
       </div>
-    </div>
-  </a>
+
+    </a>
+  </div>
   <?php
 };
 
@@ -176,6 +265,50 @@ render_header('Events', $user);
 ?>
 
 <style>
+  /* 21st.dev 3D Card Effect Styling */
+  .pc-3d-card-container {
+    perspective: 1000px;
+    padding: 1rem 0;
+  }
+
+  .pc-3d-card-body {
+    transform-style: preserve-3d;
+    will-change: transform;
+    transition: box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .pc-3d-card-body:hover {
+    border-color: rgba(234, 88, 12, 0.35) !important;
+    box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.2), 0 15px 30px -10px rgba(234, 88, 12, 0.15) !important;
+  }
+
+  .pc-3d-item {
+    transform-style: preserve-3d;
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform, box-shadow, filter;
+  }
+
+  /* 3D Floating Shadows when Card is Hovered */
+  .pc-3d-card-body:hover .pc-3d-img-box {
+    box-shadow: 0 25px 45px -12px rgba(0, 0, 0, 0.45), 0 10px 20px -5px rgba(0, 0, 0, 0.2) !important;
+  }
+
+  .pc-3d-card-body:hover .pc-3d-img-box img {
+    transform: scale(1.04);
+  }
+
+  .pc-3d-card-body:hover .pc-3d-title-box {
+    filter: drop-shadow(0 10px 8px rgba(0, 0, 0, 0.15));
+  }
+
+  .pc-3d-card-body:hover .pc-3d-meta-box {
+    filter: drop-shadow(0 6px 6px rgba(0, 0, 0, 0.12));
+  }
+
+  .pc-3d-card-body:hover .pc-3d-btn {
+    box-shadow: 0 10px 20px -5px rgba(234, 88, 12, 0.45) !important;
+  }
+
   .events-hero {
     position: relative;
     overflow: hidden;
@@ -401,31 +534,98 @@ render_header('Events', $user);
 </section>
 
 <script>
-  const publishedBtn = document.getElementById('tabPublished');
-  const finishedBtn = document.getElementById('tabFinished');
+  /* ── Tab switcher ── */
+  const publishedBtn   = document.getElementById('tabPublished');
+  const finishedBtn    = document.getElementById('tabFinished');
   const publishedPanel = document.getElementById('publishedPanel');
-  const finishedPanel = document.getElementById('finishedPanel');
+  const finishedPanel  = document.getElementById('finishedPanel');
 
   function setEventTab(tab) {
     const showPublished = tab === 'published';
     publishedPanel.classList.toggle('hidden', !showPublished);
-    finishedPanel.classList.toggle('hidden', showPublished);
+    finishedPanel.classList.toggle('hidden',   showPublished);
 
-    publishedBtn.classList.toggle('bg-orange-600', showPublished);
-    publishedBtn.classList.toggle('text-white', showPublished);
-    publishedBtn.classList.toggle('shadow-sm', showPublished);
-    publishedBtn.classList.toggle('text-zinc-600', !showPublished);
-    publishedBtn.classList.toggle('hover:bg-zinc-100', !showPublished);
+    publishedBtn.classList.toggle('bg-orange-600',   showPublished);
+    publishedBtn.classList.toggle('text-white',       showPublished);
+    publishedBtn.classList.toggle('shadow-sm',        showPublished);
+    publishedBtn.classList.toggle('text-zinc-600',   !showPublished);
+    publishedBtn.classList.toggle('hover:bg-zinc-100',!showPublished);
 
-    finishedBtn.classList.toggle('bg-orange-600', !showPublished);
-    finishedBtn.classList.toggle('text-white', !showPublished);
-    finishedBtn.classList.toggle('shadow-sm', !showPublished);
-    finishedBtn.classList.toggle('text-zinc-600', showPublished);
+    finishedBtn.classList.toggle('bg-orange-600',   !showPublished);
+    finishedBtn.classList.toggle('text-white',       !showPublished);
+    finishedBtn.classList.toggle('shadow-sm',        !showPublished);
+    finishedBtn.classList.toggle('text-zinc-600',    showPublished);
     finishedBtn.classList.toggle('hover:bg-zinc-100', showPublished);
   }
 
   publishedBtn?.addEventListener('click', () => setEventTab('published'));
-  finishedBtn?.addEventListener('click', () => setEventTab('finished'));
+  finishedBtn?.addEventListener('click',  () => setEventTab('finished'));
+
+  /* ── 3-D Card Effect (Smooth lerp + rAF animation) ── */
+  (function () {
+    function init3DCard(cardBody) {
+      const items = cardBody.querySelectorAll('[data-tz]');
+      let rafId = null;
+      let isHovered = false;
+
+      let targetX = 0;
+      let targetY = 0;
+      let currentX = 0;
+      let currentY = 0;
+
+      function updateAnimation() {
+        // Lerp for 60fps/120fps butter smooth rotational tracking
+        currentX += (targetX - currentX) * 0.1;
+        currentY += (targetY - currentY) * 0.1;
+
+        cardBody.style.transform = `rotateY(${currentX.toFixed(2)}deg) rotateX(${currentY.toFixed(2)}deg)`;
+
+        // Continue animation loop while hovered or while still resetting back to 0
+        if (isHovered || Math.abs(targetX - currentX) > 0.01 || Math.abs(targetY - currentY) > 0.01) {
+          rafId = requestAnimationFrame(updateAnimation);
+        } else {
+          cardBody.style.transform = 'rotateY(0deg) rotateX(0deg)';
+          rafId = null;
+        }
+      }
+
+      function startLoop() {
+        if (!rafId) {
+          rafId = requestAnimationFrame(updateAnimation);
+        }
+      }
+
+      cardBody.addEventListener('mouseenter', () => {
+        isHovered = true;
+        items.forEach((item) => {
+          const tz = item.getAttribute('data-tz') || 0;
+          const tx = item.getAttribute('data-tx') || 0;
+          const ty = item.getAttribute('data-ty') || 0;
+          item.style.transform = `translateX(${tx}px) translateY(${ty}px) translateZ(${tz}px)`;
+        });
+        startLoop();
+      });
+
+      cardBody.addEventListener('mousemove', (e) => {
+        const rect = cardBody.getBoundingClientRect();
+        targetX = (e.clientX - rect.left - rect.width / 2) / 20;
+        targetY = -(e.clientY - rect.top - rect.height / 2) / 20;
+        startLoop();
+      });
+
+      cardBody.addEventListener('mouseleave', () => {
+        isHovered = false;
+        targetX = 0;
+        targetY = 0;
+        items.forEach((item) => {
+          item.style.transform = `translateX(0px) translateY(0px) translateZ(0px) rotateX(0deg) rotateY(0deg) rotateZ(0deg)`;
+        });
+        startLoop();
+      });
+    }
+
+    document.querySelectorAll('[data-3d-card]').forEach(init3DCard);
+  })();
 </script>
 
 <?php render_footer();

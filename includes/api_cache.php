@@ -194,3 +194,22 @@ function api_cache_remember(string $key, int $ttlSeconds, callable $loader, int 
     $fallback = api_cache_read_stale($key, $ttlSeconds, $graceSeconds * 2);
     return is_array($fallback) ? $fallback : ['ok' => false, 'error' => 'Cache loader failed'];
 }
+
+/**
+ * Shared generation counter so mutations can invalidate all per-user list caches.
+ */
+function api_cache_generation(string $namespace): int
+{
+    $entry = api_cache_read_entry($namespace . '_gen');
+    if ($entry === null) {
+        return 1;
+    }
+    return max(1, (int) (($entry['data']['v'] ?? 1)));
+}
+
+function api_cache_bump_generation(string $namespace): int
+{
+    $next = api_cache_generation($namespace) + 1;
+    api_cache_write($namespace . '_gen', ['v' => $next]);
+    return $next;
+}

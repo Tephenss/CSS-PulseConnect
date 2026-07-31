@@ -8,13 +8,31 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/mobile_session.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
-$userId = trim((string) ($data['user_id'] ?? ''));
+$sessionToken = mobile_session_extract_token($data);
+$userId = '';
 $email = strtolower(trim((string) ($data['email'] ?? '')));
 $fullName = trim((string) ($data['full_name'] ?? ''));
+
+if ($sessionToken !== '') {
+    $sessionUser = mobile_api_require_user($data);
+    $userId = (string) ($sessionUser['id'] ?? '');
+    $email = strtolower(trim((string) ($sessionUser['email'] ?? $email)));
+    if ($fullName === '') {
+        $fullName = build_display_name(
+            (string) ($sessionUser['first_name'] ?? ''),
+            (string) ($sessionUser['middle_name'] ?? ''),
+            (string) ($sessionUser['last_name'] ?? ''),
+            (string) ($sessionUser['suffix'] ?? '')
+        );
+    }
+} else {
+    $userId = trim((string) ($data['user_id'] ?? ''));
+}
 
 if ($userId === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Invalid request.'], 400);
@@ -55,8 +73,47 @@ if ($fullName === '') {
     );
 }
 
-$code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+// Server-side resend cooldown — client prefs alone are not enough (back → login
+// remounts the OTP screen and can clear/skip local markers).
+$resendCooldownSeconds = 60;
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+$existingUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+    . '?select=last_sent_at,expires_at'
+    . '&user_id=eq.' . rawurlencode($userId)
+    . '&limit=1';
+$existingRes = supabase_request('GET', $existingUrl, mobile_api_supabase_headers());
+if ($existingRes['ok']) {
+    $existingRows = json_decode((string) $existingRes['body'], true);
+    $existing = is_array($existingRows) && isset($existingRows[0]) && is_array($existingRows[0])
+        ? $existingRows[0]
+        : null;
+    $lastSentRaw = is_array($existing) ? trim((string) ($existing['last_sent_at'] ?? '')) : '';
+    $lastSentAt = $lastSentRaw !== '' ? DateTimeImmutable::createFromFormat(DateTimeInterface::ATOM, $lastSentRaw) : false;
+    if ($lastSentAt === false && $lastSentRaw !== '') {
+        try {
+            $lastSentAt = new DateTimeImmutable($lastSentRaw);
+        } catch (Throwable $e) {
+            $lastSentAt = false;
+        }
+    }
+    if ($lastSentAt instanceof DateTimeImmutable) {
+        $lastSentAt = $lastSentAt->setTimezone(new DateTimeZone('UTC'));
+        $elapsed = $now->getTimestamp() - $lastSentAt->getTimestamp();
+        if ($elapsed >= 0 && $elapsed < $resendCooldownSeconds) {
+            $remaining = $resendCooldownSeconds - $elapsed;
+            $expiresAtRaw = trim((string) ($existing['expires_at'] ?? ''));
+            json_response([
+                'ok' => true,
+                'skipped' => true,
+                'cooldown_seconds' => $remaining,
+                'message' => 'Verification code already sent. Please check your email.',
+                'expires_at' => $expiresAtRaw !== '' ? $expiresAtRaw : $now->add(new DateInterval('PT5M'))->format(DATE_ATOM),
+            ], 200);
+        }
+    }
+}
+
+$code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 $expiresAt = $now->add(new DateInterval('PT5M'));
 
 $payload = [
@@ -68,11 +125,12 @@ $payload = [
 ];
 
 $saveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes';
+// Upsert on user_id PK so a second send replaces the previous code.
 $saveRes = supabase_request(
     'POST',
     $saveUrl,
     mobile_api_supabase_write_headers(),
-    json_encode([$payload], JSON_UNESCAPED_SLASHES)
+    json_encode($payload, JSON_UNESCAPED_SLASHES)
 );
 if (!$saveRes['ok']) {
     json_response(['ok' => false, 'error' => 'Failed to prepare verification code.'], 500);
@@ -93,4 +151,5 @@ json_response([
     'ok' => true,
     'message' => 'Verification code sent to your email.',
     'expires_at' => $expiresAt->format(DATE_ATOM),
+    'cooldown_seconds' => $resendCooldownSeconds,
 ], 200);

@@ -27,40 +27,22 @@ function event_sessions_supported_columns(array $headers): array
         return $cached;
     }
 
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        $sessionCached = $_SESSION['event_sessions_supported_columns'] ?? null;
-        $sessionCachedAt = (int) ($_SESSION['event_sessions_supported_columns_cached_at'] ?? 0);
-        if (is_array($sessionCached) && $sessionCachedAt > 0 && (time() - $sessionCachedAt) < 600) {
-            $cached = array_values(array_unique(array_map('strval', $sessionCached)));
-            return $cached;
-        }
-    }
-
-    $required = ['id', 'event_id', 'title', 'start_at'];
-    $optional = [
+    // Production schema (migrations 046+) — never SELECT-probe optional columns.
+    // Each missing-column probe is a Postgres ERROR in Supabase metrics.
+    // No attendance_window_minutes in prod — use scan_window_minutes only.
+    $cached = [
+        'id',
+        'event_id',
+        'title',
+        'start_at',
         'end_at',
         'scan_window_minutes',
-        'attendance_window_minutes',
         'sort_order',
-        'session_no',
         'topic',
         'description',
         'location',
         'updated_at',
     ];
-
-    $supported = $required;
-    foreach ($optional as $column) {
-        $probeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
-            . '?select=' . rawurlencode($column)
-            . '&limit=1';
-        $probe = supabase_request('GET', $probeUrl, $headers);
-        if (!empty($probe['ok'])) {
-            $supported[] = $column;
-        }
-    }
-
-    $cached = array_values(array_unique($supported));
 
     if (session_status() === PHP_SESSION_ACTIVE) {
         $_SESSION['event_sessions_supported_columns'] = $cached;
@@ -78,6 +60,13 @@ function clear_event_sessions_supported_columns_cache(): void
             $_SESSION['event_sessions_supported_columns'],
             $_SESSION['event_sessions_supported_columns_cached_at']
         );
+    }
+    if (!function_exists('api_cache_path')) {
+        require_once __DIR__ . '/api_cache.php';
+    }
+    $path = api_cache_path('event_sessions_supported_columns');
+    if (is_file($path)) {
+        @unlink($path);
     }
 }
 
@@ -359,7 +348,7 @@ function normalize_event_session_rows(array $rows, string $fallbackEventId = '')
 function build_event_sessions_select_columns(array $supportedColumns): array
 {
     $selectColumns = ['id', 'event_id', 'title', 'start_at'];
-    foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'attendance_window_minutes', 'sort_order', 'session_no'] as $column) {
+    foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'sort_order'] as $column) {
         if (in_array($column, $supportedColumns, true)) {
             $selectColumns[] = $column;
         }

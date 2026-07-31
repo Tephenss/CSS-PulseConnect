@@ -238,9 +238,9 @@ function manage_events_live_fetch_events(array $user, array $headers): array
 
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . rawurlencode($select);
     if ($role === 'admin') {
-        $url .= '&status=neq.archived&order=updated_at.desc&limit=250';
+        $url .= '&status=neq.archived&order=updated_at.desc&limit=120';
     } elseif ($role === 'teacher' && $userId !== '') {
-        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc&limit=250';
+        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc&limit=120';
     } else {
         return [];
     }
@@ -392,12 +392,26 @@ function manage_events_live_payload(array $user, bool $lite = false): array
         ];
     }
 
-    $eventIds = array_values(array_filter(array_map(
-        static fn($event): string => is_array($event) ? trim((string) ($event['id'] ?? '')) : '',
-        $events
-    )));
-    $requirementMap = fetch_proposal_requirements_map($eventIds, $headers);
-    $submissionMap = fetch_proposal_submissions_map($eventIds, $headers);
+    $proposalEventIds = [];
+    foreach ($events as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $eventId = trim((string) ($event['id'] ?? ''));
+        if ($eventId === '') {
+            continue;
+        }
+        $status = strtolower(trim((string) ($event['status'] ?? '')));
+        $proposalStage = strtolower(trim((string) ($event['proposal_stage'] ?? '')));
+        if ($status === 'pending'
+            || in_array($proposalStage, ['pending_requirements', 'requirements_requested', 'under_review'], true)) {
+            $proposalEventIds[] = $eventId;
+        }
+    }
+    $proposalEventIds = array_values(array_unique($proposalEventIds));
+
+    $requirementMap = $proposalEventIds === [] ? [] : fetch_proposal_requirements_map($proposalEventIds, $headers);
+    $submissionMap = $proposalEventIds === [] ? [] : fetch_proposal_submissions_map($proposalEventIds, $headers);
     $visibleSubmissionMap = filter_visible_proposal_submissions_map($submissionMap);
 
     $userId = trim((string) ($user['id'] ?? ''));

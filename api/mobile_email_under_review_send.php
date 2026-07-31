@@ -8,12 +8,29 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 
+require_once __DIR__ . '/../includes/mobile_session.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
-$userId = trim((string) ($data['user_id'] ?? ''));
-$email = strtolower(trim((string) ($data['email'] ?? '')));
+$sessionUser = mobile_api_require_user($data);
+$userId = (string) ($sessionUser['id'] ?? '');
+$email = strtolower(trim((string) ($sessionUser['email'] ?? '')));
 $fullName = trim((string) ($data['full_name'] ?? ''));
+if ($fullName === '') {
+    $fullName = build_display_name(
+        (string) ($sessionUser['first_name'] ?? ''),
+        (string) ($sessionUser['middle_name'] ?? ''),
+        (string) ($sessionUser['last_name'] ?? ''),
+        (string) ($sessionUser['suffix'] ?? '')
+    );
+}
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('mobile_under_review:' . $userId . ':' . $clientIp, 3, 600)) {
+    json_response(['ok' => false, 'error' => 'Too many requests. Please wait.'], 429);
+}
 
 if ($userId === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Invalid request.'], 400);

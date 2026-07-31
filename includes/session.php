@@ -29,19 +29,38 @@ function session_bootstrap(): void
     // 1. Isolated save path inside the project directory.
     $savePath = __DIR__ . '/../sessions';
     if (!is_dir($savePath)) {
-        mkdir($savePath, 0750, true);
+        @mkdir($savePath, 0750, true);
     }
-    session_save_path(realpath($savePath));
+    $resolvedSavePath = realpath($savePath);
+    // realpath() can return false on some hosts if the dir is not readable yet.
+    session_save_path($resolvedSavePath !== false ? $resolvedSavePath : $savePath);
 
     // 2. Unique cookie name so we don't collide with XAMPP or other apps on localhost.
     session_name('PCSS');
 
     // 3. Secure cookie flags.
+    // SESSION_COOKIE_SECURE: auto (HTTPS detected) | true | false
+    $secureFlag = false;
+    if (defined('SESSION_COOKIE_SECURE')) {
+        $mode = strtolower(trim((string) SESSION_COOKIE_SECURE));
+        if ($mode === 'true' || $mode === '1') {
+            $secureFlag = true;
+        } elseif ($mode === 'false' || $mode === '0') {
+            $secureFlag = false;
+        } else {
+            // auto
+            $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                || ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443)
+                || (strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https');
+            $secureFlag = $https;
+        }
+    }
+
     session_set_cookie_params([
         'lifetime' => 0,         // session cookie (expires when browser closes)
         'path'     => '/',
         'domain'   => '',        // current host only
-        'secure'   => false,     // keep false for http://localhost dev
+        'secure'   => $secureFlag,
         'httponly' => true,
         'samesite' => 'Strict',
     ]);

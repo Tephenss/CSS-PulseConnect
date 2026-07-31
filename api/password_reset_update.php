@@ -8,6 +8,7 @@ require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 
 $data = require_post_json();
 require_csrf_from_json($data);
@@ -15,6 +16,11 @@ require_csrf_from_json($data);
 $email = strtolower(trim((string) ($data['email'] ?? '')));
 $resetToken = trim((string) ($data['reset_token'] ?? ''));
 $newPassword = (string) ($data['new_password'] ?? '');
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('web_pw_reset_update:' . $clientIp, 10, 300)) {
+    json_response(['ok' => false, 'error' => 'Too many attempts. Please wait.'], 429);
+}
 
 if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);

@@ -11,13 +11,17 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/event_registration_submit.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 
+require_once __DIR__ . '/../includes/mobile_session.php';
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
+$sessionUser = mobile_api_require_user($data);
+$userId = (string) ($sessionUser['id'] ?? '');
+
 $eventId = trim((string) ($data['event_id'] ?? ''));
-$userId = trim((string) ($data['user_id'] ?? ''));
 if ($eventId === '' || $userId === '') {
-    json_response(['ok' => false, 'error' => 'event_id and user_id are required.'], 400);
+    json_response(['ok' => false, 'error' => 'event_id and authenticated user are required.'], 400);
 }
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');

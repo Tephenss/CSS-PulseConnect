@@ -1,0 +1,28 @@
+---
+description: Always prioritize security — no data leaks, BFF auth, never trust anon/client
+alwaysApply: true
+---
+
+# Security-first (CCS PulseConnect)
+
+Real student/teacher data is in this system. **Every feature must preserve the security lockdown.**
+
+## Non-negotiables
+
+- **PHP BFF is the privileged path.** Service role key stays server-side only (`.env` / Hostinger). Never put `SUPABASE_KEY` / service role / SMTP passwords in Flutter.
+- **Do not reopen anon access** to: `users` (especially `password`), OTP/reset codes, `trusted_devices`, student docs/submissions, `fcm_tokens`, notification PII tables, `mobile_sessions`.
+- **Mobile mutations** that touch those tables go through session-authenticated PHP APIs (`mobile_api_validate_key` + `mobile_api_require_user`). Never trust client-supplied `user_id` alone.
+- **Flutter must not** `.select()` / `.update()` passwords or OTP tables via the anon/publishable key. Prefer `MobileBackendService` + secure storage for session tokens; strip `password` from prefs.
+- **Fail closed:** empty `MOBILE_PUSH_API_KEY` must reject; rate-limit auth/reset; keep SSL verify on in production; session cookies Secure on HTTPS.
+- **Secrets:** never commit `.env` / `env.dart` secrets; never log tokens, passwords, or OTP codes.
+
+## When adding features
+
+1. Ask: can anon dump or forge this? If yes, route via PHP + service role.
+2. Prefer existing `mobile_secure_read` / `mobile_secure_write` / auth APIs over new broad PostgREST grants.
+3. Before widening RLS/`GRANT` to anon, require a strong reason and document residual risk in `SECURITY.md`.
+4. Escape user-controlled strings in HTML/JS (`escapeHtml` / `htmlspecialchars`); check ownership on teacher writes.
+
+## Reference
+
+See project root `SECURITY.md` and migration `048_security_lockdown.sql`.

@@ -6,11 +6,20 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
 $email = strtolower(trim((string) ($data['email'] ?? '')));
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('mobile_pw_reset_send:' . $clientIp, 8, 300)) {
+    json_response(['ok' => false, 'error' => 'Too many reset requests. Please wait.'], 429);
+}
+if ($email !== '' && !api_rate_limit_allow('mobile_pw_reset_send_email:' . $email, 5, 600)) {
+    json_response(['ok' => false, 'error' => 'Too many reset requests for this email. Please wait.'], 429);
+}
+
 if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
 }
@@ -75,7 +84,6 @@ if (!$sent) {
 
 json_response([
     'ok' => true,
-    'user_id' => $userId,
     'message' => 'Reset code sent to your email.',
     'expires_at' => $expiresAt->format(DATE_ATOM),
 ], 200);

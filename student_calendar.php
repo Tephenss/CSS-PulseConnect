@@ -8,11 +8,9 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/firestore_catalog.php';
 
 $user = require_role(['admin']);
-
-// Show published + approved (ready to publish) events on the calendar
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=in.(published,approved)&order=start_at.asc';
 
 $headers = [
     'Accept: application/json',
@@ -20,11 +18,25 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$events = [];
-$res = supabase_request('GET', $url, $headers);
-if ($res['ok']) {
-    $decoded = json_decode((string) $res['body'], true);
-    $events = is_array($decoded) ? $decoded : [];
+// Prefer Firestore public catalog for published; still load approved from Supabase.
+$events = firestore_catalog_list_events(120);
+$approvedUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=eq.approved&order=start_at.asc&limit=80';
+$approvedRes = supabase_request('GET', $approvedUrl, $headers);
+$approved = [];
+if ($approvedRes['ok']) {
+    $decoded = json_decode((string) $approvedRes['body'], true);
+    $approved = is_array($decoded) ? $decoded : [];
+}
+
+if ($events === []) {
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=in.(published,approved)&order=start_at.asc';
+    $res = supabase_request('GET', $url, $headers);
+    if ($res['ok']) {
+        $decoded = json_decode((string) $res['body'], true);
+        $events = is_array($decoded) ? $decoded : [];
+    }
+} else {
+    $events = array_merge($events, $approved);
 }
 
 render_header('Event Calendar', $user);

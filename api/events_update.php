@@ -178,11 +178,25 @@ if (array_key_exists('registration_close_weeks', $data)) {
     $fields['registration_close_weeks'] = $registrationCloseWeeks;
 }
 if (array_key_exists('registration_close_extend_days', $data)) {
-    $extendRaw = $data['registration_close_extend_days'];
-    if ($extendRaw !== null && $extendRaw !== '' && !in_array((int) $extendRaw, [0, 1, 2, 3], true)) {
-        json_response(['ok' => false, 'error' => 'Registration close extension must be 0 to 3 days.'], 400);
+    // Client sends user-facing days from anchor (base close, or today if already past).
+    $eventForExtend = $currentEvent;
+    if (isset($fields['start_at'])) {
+        $eventForExtend['start_at'] = $fields['start_at'];
     }
-    $fields['registration_close_extend_days'] = normalize_registration_close_extend_days($extendRaw);
+    if (array_key_exists('registration_close_weeks', $fields)) {
+        $eventForExtend['registration_close_weeks'] = $fields['registration_close_weeks'];
+    }
+    $resolved = resolve_registration_close_extend_request(
+        $eventForExtend,
+        $data['registration_close_extend_days']
+    );
+    if (($resolved['ok'] ?? false) !== true) {
+        json_response([
+            'ok' => false,
+            'error' => (string) ($resolved['error'] ?? 'Invalid registration close extension.'),
+        ], 400);
+    }
+    $fields['registration_close_extend_days'] = (int) ($resolved['extend_days'] ?? 0);
 }
 $shouldUpdateMode = isset($data['event_mode']) || $eventMode !== $currentEventMode;
 if ($shouldUpdateMode) {
@@ -256,7 +270,7 @@ if (!$res['ok'] && (is_missing_column_error($res, 'event_mode') || is_missing_co
     if (array_key_exists('registration_close_extend_days', $fields) && is_missing_column_error($res, 'registration_close_extend_days')) {
         json_response([
             'ok' => false,
-            'error' => 'Registration close extension could not be saved. Run supabase/migrations/047_registration_close_extend_days.sql in Supabase SQL Editor first.',
+            'error' => 'Registration close extension could not be saved. Run supabase/migrations/047_registration_close_extend_days.sql (and 054_registration_close_extend_days_widen.sql if extend > 3) in Supabase SQL Editor first.',
         ], 500);
     }
     if ($role === 'teacher' && array_key_exists('event_fee', $fields) && $fields['event_fee'] !== null && is_missing_column_error($res, 'event_fee')) {
@@ -344,6 +358,9 @@ if ($role === 'teacher' && $studentRequirementsProvided) {
         $event['student_requirements'] = $studentSave['requirements'] ?? [];
     }
 }
+
+require_once __DIR__ . '/../includes/api_cache.php';
+api_cache_bump_generation('manage_events');
 
 json_response(['ok' => true, 'event' => $event], 200);
 
