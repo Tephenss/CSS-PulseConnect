@@ -23,8 +23,16 @@ try {
         $deviceKey = device_trust_ip_key();
     }
     $deviceKey = strtolower($deviceKey);
-    if ($deviceKey === '' || !str_starts_with($deviceKey, 'ip:')) {
+    $isIpKey = str_starts_with($deviceKey, 'ip:');
+    $isInstallKey = str_starts_with($deviceKey, 'install:');
+    if ($deviceKey === '' || (!$isIpKey && !$isInstallKey)) {
         json_response(['ok' => false, 'error' => 'Unable to resolve device/IP key.'], 400);
+    }
+    if ($isInstallKey) {
+        $installId = substr($deviceKey, strlen('install:'));
+        if ($installId === '' || !preg_match('/^[a-f0-9-]{16,80}$/', $installId)) {
+            json_response(['ok' => false, 'error' => 'Invalid install device key.'], 400);
+        }
     }
 
     $platform = trim((string) ($data['platform'] ?? 'android'));

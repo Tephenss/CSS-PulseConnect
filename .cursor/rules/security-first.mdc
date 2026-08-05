@@ -22,7 +22,7 @@ Real student/teacher data is in this system. **Every feature must preserve the s
 2. Prefer existing `mobile_secure_read` / `mobile_secure_write` / auth APIs over new broad PostgREST grants.
 3. Before widening RLS/`GRANT` to anon, require a strong reason and document residual risk in `SECURITY.md`.
 4. Escape user-controlled strings in HTML/JS (`escapeHtml` / `htmlspecialchars`); check ownership on teacher writes.
-
+5. make sure na sa bawat inaayos na isang flow hindi nasisira ang flow na ayos naman para lng maayos ang current flow na working tapos pag checheck yung ibang flow sira na.
 ## Reference
 
 See project root `SECURITY.md` and migration `048_security_lockdown.sql`.

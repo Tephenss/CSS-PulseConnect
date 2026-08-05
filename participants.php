@@ -1347,7 +1347,7 @@ if ($eventWindowClosed) {
 
 render_header('Participants', $user);
 
-$exportExcelHtml = '<a href="/participants.php?event_id=' . htmlspecialchars($eventId)
+$exportExcelHtml = '<a href="/participants?event_id=' . htmlspecialchars($eventId)
     . '&export=excel' . htmlspecialchars($returnToQuery)
     . '" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">'
     . '<svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>'
@@ -1377,10 +1377,10 @@ render_event_tabs([
 <?php if ($multiDay && $participantTab === 'participants'): ?>
   <div class="mb-6 flex gap-2 flex-wrap bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200 w-full sm:w-fit">
     <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === 'all' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-       href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=all<?= htmlspecialchars($returnToQuery) ?>">All Days</a>
+       href="/participants?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=all<?= htmlspecialchars($returnToQuery) ?>">All Days</a>
     <?php foreach ($days as $day): ?>
       <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === $day ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
-         href="/participants.php?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=<?= htmlspecialchars($day) ?><?= htmlspecialchars($returnToQuery) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
+         href="/participants?event_id=<?= htmlspecialchars($eventId) ?>&participant_tab=participants&day=<?= htmlspecialchars($day) ?><?= htmlspecialchars($returnToQuery) ?>"><?= htmlspecialchars((new DateTimeImmutable($day))->format('M d, Y')) ?></a>
     <?php endforeach; ?>
   </div>
 <?php endif; ?>

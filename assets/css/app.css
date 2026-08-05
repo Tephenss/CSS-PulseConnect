@@ -176,3 +176,13 @@ body {
     -webkit-text-fill-color: #fff;
   }
 }
+
+/* Import / Link Certificate modal — force 3-column separation on desktop */
+@media (min-width: 1024px) {
+  #importCertModal .import-cert-layout {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr) 270px;
+    grid-template-rows: minmax(0, 1fr);
+    divide-style: solid;
+  }
+}

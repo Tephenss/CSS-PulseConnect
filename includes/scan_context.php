@@ -50,6 +50,9 @@ function scan_context_session_summary(array $session): array
         'start_at' => (string) ($session['start_at'] ?? ''),
         'end_at' => (string) ($session['end_at'] ?? ''),
         'scan_window_minutes' => max(1, (int) ($session['scan_window_minutes'] ?? 30)),
+        'early_out_enabled_at' => isset($session['early_out_enabled_at'])
+            ? (string) $session['early_out_enabled_at']
+            : null,
     ];
 }
 
@@ -86,7 +89,7 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
         ];
     }
 
-    $sessions = fetch_event_sessions($eventId, $headers);
+    $sessions = is_array($event['sessions'] ?? null) ? $event['sessions'] : fetch_event_sessions($eventId, $headers);
     if (empty($sessions)) {
         return [
             'status' => 'missing_schedule',
@@ -100,9 +103,51 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
         ];
     }
 
+    // Attach per-seminar Early Out flags (same concept as simple event early_out_enabled_at).
+    if (function_exists('attendance_lazy_clear_early_out') && function_exists('attendance_early_out_is_active')) {
+        $eoUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=id,early_out_enabled_at&event_id=eq.' . rawurlencode($eventId);
+        $eoRes = supabase_request('GET', $eoUrl, $headers);
+        $eoMap = [];
+        if (($eoRes['ok'] ?? false) === true) {
+            $eoRows = json_decode((string) ($eoRes['body'] ?? ''), true);
+            if (is_array($eoRows)) {
+                foreach ($eoRows as $row) {
+                    if (!is_array($row) || empty($row['id'])) {
+                        continue;
+                    }
+                    $sid = (string) $row['id'];
+                    attendance_lazy_clear_early_out('event_sessions', $sid, $row['early_out_enabled_at'] ?? null, $nowUtc, $headers);
+                    $eoMap[$sid] = attendance_early_out_is_active((string) ($row['early_out_enabled_at'] ?? ''), $nowUtc)
+                        ? (string) $row['early_out_enabled_at']
+                        : null;
+                }
+            }
+        }
+        foreach ($sessions as &$sessionRow) {
+            if (!is_array($sessionRow)) {
+                continue;
+            }
+            $sid = (string) ($sessionRow['id'] ?? '');
+            if ($sid === '') {
+                continue;
+            }
+            if (array_key_exists($sid, $eoMap)) {
+                $sessionRow['early_out_enabled_at'] = $eoMap[$sid];
+            } elseif (!array_key_exists('early_out_enabled_at', $sessionRow)) {
+                $sessionRow['early_out_enabled_at'] = null;
+            } elseif (!attendance_early_out_is_active((string) ($sessionRow['early_out_enabled_at'] ?? ''), $nowUtc)) {
+                $sessionRow['early_out_enabled_at'] = null;
+            }
+        }
+        unset($sessionRow);
+    }
+
     $open = [];
     $upcoming = [];
     $closed = [];
+    $outOpen = [];
+    $outWaiting = [];
 
     foreach ($sessions as $session) {
         if (!is_array($session)) {
@@ -135,6 +180,26 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
         }
 
         $closed[] = $meta;
+
+        // After seminar grace: Early Out / end+1h time-out (same rules as simple events).
+        if (function_exists('attendance_check_out_window')) {
+            $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
+            $outWin = attendance_check_out_window(
+                $endAt,
+                isset($session['early_out_enabled_at']) ? (string) $session['early_out_enabled_at'] : null,
+                $nowUtc
+            );
+            $outMeta = $meta + [
+                'out_window' => $outWin,
+                'out_opens_at' => $outWin['opens_at'] ?? null,
+                'out_closes_at' => $outWin['closes_at'] ?? null,
+            ];
+            if (($outWin['open'] ?? false) === true) {
+                $outOpen[] = $outMeta;
+            } elseif ((string) ($outWin['status'] ?? '') === 'too_early_checkout') {
+                $outWaiting[] = $outMeta;
+            }
+        }
     }
 
     if (count($open) > 1) {
@@ -160,12 +225,42 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
             'opens_at' => $meta['opens_at'],
             'closes_at' => $meta['closes_at'],
             'window_minutes' => $meta['window_minutes'],
+            'scan_mode' => 'check_in',
             'message' => 'Seminar scanning is open.',
         ];
     }
 
-    // If a previous seminar's scan window already closed but a later seminar
-    // is still upcoming, show Waiting for the next seminar (same-day gap).
+    if (count($outOpen) > 1) {
+        return [
+            'status' => 'conflict',
+            'source' => 'session',
+            'event' => $eventSummary,
+            'session' => null,
+            'opens_at' => null,
+            'closes_at' => null,
+            'window_minutes' => null,
+            'scan_mode' => 'check_out',
+            'message' => 'Multiple seminars are open for time-out. Fix overlapping schedule.',
+        ];
+    }
+
+    if (count($outOpen) === 1) {
+        $meta = $outOpen[0];
+        $outWin = is_array($meta['out_window'] ?? null) ? $meta['out_window'] : [];
+        return [
+            'status' => 'open',
+            'source' => 'session',
+            'event' => $eventSummary,
+            'session' => scan_context_session_summary((array) $meta['session']),
+            'opens_at' => $meta['out_opens_at'] ?? $meta['opens_at'],
+            'closes_at' => $meta['out_closes_at'] ?? $meta['closes_at'],
+            'window_minutes' => 60,
+            'scan_mode' => 'check_out',
+            'message' => (string) ($outWin['message'] ?? 'Seminar time-out is open.'),
+        ];
+    }
+
+    // Prefer waiting for the next seminar time-in when no timeout is open yet.
     if (!empty($upcoming)) {
         try {
             sync_session_event_absences($eventId, $sessions, $nowUtc);
@@ -177,6 +272,28 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
             return strcmp((string) ($a['opens_at'] ?? ''), (string) ($b['opens_at'] ?? ''));
         });
         $meta = $upcoming[0];
+
+        // If a prior seminar is waiting for Early Out / scheduled end, surface that
+        // when the next seminar has not started yet and grace already ended.
+        if (!empty($outWaiting)) {
+            usort($outWaiting, static function (array $a, array $b): int {
+                return strcmp((string) ($b['closes_at'] ?? ''), (string) ($a['closes_at'] ?? ''));
+            });
+            $waitOut = $outWaiting[0];
+            $outWin = is_array($waitOut['out_window'] ?? null) ? $waitOut['out_window'] : [];
+            return [
+                'status' => 'closed',
+                'source' => 'session',
+                'event' => $eventSummary,
+                'session' => scan_context_session_summary((array) $waitOut['session']),
+                'opens_at' => $waitOut['out_opens_at'] ?? $waitOut['opens_at'],
+                'closes_at' => $waitOut['out_closes_at'] ?? $waitOut['closes_at'],
+                'window_minutes' => $waitOut['window_minutes'],
+                'scan_mode' => 'check_out',
+                'message' => (string) ($outWin['message'] ?? 'Too early to time out for this seminar.'),
+            ];
+        }
+
         return [
             'status' => 'waiting',
             'source' => 'session',
@@ -185,6 +302,7 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
             'opens_at' => $meta['opens_at'],
             'closes_at' => $meta['closes_at'],
             'window_minutes' => $meta['window_minutes'],
+            'scan_mode' => 'check_in',
             'message' => 'Waiting for seminar scan window.',
         ];
     }
@@ -193,6 +311,25 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
         sync_session_event_absences($eventId, $sessions, $nowUtc);
     } catch (Throwable $e) {
         // Keep scanner status available even if absence sync fails.
+    }
+
+    if (!empty($outWaiting)) {
+        usort($outWaiting, static function (array $a, array $b): int {
+            return strcmp((string) ($b['closes_at'] ?? ''), (string) ($a['closes_at'] ?? ''));
+        });
+        $meta = $outWaiting[0];
+        $outWin = is_array($meta['out_window'] ?? null) ? $meta['out_window'] : [];
+        return [
+            'status' => 'closed',
+            'source' => 'session',
+            'event' => $eventSummary,
+            'session' => scan_context_session_summary((array) $meta['session']),
+            'opens_at' => $meta['out_opens_at'] ?? $meta['opens_at'],
+            'closes_at' => $meta['out_closes_at'] ?? $meta['closes_at'],
+            'window_minutes' => $meta['window_minutes'],
+            'scan_mode' => 'check_out',
+            'message' => (string) ($outWin['message'] ?? 'Too early to time out for this seminar.'),
+        ];
     }
 
     usort($closed, static function (array $a, array $b): int {
@@ -708,8 +845,14 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
 
 function resolve_event_scan_context(array $event, DateTimeImmutable $nowUtc, array $headers): array
 {
-    if (event_uses_sessions($event)) {
-        return resolve_session_scan_context($event, $nowUtc, $headers);
+    $eventId = trim((string) ($event['id'] ?? ''));
+    $sessions = [];
+    if ($eventId !== '' && function_exists('fetch_event_sessions')) {
+        $sessions = fetch_event_sessions($eventId, $headers);
+    }
+    // Prefer seminar windows whenever session rows exist, even if event_mode is still "simple".
+    if (event_uses_sessions(array_merge($event, ['sessions' => $sessions]))) {
+        return resolve_session_scan_context(array_merge($event, ['sessions' => $sessions]), $nowUtc, $headers);
     }
 
     return resolve_simple_event_scan_context($event, $nowUtc);

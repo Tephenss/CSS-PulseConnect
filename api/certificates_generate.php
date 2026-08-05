@@ -10,8 +10,9 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/certificate_code_pool.php';
 
-$user = require_role(['admin']);
+$user = require_role(['admin', 'teacher']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
@@ -54,6 +55,28 @@ $headers = [
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
+
+$role = strtolower(trim((string) ($user['role'] ?? '')));
+$userId = trim((string) ($user['id'] ?? ''));
+if ($role === 'teacher') {
+    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,created_by&id=eq.' . rawurlencode($eventId) . '&limit=1';
+    $eventRes = supabase_request('GET', $eventUrl, $headers);
+    $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+    $eventRow = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
+    $allowed = is_array($eventRow) && (string) ($eventRow['created_by'] ?? '') === $userId;
+    if (!$allowed) {
+        $assignUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+            . '?select=id&event_id=eq.' . rawurlencode($eventId)
+            . '&teacher_id=eq.' . rawurlencode($userId) . '&limit=1';
+        $assignRes = supabase_request('GET', $assignUrl, $headers);
+        $assignRows = json_decode((string) ($assignRes['body'] ?? ''), true);
+        $allowed = is_array($assignRows) && count($assignRows) > 0;
+    }
+    if (!$allowed) {
+        json_response(['ok' => false, 'error' => 'You do not have permission to send certificates for this event.'], 403);
+    }
+}
 
 function fetch_certificate_template(string $templateId, array $headers): ?array
 {
@@ -1175,12 +1198,30 @@ if (($preview['mode'] ?? 'simple') === 'seminar_based') {
             $choiceTemplateId = trim((string) ($choice['template_id'] ?? ''));
             $choiceScope = strtolower(trim((string) ($choice['template_scope'] ?? 'event')));
 
+            $studentIdForCode = (string) ($recipient['student_id'] ?? '');
+            $claimed = certificate_pool_claim_next($eventId, $studentIdForCode, $recipientSessionId);
+            if ($claimed === null || $claimed === '') {
+                json_response([
+                    'ok' => false,
+                    'error' => 'No available registrar codes for this seminar. Import a coded PPTX/PDF on the event first.',
+                ], 409);
+            }
+            $sessionMeta = null;
+            foreach ($sessions as $s) {
+                if (is_array($s) && trim((string) ($s['id'] ?? '')) === $recipientSessionId) {
+                    $sessionMeta = $s;
+                    break;
+                }
+            }
             $payload = [
                 'session_id' => $recipientSessionId,
-                'student_id' => (string) ($recipient['student_id'] ?? ''),
-                'certificate_code' => bin2hex(random_bytes(8)),
+                'event_id' => $eventId,
+                'student_id' => $studentIdForCode,
+                'certificate_code' => $claimed,
                 'issued_by' => (string) ($user['id'] ?? ''),
                 'issued_at' => gmdate('c'),
+                'event_title' => trim((string) ($event['title'] ?? 'Event')),
+                'session_title' => build_session_display_name(is_array($sessionMeta) ? $sessionMeta : []),
             ];
 
             if ($choiceScope === 'session') {
@@ -1214,12 +1255,31 @@ if (($preview['mode'] ?? 'simple') === 'seminar_based') {
         }
 
         foreach ($eligibleRecipients as $recipient) {
+            $studentIdForCode = (string) ($recipient['student_id'] ?? '');
+            $sessForCode = (string) ($recipient['session_id'] ?? '');
+            $claimed = certificate_pool_claim_next($eventId, $studentIdForCode, $sessForCode !== '' ? $sessForCode : null);
+            if ($claimed === null || $claimed === '') {
+                json_response([
+                    'ok' => false,
+                    'error' => 'No available registrar codes in the pool. Import a coded PPTX/PDF on the event first.',
+                ], 409);
+            }
+            $sessionMeta = null;
+            foreach ($sessions as $s) {
+                if (is_array($s) && trim((string) ($s['id'] ?? '')) === trim($sessForCode)) {
+                    $sessionMeta = $s;
+                    break;
+                }
+            }
             $payloads[] = [
-                'session_id' => (string) ($recipient['session_id'] ?? ''),
-                'student_id' => (string) ($recipient['student_id'] ?? ''),
-                'certificate_code' => bin2hex(random_bytes(8)),
+                'session_id' => $sessForCode,
+                'event_id' => $eventId,
+                'student_id' => $studentIdForCode,
+                'certificate_code' => $claimed,
                 'issued_by' => (string) ($user['id'] ?? ''),
                 'issued_at' => gmdate('c'),
+                'event_title' => trim((string) ($event['title'] ?? 'Event')),
+                'session_title' => build_session_display_name(is_array($sessionMeta) ? $sessionMeta : []),
             ];
             if ($templateScope === 'session') {
                 $payloads[count($payloads) - 1]['session_template_id'] = $templateId;
@@ -1239,13 +1299,22 @@ if (($preview['mode'] ?? 'simple') === 'seminar_based') {
 
 } else {
     foreach ($eligibleRecipients as $recipient) {
+        $studentIdForCode = (string) ($recipient['student_id'] ?? '');
+        $claimed = certificate_pool_claim_next($eventId, $studentIdForCode, null);
+        if ($claimed === null || $claimed === '') {
+            json_response([
+                'ok' => false,
+                'error' => 'No available registrar codes in the pool. Import a coded PPTX/PDF on the event first.',
+            ], 409);
+        }
         $payloads[] = [
             'event_id' => $eventId,
-            'student_id' => (string) ($recipient['student_id'] ?? ''),
+            'student_id' => $studentIdForCode,
             'template_id' => $templateId,
-            'certificate_code' => bin2hex(random_bytes(8)),
+            'certificate_code' => $claimed,
             'issued_by' => (string) ($user['id'] ?? ''),
             'issued_at' => gmdate('c'),
+            'event_title' => trim((string) ($event['title'] ?? 'Event')),
         ];
     }
 

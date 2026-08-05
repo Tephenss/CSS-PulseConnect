@@ -76,7 +76,12 @@ function device_trust_ensure_web_key(): string
     return device_trust_ip_key();
 }
 
-function device_trust_is_trusted(string $userId, string $deviceKey = ''): bool
+/**
+ * Tri-state trust lookup for session revalidation.
+ *
+ * @return bool|null true = trusted, false = not trusted, null = lookup failed (do not force logout)
+ */
+function device_trust_status(string $userId, string $deviceKey = ''): ?bool
 {
     $userId = trim($userId);
     $deviceKey = strtolower(trim($deviceKey !== '' ? $deviceKey : device_trust_ip_key()));
@@ -95,12 +100,17 @@ function device_trust_is_trusted(string $userId, string $deviceKey = ''): bool
     );
 
     if (!$res['ok']) {
-        // Fail closed: if table missing / error, treat as untrusted so OTP runs.
-        return false;
+        return null;
     }
 
     $rows = json_decode((string) ($res['body'] ?? ''), true);
     return is_array($rows) && isset($rows[0]) && is_array($rows[0]);
+}
+
+function device_trust_is_trusted(string $userId, string $deviceKey = ''): bool
+{
+    // Login OTP gates stay fail-closed: unknown/error ⇒ not trusted.
+    return device_trust_status($userId, $deviceKey) === true;
 }
 
 function device_trust_clip(string $value, int $maxLen): string

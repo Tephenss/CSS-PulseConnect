@@ -375,3 +375,96 @@ function attendance_early_out_grace_ends_at(
     }
     return $startAt->modify('+' . max(0, $graceMinutes) . ' minutes');
 }
+
+/**
+ * Pick the single seminar Early Out should target.
+ * Seminars do not overlap in normal schedules, so one control is enough.
+ *
+ * Priority: already ON → can enable now → in-progress → next upcoming → last past.
+ *
+ * @param list<array<string,mixed>> $sessions
+ * @return array<string,mixed>|null
+ */
+function attendance_resolve_early_out_target_session(array $sessions, DateTimeImmutable $nowUtc): ?array
+{
+    $rows = [];
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $id = trim((string) ($session['id'] ?? ''));
+        if ($id === '') {
+            continue;
+        }
+        $startAt = function_exists('parse_iso_datetime')
+            ? parse_iso_datetime((string) ($session['start_at'] ?? ''))
+            : null;
+        $endAt = function_exists('parse_iso_datetime')
+            ? parse_iso_datetime((string) ($session['end_at'] ?? ''))
+            : null;
+        if (!$startAt instanceof DateTimeImmutable || !$endAt instanceof DateTimeImmutable) {
+            continue;
+        }
+        $graceMinutes = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+        $enabledRaw = trim((string) ($session['early_out_enabled_at'] ?? ''));
+        $rows[] = [
+            'session' => $session,
+            'start_at' => $startAt,
+            'end_at' => $endAt,
+            'grace_minutes' => $graceMinutes,
+            'enabled' => attendance_early_out_is_active($enabledRaw, $nowUtc),
+            'can_enable' => attendance_early_out_schedule_allows_enable($startAt, $endAt, $nowUtc, $graceMinutes),
+        ];
+    }
+
+    if ($rows === []) {
+        return null;
+    }
+
+    foreach ($rows as $row) {
+        if (($row['enabled'] ?? false) === true) {
+            return $row['session'];
+        }
+    }
+
+    $canEnable = array_values(array_filter(
+        $rows,
+        static fn(array $row): bool => ($row['can_enable'] ?? false) === true
+    ));
+    if (count($canEnable) === 1) {
+        return $canEnable[0]['session'];
+    }
+    if (count($canEnable) > 1) {
+        usort($canEnable, static function (array $a, array $b): int {
+            return ($b['start_at']->getTimestamp()) <=> ($a['start_at']->getTimestamp());
+        });
+        return $canEnable[0]['session'];
+    }
+
+    foreach ($rows as $row) {
+        /** @var DateTimeImmutable $start */
+        $start = $row['start_at'];
+        /** @var DateTimeImmutable $end */
+        $end = $row['end_at'];
+        if ($nowUtc >= $start && $nowUtc <= $end) {
+            return $row['session'];
+        }
+    }
+
+    $upcoming = array_values(array_filter(
+        $rows,
+        static fn(array $row): bool => $nowUtc < $row['start_at']
+    ));
+    if ($upcoming !== []) {
+        usort($upcoming, static function (array $a, array $b): int {
+            return ($a['start_at']->getTimestamp()) <=> ($b['start_at']->getTimestamp());
+        });
+        return $upcoming[0]['session'];
+    }
+
+    usort($rows, static function (array $a, array $b): int {
+        return ($b['end_at']->getTimestamp()) <=> ($a['end_at']->getTimestamp());
+    });
+
+    return $rows[0]['session'];
+}

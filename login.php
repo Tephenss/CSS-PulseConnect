@@ -17,8 +17,14 @@ header('Expires: 0');
 
 $webTrustKey = device_trust_ip_key();
 
-// If already logged in, go to dashboard.
-if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
+// Forced re-verify / unauth must not bounce back to /home (that caused redirect loops).
+$forceLoginScreen = (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1')
+    || (isset($_GET['unauth']) && (string) $_GET['unauth'] === '1');
+if ($forceLoginScreen && isset($_SESSION['user'])) {
+    $_SESSION = [];
+}
+
+if (!$forceLoginScreen && isset($_SESSION['user']) && is_array($_SESSION['user'])) {
     header('Location: /home');
     return;
 }

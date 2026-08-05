@@ -8,17 +8,46 @@ if (!function_exists('event_management_return_to')) {
     function event_management_return_to(string $role, ?string $requested = null): string
     {
         $requested = trim((string) $requested);
-        if ($requested !== ''
-            && str_starts_with($requested, '/')
-            && !str_starts_with($requested, '//')
-            && !str_contains($requested, "\n")
-            && !str_contains($requested, "\r")
-        ) {
-            return $requested;
+        if ($requested !== '') {
+            // Undo accidental full-URL encoding (/page%3Fquery → /page?query).
+            if (str_contains($requested, '%') && !str_contains($requested, '?')) {
+                $decoded = rawurldecode($requested);
+                if (is_string($decoded) && $decoded !== '') {
+                    $requested = trim($decoded);
+                }
+            }
+
+            // Strip nested return_to to avoid growing redirect bombs in history.
+            $parts = parse_url($requested);
+            if (is_array($parts) && isset($parts['path']) && is_string($parts['path'])) {
+                $path = $parts['path'];
+                if (str_ends_with(strtolower($path), '.php')) {
+                    $path = substr($path, 0, -4);
+                }
+                $query = [];
+                if (!empty($parts['query']) && is_string($parts['query'])) {
+                    parse_str($parts['query'], $query);
+                    unset($query['return_to']);
+                }
+                $safe = $path;
+                if ($query !== []) {
+                    $safe .= '?' . http_build_query($query);
+                }
+                $requested = $safe;
+            }
+
+            if (str_starts_with($requested, '/')
+                && !str_starts_with($requested, '//')
+                && !str_contains($requested, "\n")
+                && !str_contains($requested, "\r")
+                && strlen($requested) <= 400
+            ) {
+                return $requested;
+            }
         }
 
         $role = strtolower(trim($role));
-        return $role === 'teacher' ? '/manage_events.php' : '/events.php';
+        return $role === 'teacher' ? '/manage_events' : '/events';
     }
 }
 
@@ -69,7 +98,7 @@ if (!function_exists('render_event_page_header')) {
     {
         $backHref = trim((string) ($options['back_href'] ?? ''));
         if ($backHref === '') {
-            $backHref = '/events.php';
+            $backHref = '/events';
         }
         $title = (string) ($options['title'] ?? '');
         $subtitle = trim((string) ($options['subtitle'] ?? ''));
@@ -139,19 +168,21 @@ if (!function_exists('render_event_tabs')) {
         $returnTo = event_management_return_to($role, (string) ($options['return_to'] ?? ''));
         $returnQuery = '&return_to=' . rawurlencode($returnTo);
 
+        // Extensionless paths avoid Hostinger .php→pretty 301 on every tab click
+        // (those hops clutter history and amplify Back-button redirect issues).
         $eventQuery = 'event_id=' . rawurlencode($eventId);
-        $participantsHref = '/participants.php?' . $eventQuery . '&participant_tab=participants' . $returnQuery;
+        $participantsHref = '/participants?' . $eventQuery . '&participant_tab=participants' . $returnQuery;
         if ($participantDay !== '' && strtolower($participantDay) !== 'all') {
             $participantsHref .= '&day=' . rawurlencode($participantDay);
         }
 
-        $absenceHref = '/participants.php?' . $eventQuery . '&participant_tab=absence_reasons' . $returnQuery;
-        $feedbackHref = '/evaluation_admin.php?' . $eventQuery . '&tab=feedback' . $returnQuery;
-        $questionsHref = '/evaluation_admin.php?' . $eventQuery . '&tab=questions' . $returnQuery;
-        $qrHref = '/event_teachers.php?' . $eventQuery . $returnQuery;
-        $detailsHref = '/event_view.php?id=' . rawurlencode($eventId) . $returnQuery;
-        $documentReviewHref = '/event_document_review.php?event_id=' . rawurlencode($eventId) . $returnQuery;
-        $paymentsHref = '/event_payments.php?event_id=' . rawurlencode($eventId) . $returnQuery;
+        $absenceHref = '/participants?' . $eventQuery . '&participant_tab=absence_reasons' . $returnQuery;
+        $feedbackHref = '/evaluation_admin?' . $eventQuery . '&tab=feedback' . $returnQuery;
+        $questionsHref = '/evaluation_admin?' . $eventQuery . '&tab=questions' . $returnQuery;
+        $qrHref = '/event_teachers?' . $eventQuery . $returnQuery;
+        $detailsHref = '/event_view?id=' . rawurlencode($eventId) . $returnQuery;
+        $documentReviewHref = '/event_document_review?event_id=' . rawurlencode($eventId) . $returnQuery;
+        $paymentsHref = '/event_payments?event_id=' . rawurlencode($eventId) . $returnQuery;
 
         $hasStudentRequirements = (bool) ($options['has_student_requirements'] ?? false);
         $isEventCreator = (bool) ($options['is_event_creator'] ?? false);

@@ -18,7 +18,7 @@ $headers = [
 ];
 
 $legacyUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
-    . '?select=id,certificate_code,issued_at,event_id,events(title,start_at)&student_id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
+    . '?select=id,certificate_code,issued_at,event_id,event_title,session_title,events(title,start_at)&student_id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
     . '&order=issued_at.desc';
 
 $legacyRes = supabase_request('GET', $legacyUrl, $headers);
@@ -26,7 +26,7 @@ $legacyRows = $legacyRes['ok'] ? json_decode((string) $legacyRes['body'], true) 
 $legacyCerts = is_array($legacyRows) ? $legacyRows : [];
 
 $sessionUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificates'
-    . '?select=id,certificate_code,issued_at,session_id,event_sessions(title,topic,start_at,event_id,events(title))'
+    . '?select=id,certificate_code,issued_at,session_id,event_id,event_title,session_title,event_sessions(title,topic,start_at,event_id,events(title))'
     . '&student_id=eq.' . rawurlencode((string) ($user['id'] ?? ''))
     . '&order=issued_at.desc';
 $sessionRes = supabase_request('GET', $sessionUrl, $headers);
@@ -39,11 +39,13 @@ foreach ($legacyCerts as $row) {
         continue;
     }
     $event = isset($row['events']) && is_array($row['events']) ? $row['events'] : [];
+    $snapTitle = trim((string) ($row['event_title'] ?? ''));
+    $liveTitle = trim((string) ($event['title'] ?? ''));
     $certs[] = [
         'certificate_code' => (string) ($row['certificate_code'] ?? ''),
         'issued_at' => (string) ($row['issued_at'] ?? ''),
-        'event_title' => (string) ($event['title'] ?? 'Event'),
-        'session_title' => '',
+        'event_title' => $liveTitle !== '' ? $liveTitle : ($snapTitle !== '' ? $snapTitle : 'Event'),
+        'session_title' => trim((string) ($row['session_title'] ?? '')),
         'is_session' => false,
     ];
 }
@@ -54,11 +56,15 @@ foreach ($sessionCerts as $row) {
     }
     $session = isset($row['event_sessions']) && is_array($row['event_sessions']) ? $row['event_sessions'] : [];
     $event = isset($session['events']) && is_array($session['events']) ? $session['events'] : [];
+    $snapEvent = trim((string) ($row['event_title'] ?? ''));
+    $liveEvent = trim((string) ($event['title'] ?? ''));
+    $liveSession = build_session_display_name($session);
+    $snapSession = trim((string) ($row['session_title'] ?? ''));
     $certs[] = [
         'certificate_code' => (string) ($row['certificate_code'] ?? ''),
         'issued_at' => (string) ($row['issued_at'] ?? ''),
-        'event_title' => (string) ($event['title'] ?? 'Event'),
-        'session_title' => build_session_display_name($session),
+        'event_title' => $liveEvent !== '' ? $liveEvent : ($snapEvent !== '' ? $snapEvent : 'Event'),
+        'session_title' => $liveSession !== '' && $liveSession !== 'Seminar' ? $liveSession : ($snapSession !== '' ? $snapSession : $liveSession),
         'is_session' => true,
     ];
 }

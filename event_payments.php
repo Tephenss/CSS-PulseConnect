@@ -47,7 +47,7 @@ if ($role === 'teacher' && !$isCreator) {
 }
 
 if (event_is_free_registration_event($event)) {
-    header('Location: /event_view.php?id=' . rawurlencode($eventId));
+    header('Location: /event_view?id=' . rawurlencode($eventId));
     exit;
 }
 

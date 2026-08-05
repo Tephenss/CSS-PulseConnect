@@ -53,7 +53,7 @@ $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = count($sessions) > 0;
 $isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
 if ($isFinishedEvent && $tab === 'questions') {
-    header('Location: /evaluation_admin.php?event_id=' . rawurlencode($eventId) . '&tab=feedback');
+    header('Location: /evaluation_admin?event_id=' . rawurlencode($eventId) . '&tab=feedback');
     exit;
 }
 

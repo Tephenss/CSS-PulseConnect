@@ -201,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $teacherId = trim((string) ($_POST['add_teacher_id'] ?? ''));
         if ($teacherId === '') {
             $_SESSION['flash_error'] = 'Please select a teacher to add.';
-            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
             exit;
         }
 
@@ -214,7 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$exists) {
             $_SESSION['flash_error'] = 'Selected teacher is invalid.';
-            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
             exit;
         }
 
@@ -229,7 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!is_string($payload)) {
             $_SESSION['flash_error'] = 'Failed to prepare teacher assignment payload.';
-            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
             exit;
         }
 
@@ -238,7 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $res = supabase_request('POST', $url, $writeHeaders, $payload);
         if (!$res['ok']) {
             $_SESSION['flash_error'] = build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to add teacher assignment');
-            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
             exit;
         }
 
@@ -251,13 +251,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         );
         if ($syncError !== null) {
             $_SESSION['flash_error'] = $syncError;
-            header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+            header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
             exit;
         }
 
         send_teacher_event_assignment_notification([$teacherId], $eventId, (string) ($event['title'] ?? 'Event'));
         $_SESSION['flash_success'] = 'Teacher added to event assignment list.';
-        header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+        header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
         exit;
     }
 
@@ -334,7 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['flash_error'] = implode(' ', array_values(array_unique($errors)));
     }
 
-    header('Location: /event_teachers.php?event_id=' . rawurlencode($eventId));
+    header('Location: /event_teachers?event_id=' . rawurlencode($eventId));
     exit;
 }
 
@@ -346,7 +346,7 @@ $csrfToken = csrf_ensure_token();
 $status = strtolower((string) ($event['status'] ?? 'draft'));
 $isFinishedEvent = $status === 'finished';
 if ($isFinishedEvent) {
-    header('Location: /event_view.php?id=' . rawurlencode($eventId));
+    header('Location: /event_view?id=' . rawurlencode($eventId));
     exit;
 }
 $statusColor = match ($status) {

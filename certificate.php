@@ -26,7 +26,7 @@ $headers = [
 
 // Check session-scoped certificates first, then fall back to the legacy event-level table.
 $sessionCertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificates'
-    . '?select=session_id,student_id,template_id,session_template_id,certificate_code,issued_at,event_sessions(title,topic,event_id,events(title))'
+    . '?select=session_id,student_id,template_id,session_template_id,certificate_code,issued_at,event_id,event_title,session_title,event_sessions(title,topic,event_id,events(title))'
     . '&certificate_code=eq.' . rawurlencode($code)
     . '&limit=1';
 $sessionCertRes = supabase_request('GET', $sessionCertUrl, $headers);
@@ -50,14 +50,20 @@ if ($isSessionCertificate) {
 
     $session = isset($cert['event_sessions']) && is_array($cert['event_sessions']) ? $cert['event_sessions'] : [];
     $sessionId = (string) ($cert['session_id'] ?? '');
-    $eventId = (string) ($session['event_id'] ?? '');
-    $eventTitle = isset($session['events']) && is_array($session['events'])
-        ? (string) ($session['events']['title'] ?? '')
+    $eventId = (string) (($session['event_id'] ?? '') ?: ($cert['event_id'] ?? ''));
+    $liveEventTitle = isset($session['events']) && is_array($session['events'])
+        ? trim((string) ($session['events']['title'] ?? ''))
         : '';
-    $sessionTitle = build_session_display_name($session);
+    $snapEventTitle = trim((string) ($cert['event_title'] ?? ''));
+    $eventTitle = $liveEventTitle !== '' ? $liveEventTitle : $snapEventTitle;
+    $liveSessionTitle = build_session_display_name($session);
+    $snapSessionTitle = trim((string) ($cert['session_title'] ?? ''));
+    $sessionTitle = ($liveSessionTitle !== '' && $liveSessionTitle !== 'Seminar')
+        ? $liveSessionTitle
+        : ($snapSessionTitle !== '' ? $snapSessionTitle : $liveSessionTitle);
 } else {
     $cUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
-        . '?select=event_id,student_id,template_id,certificate_code,issued_at,events(title)&certificate_code=eq.' . rawurlencode($code)
+        . '?select=event_id,student_id,template_id,certificate_code,issued_at,event_title,session_title,events(title)&certificate_code=eq.' . rawurlencode($code)
         . '&limit=1';
     $cRes = supabase_request('GET', $cUrl, $headers);
     $cRows = $cRes['ok'] ? json_decode((string) $cRes['body'], true) : null;
@@ -74,9 +80,13 @@ if ($isSessionCertificate) {
     }
 
     $eventId = (string) ($cert['event_id'] ?? '');
+    $liveEventTitle = '';
     if (isset($cert['events']) && is_array($cert['events'])) {
-        $eventTitle = (string) ($cert['events']['title'] ?? '');
+        $liveEventTitle = trim((string) ($cert['events']['title'] ?? ''));
     }
+    $snapEventTitle = trim((string) ($cert['event_title'] ?? ''));
+    $eventTitle = $liveEventTitle !== '' ? $liveEventTitle : $snapEventTitle;
+    $sessionTitle = trim((string) ($cert['session_title'] ?? ''));
 }
 
 // Student name
@@ -218,10 +228,22 @@ $body = str_replace(
           .replace(/{{issued_at}}/g, CERT_DATA.issued_at || '');
       };
 
+      const isCertificateCodeObject = (obj) => {
+        const id = String(obj?.id || '').trim().toLowerCase();
+        const name = String(obj?.name || '').trim().toLowerCase();
+        return id === 'certificate_code' || name === 'certificate code';
+      };
+
       canvas.loadFromJSON(rawState, () => {
         canvas.getObjects().forEach(obj => {
           if (obj.type === 'text' || obj.type === 'i-text' || obj.type === 'textbox') {
-            obj.text = replaceTokens(obj.text);
+            // Always replace Certificate Code field with the assigned pool code
+            // (template may store a sample registrar code for preview).
+            if (isCertificateCodeObject(obj)) {
+              obj.text = CERT_DATA.certificate_code || '';
+            } else {
+              obj.text = replaceTokens(obj.text);
+            }
           }
         });
         canvas.renderAll();

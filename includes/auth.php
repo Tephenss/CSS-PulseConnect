@@ -84,18 +84,33 @@ function auth_enforce_daily_web_verification(array $user): void
         $headers
     );
 
-    $verifiedAt = null;
-    if ($dailyRes['ok']) {
-        $rows = json_decode((string) ($dailyRes['body'] ?? ''), true);
-        if (is_array($rows) && isset($rows[0]['verified_at'])) {
-            $verifiedAt = (string) $rows[0]['verified_at'];
-        }
+    // Transient Supabase/network failures must NOT wipe the session mid-navigation
+    // (tab clicks / browser Back were force-logging users out with redirect storms).
+    if (!($dailyRes['ok'] ?? false)) {
+        error_log('auth_enforce_daily_web_verification: daily verification lookup failed; keeping session');
+        return;
     }
 
-    $trusted = device_trust_is_trusted($userId, $trustKey);
+    $verifiedAt = null;
+    $rows = json_decode((string) ($dailyRes['body'] ?? ''), true);
+    if (is_array($rows) && isset($rows[0]['verified_at'])) {
+        $verifiedAt = (string) $rows[0]['verified_at'];
+    }
+
+    // Older Hostinger deploys may still have device_trust_is_trusted only.
+    if (function_exists('device_trust_status')) {
+        $trustStatus = device_trust_status($userId, $trustKey);
+        if ($trustStatus === null) {
+            error_log('auth_enforce_daily_web_verification: trusted_devices lookup failed; keeping session');
+            return;
+        }
+    } else {
+        $trustStatus = device_trust_is_trusted($userId, $trustKey);
+    }
+
     $verifiedToday = auth_verified_on_current_ph_day($verifiedAt);
 
-    if ($verifiedToday && $trusted) {
+    if ($verifiedToday && $trustStatus === true) {
         $_SESSION['web_daily_ok_user'] = $userId;
         $_SESSION['web_daily_ok_trust'] = $trustKey;
         $_SESSION['web_daily_ok_ph_day'] = $phDay;

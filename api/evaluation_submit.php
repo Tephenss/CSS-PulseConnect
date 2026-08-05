@@ -12,6 +12,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/certificate_auto_issue.php';
+require_once __DIR__ . '/../includes/evaluation_notifications.php';
 
 $user = require_role(['student']);
 $data = require_post_json();
@@ -291,13 +292,24 @@ try {
 
     if ($usesSessions) {
         $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
-        $eventEligible = count($attendedSessionIds) > 0;
+        // Multi-seminar (2+): evaluation unlocks only after FINAL seminar time-out.
+        $final = evaluation_final_seminar_for_event($eventId);
+        if ($final !== null) {
+            $finalId = trim((string) ($final['id'] ?? ''));
+            $eventEligible = $finalId !== '' && in_array($finalId, $attendedSessionIds, true);
+        } else {
+            $eventEligible = count($attendedSessionIds) > 0;
+        }
     } else {
         $eventEligible = evaluation_has_simple_attendance($eventId, $studentId, $headers);
     }
 
     if (!$eventEligible) {
-        json_response(['ok' => false, 'error' => 'Only attendees who timed out can submit evaluation for this event.'], 403);
+        $finalGate = $usesSessions ? evaluation_final_seminar_for_event($eventId) : null;
+        $msg = $finalGate !== null
+            ? 'Evaluation opens only after you time out of the final seminar.'
+            : 'Only attendees who timed out can submit evaluation for this event.';
+        json_response(['ok' => false, 'error' => $msg], 403);
     }
 
     $eventPayloads = [];

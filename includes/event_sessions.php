@@ -38,6 +38,7 @@ function event_sessions_supported_columns(array $headers): array
         'end_at',
         'scan_window_minutes',
         'sort_order',
+        'session_no',
         'topic',
         'description',
         'location',
@@ -84,6 +85,18 @@ function event_uses_sessions(array $event): bool
 {
     if (isset($event['sessions']) && is_array($event['sessions']) && count($event['sessions']) > 0) {
         return true;
+    }
+
+    $sessionCount = (int) ($event['session_count'] ?? 0);
+    if ($sessionCount > 0) {
+        return true;
+    }
+
+    if (array_key_exists('uses_sessions', $event)) {
+        $raw = $event['uses_sessions'];
+        if ($raw === true || $raw === 1 || $raw === '1' || strtolower(trim((string) $raw)) === 'true') {
+            return true;
+        }
     }
 
     $structure = strtolower(trim((string) ($event['event_structure'] ?? '')));
@@ -228,7 +241,6 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
     $hasScanWindow = in_array('scan_window_minutes', $supportedColumns, true);
     $hasAttendanceWindow = in_array('attendance_window_minutes', $supportedColumns, true);
     $hasSortOrder = in_array('sort_order', $supportedColumns, true);
-    $hasSessionNo = in_array('session_no', $supportedColumns, true);
     $hasTopic = in_array('topic', $supportedColumns, true);
     $hasDescription = in_array('description', $supportedColumns, true);
     $hasLocation = in_array('location', $supportedColumns, true);
@@ -259,9 +271,10 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
         if ($hasSortOrder) {
             $row['sort_order'] = $session['sort_order'];
         }
-        if ($hasSessionNo) {
-            $row['session_no'] = $index + 1;
-        }
+        // DB requires session_no (NOT NULL on live schema).
+        $row['session_no'] = isset($session['session_no'])
+            ? max(1, (int) $session['session_no'])
+            : ($index + 1);
         if ($hasTopic) {
             $row['topic'] = $session['topic'];
         }
@@ -348,7 +361,7 @@ function normalize_event_session_rows(array $rows, string $fallbackEventId = '')
 function build_event_sessions_select_columns(array $supportedColumns): array
 {
     $selectColumns = ['id', 'event_id', 'title', 'start_at'];
-    foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'sort_order'] as $column) {
+    foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'sort_order', 'session_no'] as $column) {
         if (in_array($column, $supportedColumns, true)) {
             $selectColumns[] = $column;
         }

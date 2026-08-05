@@ -217,8 +217,14 @@ $isPresent = static function (array $row): bool {
     return trim((string) ($row['check_in_at'] ?? '')) !== '';
 };
 
-$usesSessions = event_uses_sessions($event);
-$sessions = $usesSessions ? fetch_event_sessions($eventId, $headers) : [];
+// Always load sessions first — do not trust event_mode alone (web may have seminars
+// while events.event_mode is still "simple").
+$sessions = fetch_event_sessions($eventId, $headers);
+$usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+if ($usesSessions && empty($sessions)) {
+    // Mode says seminar but rows missing — stay seminar-aware with empty list.
+    $sessions = [];
+}
 
 // Enrich sessions with early_out_enabled_at when column exists.
 if ($usesSessions && !empty($sessions)) {
@@ -365,43 +371,92 @@ if ($usesSessions) {
             // Checked in but out window not open.
             $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
             $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $now);
-            $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), (string) ($outWin['message'] ?? 'Time-out is not open yet.'), 409, [
+            $endLabel = attendance_format_manila_time($endAt);
+            $msg = 'Already timed in for ' . $sessionName . '.';
+            if (($outWin['status'] ?? '') === 'too_early_checkout') {
+                $msg .= $endLabel !== ''
+                    ? (' Time-out opens at the seminar end (' . $endLabel . ').')
+                    : ' Time-out is not open yet.';
+            } else {
+                $msg .= ' ' . (string) ($outWin['message'] ?? 'Time-out is not open yet.');
+            }
+            $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), $msg, 409, [
                 'session_id' => $sessionId,
                 'action' => 'check_out',
+                'already_timed_in' => true,
             ]);
         }
     }
 
     if ($inStatus !== 'open' || $sessionId === '') {
-        // Maybe they need out on another session but window not open.
-        foreach ($bySession as $sid => $existing) {
-            if (!$isPresent($existing) || trim((string) ($existing['check_out_at'] ?? '')) !== '') {
-                continue;
-            }
-            $sess = null;
-            foreach ($sessions as $s) {
-                if (is_array($s) && (string) ($s['id'] ?? '') === $sid) {
-                    $sess = $s;
+        // Prefer check-in waiting/closed messaging when that is the active problem.
+        // Only fall through to "too early to time out" when they already timed in
+        // and there is no upcoming seminar time-in to wait for.
+        $preferCheckInMsg = in_array($inStatus, ['waiting', 'closed', 'conflict', 'missing_schedule'], true);
+
+        if (!$preferCheckInMsg || $inStatus === 'closed') {
+            // Pending out on a session whose out window is not open yet.
+            foreach ($bySession as $sid => $existing) {
+                if (!$isPresent($existing) || trim((string) ($existing['check_out_at'] ?? '')) !== '') {
+                    continue;
+                }
+                $sess = null;
+                foreach ($sessions as $s) {
+                    if (is_array($s) && (string) ($s['id'] ?? '') === $sid) {
+                        $sess = $s;
+                        break;
+                    }
+                }
+                if (!is_array($sess)) {
+                    continue;
+                }
+                // If another seminar is waiting for time-in, do not block with out-too-early.
+                if ($inStatus === 'waiting') {
                     break;
                 }
+                $endAt = parse_iso_datetime((string) ($sess['end_at'] ?? ''));
+                $outWin = attendance_check_out_window($endAt, $sess['early_out_enabled_at'] ?? null, $now);
+                $sessName = trim((string) (build_session_display_name($sess) ?: ($sess['title'] ?? 'Seminar')));
+                if ($sessName === '') {
+                    $sessName = 'Seminar';
+                }
+                $endLabel = attendance_format_manila_time($endAt);
+                $msg = 'Already timed in for ' . $sessName . '.';
+                if (($outWin['status'] ?? '') === 'too_early_checkout' && $endLabel !== '') {
+                    $msg .= ' Time-out opens at the seminar end (' . $endLabel . ').';
+                } else {
+                    $msg .= ' ' . (string) ($outWin['message'] ?? 'Time-out is not open yet.');
+                }
+                $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), $msg, 409, [
+                    'session_id' => $sid,
+                    'action' => 'check_out',
+                    'already_timed_in' => true,
+                ]);
             }
-            if (!is_array($sess)) {
-                continue;
-            }
-            $endAt = parse_iso_datetime((string) ($sess['end_at'] ?? ''));
-            $outWin = attendance_check_out_window($endAt, $sess['early_out_enabled_at'] ?? null, $now);
-            $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), (string) ($outWin['message'] ?? 'Time-out is not open yet.'), 409, [
-                'session_id' => $sid,
-                'action' => 'check_out',
-            ]);
         }
 
         $msg = match ($inStatus) {
-            'waiting' => 'Time-in has not opened yet for this event.',
+            'waiting' => (string) ($inResolve['message'] ?? 'Time-in has not opened yet for this seminar.'),
             'conflict' => 'Schedule conflict detected. Contact admin.',
-            'missing_schedule' => 'No valid schedule found.',
-            default => 'Time-in window is closed for this event.',
+            'missing_schedule' => 'No valid seminar schedule found.',
+            default => (string) ($inResolve['message'] ?? 'Time-in window is closed for this seminar.'),
         };
+        // Prefer seminar-specific waiting/closed copy over generic event wording.
+        if ($inStatus === 'waiting' && is_array($inResolve['session'] ?? null)) {
+            $waitName = trim((string) (build_session_display_name($inResolve['session']) ?: ($inResolve['session']['title'] ?? 'Seminar')));
+            $waitStart = parse_iso_datetime((string) ($inResolve['session']['start_at'] ?? ''));
+            $startLabel = attendance_format_manila_time($waitStart);
+            if ($waitName !== '' && $startLabel !== '') {
+                $msg = 'Too early to time in for ' . $waitName . '. Opens at ' . $startLabel . '.';
+            } elseif ($waitName !== '') {
+                $msg = 'Too early to time in for ' . $waitName . '. Wait for the seminar start.';
+            }
+        } elseif ($inStatus === 'closed' && is_array($inResolve['session'] ?? null)) {
+            $closedName = trim((string) (build_session_display_name($inResolve['session']) ?: ($inResolve['session']['title'] ?? 'Seminar')));
+            if ($closedName !== '') {
+                $msg = 'Time-in window is closed for ' . $closedName . '.';
+            }
+        }
         $waitingSession = is_array($inResolve['session'] ?? null) ? $inResolve['session'] : null;
         $waitingWindow = is_array($inResolve['window'] ?? null) ? $inResolve['window'] : null;
         $respond(false, $inStatus !== '' ? $inStatus : 'closed', $msg, 409, [

@@ -313,6 +313,7 @@ switch ($action) {
 
         require_once __DIR__ . '/../includes/event_sessions.php';
         require_once __DIR__ . '/../includes/certificate_auto_issue.php';
+        require_once __DIR__ . '/../includes/evaluation_notifications.php';
 
         $normalized = [];
         $checkedEventIds = [];
@@ -347,10 +348,18 @@ switch ($action) {
                     $usesSessions = event_uses_sessions(array_merge($eventRow, ['sessions' => $sessions]));
                     if ($usesSessions) {
                         $checkedOut = certificate_auto_checked_out_session_ids($sessions, $userId, $readHeaders);
-                        if ($checkedOut === []) {
+                        $final = evaluation_final_seminar_for_event($eid);
+                        $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
+                        // 2+ seminars: wait for final seminar out (not Seminar 1 alone).
+                        $ok = $finalId !== ''
+                            ? in_array($finalId, $checkedOut, true)
+                            : ($checkedOut !== []);
+                        if (!$ok) {
                             json_response([
                                 'ok' => false,
-                                'error' => 'Time-out required before submitting evaluation.',
+                                'error' => $finalId !== ''
+                                    ? 'Evaluation opens only after you time out of the final seminar.'
+                                    : 'Time-out required before submitting evaluation.',
                                 'status' => 'checkout_required',
                             ], 403);
                         }
@@ -377,6 +386,7 @@ switch ($action) {
                     if (!is_array($sess)) {
                         json_response(['ok' => false, 'error' => 'Seminar not found.'], 404);
                     }
+                    $eventIdForSession = trim((string) ($sess['event_id'] ?? ''));
                     $checkedOut = certificate_auto_checked_out_session_ids(
                         [['id' => $sessionId]],
                         $userId,
@@ -388,6 +398,25 @@ switch ($action) {
                             'error' => 'Time-out required before submitting seminar evaluation.',
                             'status' => 'checkout_required',
                         ], 403);
+                    }
+                    // Multi-seminar: all seminar sections wait for the final out.
+                    if ($eventIdForSession !== '') {
+                        $final = evaluation_final_seminar_for_event($eventIdForSession);
+                        $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
+                        if ($finalId !== '') {
+                            $allOut = certificate_auto_checked_out_session_ids(
+                                fetch_event_sessions($eventIdForSession, $readHeaders),
+                                $userId,
+                                $readHeaders
+                            );
+                            if (!in_array($finalId, $allOut, true)) {
+                                json_response([
+                                    'ok' => false,
+                                    'error' => 'Evaluation opens only after you time out of the final seminar.',
+                                    'status' => 'checkout_required',
+                                ], 403);
+                            }
+                        }
                     }
                     $checkedSessionIds[$sessionId] = true;
                 }
@@ -417,10 +446,32 @@ switch ($action) {
         }
         require_once __DIR__ . '/../includes/certificate_auto_issue.php';
         $cert = certificate_auto_issue_for_student($eventId, $userId, $readHeaders);
+        // Always HTTP 200 when the action ran — skipped/issued=0 is not a transport failure.
+        // (Eval submit must not look like a hard error because cert claim was soft-skipped.)
         json_response([
-            'ok' => (bool) ($cert['ok'] ?? false),
+            'ok' => true,
             'certificate' => $cert,
-        ], ($cert['ok'] ?? false) ? 200 : 500);
+        ], 200);
+        break;
+    }
+
+    case 'certificate_auto_issue_pending': {
+        // Student self-heal: retry FIFO issue for one or all registered events.
+        if ($role !== 'student') {
+            json_response(['ok' => false, 'error' => 'Only students can claim pending certificates here.'], 403);
+        }
+        require_once __DIR__ . '/../includes/certificate_auto_issue.php';
+        $eventId = trim((string) ($data['event_id'] ?? ''));
+        $pending = certificate_auto_issue_pending_for_student(
+            $userId,
+            $eventId !== '' ? $eventId : null,
+            $readHeaders
+        );
+        json_response([
+            'ok' => (bool) ($pending['ok'] ?? false),
+            'issued_total' => (int) ($pending['issued_total'] ?? 0),
+            'events' => $pending['events'] ?? [],
+        ], ($pending['ok'] ?? false) ? 200 : 500);
         break;
     }
 
@@ -671,9 +722,10 @@ switch ($action) {
         $payload['event_structure'] = $isSeminarBased
             ? (count($sessions) > 1 ? 'two_seminars' : 'one_seminar')
             : 'simple';
-        $payload['uses_sessions'] = $isSeminarBased;
+        // Never INSERT uses_sessions — column absent on prod (42703 Postgres ERROR storm).
+        unset($payload['uses_sessions']);
 
-        $optionalColumns = ['event_mode', 'event_structure', 'uses_sessions', 'event_span'];
+        $optionalColumns = ['event_mode', 'event_structure', 'event_span'];
         $working = $payload;
         $created = null;
         for ($attempt = 0; $attempt < 8; $attempt++) {

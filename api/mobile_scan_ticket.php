@@ -488,11 +488,6 @@ $already = static function (string $message, ?string $checkInAt = null) use ($ti
 };
 
 if ($source === 'session') {
-    if (!$timeInOpen) {
-        $statusMessage = mobile_scan_window_message($scanStatus, $scanContext);
-        json_response(['ok' => false, 'error' => $statusMessage, 'status' => $scanStatus !== '' ? $scanStatus : 'error'], 409);
-    }
-
     if ($sessionId === '') {
         json_response(['ok' => false, 'error' => 'Active seminar context is missing.', 'status' => 'error'], 500);
     }
@@ -515,7 +510,115 @@ if ($source === 'session') {
     $attRows = json_decode((string) ($attRes['body'] ?? ''), true);
     $existing = is_array($attRows) && isset($attRows[0]) ? $attRows[0] : null;
 
-    if (is_array($existing) && !empty($existing['id']) && mobile_scan_is_present($existing)) {
+    $sessionOutWin = null;
+    $sessionOutOpen = false;
+    if (function_exists('attendance_check_out_window')) {
+        $sessionEndAt = function_exists('parse_iso_datetime')
+            ? parse_iso_datetime((string) ($sessionContext['end_at'] ?? ''))
+            : mobile_scan_parse_iso((string) ($sessionContext['end_at'] ?? ''));
+        $sessionEarlyOut = isset($sessionContext['early_out_enabled_at'])
+            ? (string) $sessionContext['early_out_enabled_at']
+            : null;
+        try {
+            $sessionOutWin = attendance_check_out_window($sessionEndAt, $sessionEarlyOut, $scanAt);
+            $sessionOutOpen = ($sessionOutWin['open'] ?? false) === true;
+        } catch (Throwable $e) {
+            error_log('session attendance_check_out_window: ' . $e->getMessage());
+        }
+    }
+
+    $alreadySessionOut = is_array($existing) && trim((string) ($existing['check_out_at'] ?? '')) !== '';
+    $alreadySessionIn = is_array($existing) && !empty($existing['id']) && mobile_scan_is_present($existing);
+
+    // Seminar time-out (Early Out or scheduled end + 1 hour).
+    if ($scanMode === 'check_out' || ($alreadySessionIn && $sessionOutOpen && !$timeInOpen)) {
+        if ($alreadySessionOut) {
+            json_response([
+                'ok' => false,
+                'error' => 'Already timed out for ' . $sessionName . '.',
+                'status' => 'already_checked_out',
+                'ticket_id' => $ticketId,
+                'participant_name' => $participant['participant_name'],
+                'participant_photo_url' => $participant['participant_photo_url'],
+                'participant_student_id' => $participant['participant_student_id'],
+                'check_in_at' => (string) ($existing['check_in_at'] ?? ''),
+                'check_out_at' => (string) ($existing['check_out_at'] ?? ''),
+                'action' => 'check_out',
+                'session_id' => $sessionId,
+            ], 409);
+        }
+        if (!$alreadySessionIn) {
+            json_response([
+                'ok' => false,
+                'error' => 'Cannot time out — no time-in recorded for ' . $sessionName . '.',
+                'status' => 'invalid',
+                'action' => 'check_out',
+                'session_id' => $sessionId,
+            ], 409);
+        }
+        if (!$sessionOutOpen) {
+            $statusMessage = is_array($sessionOutWin)
+                ? trim((string) ($sessionOutWin['message'] ?? ''))
+                : '';
+            if ($statusMessage === '') {
+                $statusMessage = mobile_scan_window_message($scanStatus, $scanContext);
+            }
+            json_response([
+                'ok' => false,
+                'error' => $statusMessage,
+                'status' => is_array($sessionOutWin)
+                    ? (string) ($sessionOutWin['status'] ?? 'too_early_checkout')
+                    : ($scanStatus !== '' ? $scanStatus : 'closed'),
+                'action' => 'check_out',
+                'session_id' => $sessionId,
+            ], 409);
+        }
+        if ($dryRun) {
+            json_response($success('ready_for_confirmation', 'Review participant, then confirm time-out for ' . $sessionName . '.'));
+        }
+        $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?id=eq.' . rawurlencode((string) $existing['id']);
+        $writeOutcome = mobile_scan_attendance_write(
+            $eventId,
+            $ticketId,
+            'PATCH',
+            $patchUrl,
+            $reprHeaders,
+            [
+                'check_out_at' => $scanAtIso,
+                'last_scanned_by' => $userId,
+                'last_scanned_at' => $scanAtIso,
+                'updated_at' => $nowIso,
+            ],
+        );
+        if (($writeOutcome['ok'] ?? false) !== true) {
+            $fail = mobile_attendance_require_write($writeOutcome, 'Time-out failed. Please try again.');
+            json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
+        }
+        if (empty($writeOutcome['queued'])) {
+            notify_student_evaluation_open_after_timeout(
+                (string) ($participant['participant_student_id'] ?? ''),
+                $eventId,
+                (string) ($event['title'] ?? ''),
+                $sessionId
+            );
+        }
+        $payload = $success(
+            'checked_out',
+            'Timed out for ' . $sessionName . '.' . mobile_attendance_queued_suffix($writeOutcome),
+            (string) ($existing['check_in_at'] ?? ''),
+            $scanAtIso,
+        );
+        $payload['action'] = 'check_out';
+        $payload['session_id'] = $sessionId;
+        json_response($payload);
+    }
+
+    if (!$timeInOpen) {
+        $statusMessage = mobile_scan_window_message($scanStatus, $scanContext);
+        json_response(['ok' => false, 'error' => $statusMessage, 'status' => $scanStatus !== '' ? $scanStatus : 'error'], 409);
+    }
+
+    if ($alreadySessionIn) {
         $earlier = mobile_scan_earlier_iso($scanAtIso, (string) ($existing['check_in_at'] ?? ''));
         $recorded = (string) ($existing['check_in_at'] ?? '');
         if (!$dryRun && $earlier !== '' && $recorded !== '' && $earlier !== $recorded) {

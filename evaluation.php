@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/evaluation_notifications.php';
 
 $user = require_role(['student']);
 $studentId = (string) ($user['id'] ?? '');
@@ -29,6 +30,11 @@ function evaluation_page_attendance_counts_as_present(array $row): bool
     }
 
     return in_array($status, ['present', 'scanned', 'late', 'early'], true);
+}
+
+function evaluation_page_attendance_counts_as_checked_out(array $row): bool
+{
+    return trim((string) ($row['check_out_at'] ?? '')) !== '';
 }
 
 function evaluation_page_fetch_event_questions(string $eventId, array $headers): array
@@ -120,7 +126,7 @@ function evaluation_page_fetch_session_answers(array $sessionIds, string $studen
 function evaluation_page_has_simple_attendance(string $eventId, string $studentId, array $headers): bool
 {
     $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-        . '?select=status,check_in_at,tickets(registration_id,event_registrations(student_id,event_id))'
+        . '?select=status,check_in_at,check_out_at,tickets(registration_id,event_registrations(student_id,event_id))'
         . '&tickets.event_registrations.event_id=eq.' . rawurlencode($eventId);
     $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
     $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
@@ -131,6 +137,9 @@ function evaluation_page_has_simple_attendance(string $eventId, string $studentI
 
     foreach ($attendanceRows as $row) {
         if (!is_array($row) || !evaluation_page_attendance_counts_as_present($row)) {
+            continue;
+        }
+        if (!evaluation_page_attendance_counts_as_checked_out($row)) {
             continue;
         }
 
@@ -161,7 +170,7 @@ function evaluation_page_attended_session_ids(array $sessions, string $studentId
     }
 
     $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-        . '?select=session_id,status,check_in_at,registration:event_registrations(student_id)'
+        . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
         . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')';
     $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
     $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
@@ -173,6 +182,9 @@ function evaluation_page_attended_session_ids(array $sessions, string $studentId
     $attended = [];
     foreach ($attendanceRows as $row) {
         if (!is_array($row) || !evaluation_page_attendance_counts_as_present($row)) {
+            continue;
+        }
+        if (!evaluation_page_attendance_counts_as_checked_out($row)) {
             continue;
         }
 
@@ -215,7 +227,7 @@ if (count($eventIds) === 0) {
 
 $eventFilter = implode(',', array_map(static fn (string $id): string => '"' . $id . '"', $eventIds));
 $eventsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?select=id,title,start_at,end_at,event_mode,event_structure,uses_sessions&order=created_at.desc&id=in.(' . $eventFilter . ')';
+    . '?select=id,title,start_at,end_at,event_mode,event_structure&order=created_at.desc&id=in.(' . $eventFilter . ')';
 $eventsRes = supabase_request('GET', $eventsUrl, $headers);
 $eventsRows = $eventsRes['ok'] ? json_decode((string) $eventsRes['body'], true) : null;
 $events = is_array($eventsRows) ? $eventsRows : [];
@@ -254,7 +266,14 @@ if ($usesSessions) {
         $sidebarHint = 'Seminar-based events will show one event feedback section plus the seminars you actually attended.';
     } else {
         $attendedSessionIds = evaluation_page_attended_session_ids($sessions, $studentId, $headers);
-        $hasAttendance = count($attendedSessionIds) > 0;
+        // Multi-seminar: form unlocks only after final seminar time-out.
+        $final = evaluation_final_seminar_for_event($activeEventId);
+        $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
+        if ($finalId !== '') {
+            $hasAttendance = in_array($finalId, $attendedSessionIds, true);
+        } else {
+            $hasAttendance = count($attendedSessionIds) > 0;
+        }
 
         if ($hasAttendance) {
             $eventQuestions = evaluation_page_fetch_event_questions($activeEventId, $headers);
@@ -325,8 +344,12 @@ if ($usesSessions) {
             $sidebarHint = 'Answer the whole-event feedback plus the seminar sections you actually attended.';
             $emptyMessage = 'No evaluation questions are available for your attended seminar sections yet.';
         } else {
-            $sidebarHint = 'You only receive evaluation forms for seminars where your attendance was recorded.';
-            $emptyMessage = 'Only attended seminars can be evaluated for this event.';
+            $sidebarHint = $finalId !== ''
+                ? 'Evaluation opens only after you time out of the final seminar.'
+                : 'You only receive evaluation forms for seminars where your time-out was recorded.';
+            $emptyMessage = $finalId !== ''
+                ? 'Time out of the final seminar before answering evaluation.'
+                : 'Only timed-out seminars can be evaluated for this event.';
         }
     }
 } else {

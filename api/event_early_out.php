@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 /**
  * Web Early Out toggle (session + CSRF). Same rules as mobile_event_early_out.php.
+ * Seminar events: one control — auto-targets the active seminar (they do not overlap).
  */
 require_once __DIR__ . '/../includes/session.php';
 session_bootstrap();
@@ -15,6 +16,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/scan_context.php';
+require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/event_attendance_windows.php';
 
 $user = require_role(['teacher', 'admin']);
@@ -53,26 +55,67 @@ if (!$canAccess) {
 
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
-if ($sessionId !== '') {
+$loadSession = static function (string $sid) use ($eventId, $headers): ?array {
     $sessUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
-        . '?select=id,event_id,early_out_enabled_at,start_at,end_at,scan_window_minutes'
-        . '&id=eq.' . rawurlencode($sessionId)
+        . '?select=id,event_id,title,topic,early_out_enabled_at,start_at,end_at,scan_window_minutes'
+        . '&id=eq.' . rawurlencode($sid)
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $sessRes = supabase_request('GET', $sessUrl, $headers);
     $sessRows = $sessRes['ok'] ? json_decode((string) $sessRes['body'], true) : [];
     $session = is_array($sessRows) && isset($sessRows[0]) ? $sessRows[0] : null;
-    if (!is_array($session)) {
-        // Older schemas may lack scan_window_minutes.
-        $sessUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
-            . '?select=id,event_id,early_out_enabled_at,start_at,end_at'
-            . '&id=eq.' . rawurlencode($sessionId)
-            . '&event_id=eq.' . rawurlencode($eventId)
-            . '&limit=1';
-        $sessRes = supabase_request('GET', $sessUrl, $headers);
-        $sessRows = $sessRes['ok'] ? json_decode((string) $sessRes['body'], true) : [];
-        $session = is_array($sessRows) && isset($sessRows[0]) ? $sessRows[0] : null;
+    if (is_array($session)) {
+        return $session;
     }
+    $sessUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+        . '?select=id,event_id,title,topic,early_out_enabled_at,start_at,end_at'
+        . '&id=eq.' . rawurlencode($sid)
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $sessRes = supabase_request('GET', $sessUrl, $headers);
+    $sessRows = $sessRes['ok'] ? json_decode((string) $sessRes['body'], true) : [];
+    return is_array($sessRows) && isset($sessRows[0]) && is_array($sessRows[0]) ? $sessRows[0] : null;
+};
+
+// Auto-pick the active seminar when none was specified (single Early Out control).
+if ($sessionId === '' && function_exists('fetch_event_sessions') && function_exists('attendance_resolve_early_out_target_session')) {
+    $sessions = fetch_event_sessions($eventId, $headers);
+    if (!empty($sessions)) {
+        // Enrich early_out flags for resolver priority (already ON).
+        $eoUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=id,early_out_enabled_at&event_id=eq.' . rawurlencode($eventId);
+        $eoRes = supabase_request('GET', $eoUrl, $headers);
+        $eoMap = [];
+        if (($eoRes['ok'] ?? false) === true) {
+            $eoRows = json_decode((string) ($eoRes['body'] ?? ''), true);
+            if (is_array($eoRows)) {
+                foreach ($eoRows as $row) {
+                    if (is_array($row) && !empty($row['id'])) {
+                        $eoMap[(string) $row['id']] = $row['early_out_enabled_at'] ?? null;
+                    }
+                }
+            }
+        }
+        foreach ($sessions as &$srow) {
+            if (!is_array($srow)) {
+                continue;
+            }
+            $sid = (string) ($srow['id'] ?? '');
+            if ($sid !== '' && array_key_exists($sid, $eoMap)) {
+                $srow['early_out_enabled_at'] = $eoMap[$sid];
+            }
+        }
+        unset($srow);
+
+        $target = attendance_resolve_early_out_target_session($sessions, $now);
+        if (is_array($target) && trim((string) ($target['id'] ?? '')) !== '') {
+            $sessionId = trim((string) $target['id']);
+        }
+    }
+}
+
+if ($sessionId !== '') {
+    $session = $loadSession($sessionId);
     if (!is_array($session)) {
         json_response(['ok' => false, 'error' => 'Seminar not found.'], 404);
     }
@@ -81,6 +124,12 @@ if ($sessionId !== '') {
     $startAt = parse_iso_datetime((string) ($session['start_at'] ?? ''));
     $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
     $graceMinutes = max(0, (int) ($session['scan_window_minutes'] ?? 30));
+    $sessionName = trim((string) (function_exists('build_session_display_name')
+        ? (build_session_display_name($session) ?: ($session['title'] ?? 'Seminar'))
+        : ($session['title'] ?? 'Seminar')));
+    if ($sessionName === '') {
+        $sessionName = 'Seminar';
+    }
 
     if ($action === 'set' || $enabledRaw !== null) {
         $enable = filter_var($enabledRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
@@ -113,6 +162,7 @@ if ($sessionId !== '') {
         'ok' => true,
         'event_id' => $eventId,
         'session_id' => $sessionId,
+        'session_name' => $sessionName,
         'early_out' => attendance_early_out_status($enabledAt, $now, $startAt, $endAt, $graceMinutes),
     ]);
 }
@@ -165,5 +215,6 @@ json_response([
     'ok' => true,
     'event_id' => $eventId,
     'session_id' => null,
+    'session_name' => null,
     'early_out' => attendance_early_out_status($enabledAt, $now, $startAt, $endAt, $graceMinutes),
 ]);
