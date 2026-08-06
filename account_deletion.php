@@ -9,6 +9,7 @@ $updated = 'July 26, 2026';
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Account Deletion — PulseCONNECT</title>
+  <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
   <style>
     body {
       margin: 0;

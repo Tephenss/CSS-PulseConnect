@@ -340,6 +340,7 @@ if ($templateId !== '' && $initialEditingScope !== '') {
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>Certificate Pro Editor — PulseConnect</title>
+    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <link rel="stylesheet" href="/assets/css/tailwind.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/tailwind.css') ?>" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
@@ -957,6 +958,15 @@ function showSaveLayoutModal(onSave, opts = {}) {
 syncSaveButtons();
 
 // --- Toast Notifications ---
+function escapeToastHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function showNotification(message, type = 'success') {
     const container = document.getElementById('notificationContainer');
     const toast = document.createElement('div');
@@ -970,14 +980,16 @@ function showNotification(message, type = 'success') {
         ? '<div class="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'
         : '<div class="flex-shrink-0 w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg></div>';
         
-    toast.innerHTML = `${icon}<span class="text-sm font-bold tracking-tight">${message}</span>`;
+    toast.innerHTML = `${icon}<span class="text-sm font-bold tracking-tight">${escapeToastHtml(message)}</span>`;
     container.appendChild(toast);
-    
+
+    // Errors (e.g. "code already used in …") need reading time.
+    const visibleFor = type === 'success' ? 4000 : 9000;
     setTimeout(() => { toast.classList.remove('translate-y-10', 'opacity-0'); }, 10);
     setTimeout(() => {
         toast.classList.add('translate-y-[-20px]', 'opacity-0');
         setTimeout(() => toast.remove(), 500);
-    }, 4000);
+    }, visibleFor);
 }
 
 // --- Sidebar Tabs ---
@@ -2459,12 +2471,55 @@ function restoreSaveButtons(btn, btnAnother, originalBtnContent, originalAnother
     if (btn) {
         btn.innerHTML = originalBtnContent;
         btn.disabled = false;
+        // Drop the "Saved!" green override, otherwise the button stays emerald.
+        btn.classList.remove('!from-emerald-500', '!to-emerald-400');
     }
     if (btnAnother) {
         btnAnother.innerHTML = originalAnother;
         btnAnother.disabled = false;
     }
     try { syncSaveButtons(); } catch (_) {}
+}
+
+/**
+ * Sidebar cards keep the canvas JSON they were rendered with, and switching cards
+ * re-reads that copy. Refresh it after an in-place save so going away and back
+ * shows the new design without a full page reload.
+ */
+function syncTemplateCardCache(templateId, { canvasState, thumb, title }) {
+    const id = String(templateId || '');
+    if (!id) return;
+    let card = null;
+    try {
+        card = document.querySelector(`.custom-template-card[data-id="${CSS.escape(id)}"]`);
+    } catch (_) {
+        card = null;
+    }
+    if (!card) return;
+
+    if (canvasState) {
+        try {
+            card.dataset.json = typeof canvasState === 'string' ? canvasState : JSON.stringify(canvasState);
+        } catch (_) {}
+    }
+    if (title) {
+        card.dataset.title = title;
+        const titleEl = card.querySelector('.text-xs.font-semibold.text-zinc-300');
+        if (titleEl) titleEl.textContent = title;
+    }
+    if (thumb) {
+        const holder = card.querySelector('.h-32');
+        if (holder) {
+            let img = holder.querySelector('img');
+            if (!img) {
+                holder.innerHTML = '';
+                img = document.createElement('img');
+                img.className = 'w-full h-full object-cover';
+                holder.appendChild(img);
+            }
+            img.src = thumb;
+        }
+    }
 }
 
 async function persistTemplate({ mode, name }) {
@@ -2508,6 +2563,11 @@ async function persistTemplate({ mode, name }) {
                 sessionId: editingTemplate.sessionId || selectedSessionId,
             });
             showNotification('Changes saved!');
+            syncTemplateCardCache(data.template_id || editingTemplate.id, {
+                canvasState: jsonState,
+                thumb: thumb || '',
+                title: name,
+            });
             isCanvasDirty = false;
             if (btn) {
                 btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg> <span id="btnSaveTemplateLabel">Saved!</span>`;
@@ -2523,6 +2583,7 @@ async function persistTemplate({ mode, name }) {
                 event_id: '<?php echo htmlspecialchars($eventId); ?>',
                 session_id: selectedSessionId,
                 template_scope: templateScope,
+                template_id: (mode === 'another') ? '' : (editingTemplate?.id || ''),
                 title: name,
                 canvas_state: jsonState,
                 thumbnail_url: thumb || null,

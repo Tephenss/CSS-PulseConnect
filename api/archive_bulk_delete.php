@@ -123,16 +123,96 @@ if ($scope === 'sections') {
 }
 
 $targetRole = $scope === 'teachers' ? 'teacher' : 'student';
+
+if ($scope === 'students') {
+    // Soft-archived roster rows (primary) + linked archived users.
+    $rosterIds = [];
+    $rosterOffset = 0;
+    while (true) {
+        $fetchRosterUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+            . '?select=id,user_id&archived_at=not.is.null&limit=500&offset=' . $rosterOffset;
+        $fetchRosterRes = supabase_request('GET', $fetchRosterUrl, $authHeaders);
+        if (!$fetchRosterRes['ok']) {
+            $fetchErrorText = (string) ($fetchRosterRes['body'] ?? '');
+            if (str_contains($fetchErrorText, 'archived_at')) {
+                json_response(['ok' => true, 'deleted_count' => 0]);
+            }
+            json_response(['ok' => false, 'error' => build_error_from_response($fetchRosterRes, 'Failed to fetch archived students')], 500);
+        }
+        $chunk = json_decode((string) ($fetchRosterRes['body'] ?? ''), true);
+        $chunk = is_array($chunk) ? $chunk : [];
+        if ($chunk === []) {
+            break;
+        }
+        foreach ($chunk as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = trim((string) ($row['id'] ?? ''));
+            if ($id !== '') {
+                $rosterIds[] = $id;
+            }
+        }
+        if (count($chunk) < 500) {
+            break;
+        }
+        $rosterOffset += 500;
+        if ($rosterOffset >= 5000) {
+            break;
+        }
+    }
+
+    $userIds = [];
+    $fetchUsersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+        . '?select=id&archived_at=not.is.null&role=eq.student';
+    $fetchUsersRes = supabase_request('GET', $fetchUsersUrl, $authHeaders);
+    if ($fetchUsersRes['ok']) {
+        $userRows = json_decode((string) ($fetchUsersRes['body'] ?? ''), true);
+        $userRows = is_array($userRows) ? $userRows : [];
+        foreach ($userRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = trim((string) ($row['id'] ?? ''));
+            if ($id !== '') {
+                $userIds[] = $id;
+            }
+        }
+    }
+
+    $deleted = 0;
+    if ($rosterIds !== []) {
+        $deleteUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+            . '?id=in.(' . encode_in_list($rosterIds) . ')';
+        $deleteRes = supabase_request('DELETE', $deleteUrl, $writeHeaders);
+        if (!$deleteRes['ok']) {
+            json_response(['ok' => false, 'error' => build_error_from_response($deleteRes, 'Failed to delete archived roster')], 500);
+        }
+        $deleted += count($rosterIds);
+    }
+    if ($userIds !== []) {
+        $deleteUsersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+            . '?id=in.(' . encode_in_list($userIds) . ')&role=eq.student';
+        $deleteUsersRes = supabase_request('DELETE', $deleteUsersUrl, $writeHeaders);
+        if (!$deleteUsersRes['ok']) {
+            json_response(['ok' => false, 'error' => build_error_from_response($deleteUsersRes, 'Failed to delete archived users')], 500);
+        }
+        $deleted += count($userIds);
+    }
+
+    json_response(['ok' => true, 'deleted_count' => $deleted]);
+}
+
 $fetchUsersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
-    . '?select=id&status=eq.archived&role=eq.' . rawurlencode($targetRole);
+    . '?select=id&archived_at=not.is.null&role=eq.' . rawurlencode($targetRole);
 $fetchUsersRes = supabase_request('GET', $fetchUsersUrl, $authHeaders);
 if (!$fetchUsersRes['ok']) {
     $fetchErrorText = (string) ($fetchUsersRes['body'] ?? '');
-    $statusColumnMissing = str_contains($fetchErrorText, 'users.status') ||
+    $statusColumnMissing = str_contains($fetchErrorText, 'archived_at') ||
+        str_contains($fetchErrorText, 'users.status') ||
         str_contains($fetchErrorText, 'status does not exist') ||
         str_contains($fetchErrorText, "Could not find the 'status' column");
     if ($statusColumnMissing) {
-        // Current schema has no users.status archive marker; treat as no archived users.
         json_response(['ok' => true, 'deleted_count' => 0]);
     }
     json_response(['ok' => false, 'error' => build_error_from_response($fetchUsersRes, 'Failed to fetch archived users')], 500);

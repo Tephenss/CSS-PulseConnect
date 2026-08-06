@@ -94,7 +94,14 @@ if (is_array($statusRows) && isset($statusRows[0]['account_status'])) {
     $currentStatus = strtolower(trim((string) $statusRows[0]['account_status']));
 }
 if ($currentStatus === 'preverify' || $currentStatus === '') {
-    $userPatch['account_status'] = 'pending';
+    // Roster-claimed students are school-vouched — approve after email OTP.
+    // Legacy self-register (no roster link) stays pending for Manage Application.
+    $rosterUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+        . '?select=id&user_id=eq.' . rawurlencode($userId) . '&limit=1';
+    $rosterRes = supabase_request('GET', $rosterUrl, $headers);
+    $rosterRows = json_decode((string) ($rosterRes['body'] ?? ''), true);
+    $isRosterClaim = is_array($rosterRows) && isset($rosterRows[0]);
+    $userPatch['account_status'] = $isRosterClaim ? 'approved' : 'pending';
 }
 $userUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?id=eq.' . rawurlencode($userId)

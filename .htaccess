@@ -36,6 +36,10 @@ Options -Indexes
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
+  # Serve real CCS favicon.ico when present; otherwise fall back to logo PNG.
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^favicon\.ico$ /assets/favicon-32.png [L]
+
   # Block hidden / internal folders from URL access
   RewriteRule (^|/)\.(git|env|svn|hg|idea|vscode)(/|$) - [F,L]
   RewriteRule ^(includes|supabase|sessions)(/|$) - [F,L]

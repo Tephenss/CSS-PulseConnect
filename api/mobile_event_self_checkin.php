@@ -165,22 +165,37 @@ $selfCheckinWrite = static function (
 };
 
 $userUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
-    . '?select=id,first_name,middle_name,last_name,suffix,photo_url'
+    . '?select=id,student_id,first_name,middle_name,last_name,suffix,photo_url'
     . '&id=eq.' . rawurlencode($userId) . '&limit=1';
 $userRes = supabase_request('GET', $userUrl, $headers);
 $userRows = json_decode((string) ($userRes['body'] ?? ''), true);
 $userRow = is_array($userRows) && isset($userRows[0]) ? $userRows[0] : null;
 $participantName = '';
 $participantPhoto = '';
+$participantStudentNo = '';
 if (is_array($userRow)) {
-    $parts = array_filter([
-        trim((string) ($userRow['first_name'] ?? '')),
-        trim((string) ($userRow['middle_name'] ?? '')),
-        trim((string) ($userRow['last_name'] ?? '')),
-        trim((string) ($userRow['suffix'] ?? '')),
-    ], static fn($p) => $p !== '');
-    $participantName = implode(' ', $parts);
+    $last = trim((string) ($userRow['last_name'] ?? ''));
+    $first = trim((string) ($userRow['first_name'] ?? ''));
+    $middle = trim((string) ($userRow['middle_name'] ?? ''));
+    $suffix = trim((string) ($userRow['suffix'] ?? ''));
+    $given = trim(implode(' ', array_values(array_filter(
+        [$first, $middle],
+        static fn($p) => $p !== ''
+    ))));
+    if ($last !== '' && $given !== '') {
+        $participantName = $last . ', ' . $given;
+    } elseif ($last !== '') {
+        $participantName = $last;
+    } else {
+        $participantName = $given;
+    }
+    if ($suffix !== '' && $participantName !== '') {
+        $participantName .= ' ' . $suffix;
+    } elseif ($suffix !== '') {
+        $participantName = $suffix;
+    }
     $participantPhoto = trim((string) ($userRow['photo_url'] ?? ''));
+    $participantStudentNo = trim((string) ($userRow['student_id'] ?? ''));
 }
 
 $respond = static function (
@@ -189,7 +204,7 @@ $respond = static function (
     string $message,
     int $http = 200,
     array $extra = []
-) use ($ticketId, $participantName, $participantPhoto, $userId, $eventId, $event): void {
+) use ($ticketId, $participantName, $participantPhoto, $participantStudentNo, $userId, $eventId, $event): void {
     $eventTitle = trim((string) ($event['title'] ?? ''));
     $eventStart = trim((string) ($event['start_at'] ?? ''));
     $eventEnd = trim((string) ($event['end_at'] ?? ''));
@@ -203,7 +218,9 @@ $respond = static function (
         'status' => $responseStatus,
         'participant_name' => $participantName,
         'participant_photo_url' => $participantPhoto,
-        'participant_student_id' => $userId,
+        'participant_student_id' => $participantStudentNo !== '' ? $participantStudentNo : $userId,
+        'participant_student_no' => $participantStudentNo,
+        'participant_user_id' => $userId,
         'message' => $message,
         'error' => $ok ? null : $message,
     ], $extra), $http);
@@ -333,14 +350,12 @@ if ($usesSessions) {
             $fail = mobile_attendance_require_write($writeOutcome, 'Time-out failed. Please try again.');
             json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
         }
-        if (empty($writeOutcome['queued'])) {
-            notify_student_evaluation_open_after_timeout(
-                $userId,
-                $eventId,
-                (string) ($event['title'] ?? ''),
-                $sessionId
-            );
-        }
+        notify_student_evaluation_open_after_timeout(
+            $userId,
+            $eventId,
+            (string) ($event['title'] ?? ''),
+            $sessionId
+        );
         $respond(true, 'checked_out', 'Checked out for ' . $sessionName . '.' . mobile_attendance_queued_suffix($writeOutcome), 200, [
             'session_id' => $sessionId,
             'action' => 'check_out',
@@ -570,14 +585,12 @@ if ($alreadyIn) {
         $fail = mobile_attendance_require_write($writeOutcome, 'Time-out failed. Please try again.');
         json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
     }
-    if (empty($writeOutcome['queued'])) {
-        notify_student_evaluation_open_after_timeout(
-            $userId,
-            $eventId,
-            (string) ($event['title'] ?? ''),
-            null
-        );
-    }
+    notify_student_evaluation_open_after_timeout(
+        $userId,
+        $eventId,
+        (string) ($event['title'] ?? ''),
+        null
+    );
     $respond(true, 'checked_out', 'Checked out successfully!' . mobile_attendance_queued_suffix($writeOutcome), 200, ['action' => 'check_out']);
 }
 

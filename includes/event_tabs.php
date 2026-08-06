@@ -219,8 +219,12 @@ if (!function_exists('render_event_tabs')) {
             echo event_tab_link_html($feedbackHref, 'Event Feedback', $currentTab === 'feedback');
         }
 
-        if (!$isFinished && $role === 'admin') {
+        // Evaluation Questions: event-creator teacher only (not admin, not other teachers).
+        if (!$isFinished && $role === 'teacher' && $isEventCreator) {
             echo event_tab_link_html($questionsHref, 'Evaluation Questions', $currentTab === 'questions');
+        }
+
+        if (!$isFinished && $role === 'admin') {
             echo event_tab_link_html($qrHref, 'QR Scanner Access', $currentTab === 'qr');
         }
 

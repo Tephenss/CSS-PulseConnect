@@ -10,7 +10,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 
-$user = require_role(['teacher', 'admin']);
+$user = require_role(['teacher']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
@@ -20,29 +20,27 @@ if ($questionId === '') {
     json_response(['ok' => false, 'error' => 'question_id required'], 400);
 }
 
-// Optional ownership check for teacher
-if ((string) ($user['role'] ?? 'teacher') === 'teacher') {
-    if ($sessionId !== '') {
-        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions?select=id,session_id,event_sessions(event_id,events(created_by))&'
-            . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
-    } else {
-        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?select=id,event_id,events(created_by)&'
-            . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
-    }
-    $headers = [
-        'Accept: application/json',
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY,
-    ];
-    $checkRes = supabase_request('GET', $checkUrl, $headers);
-    $rows = $checkRes['ok'] ? json_decode((string) $checkRes['body'], true) : null;
-    $q = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
-    $ownerId = $sessionId !== ''
-        ? (string) ((($q['event_sessions']['events']['created_by'] ?? '') ?? ''))
-        : (string) (($q['events']['created_by'] ?? '') ?? '');
-    if (!is_array($q) || $ownerId !== (string) ($user['id'] ?? '')) {
-        json_response(['ok' => false, 'error' => 'Forbidden'], 403);
-    }
+// Only the teacher who created the event may delete questions.
+if ($sessionId !== '') {
+    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions?select=id,session_id,event_sessions(event_id,events(created_by))&'
+        . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
+} else {
+    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions?select=id,event_id,events(created_by)&'
+        . 'id=eq.' . rawurlencode($questionId) . '&limit=1';
+}
+$headers = [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+$checkRes = supabase_request('GET', $checkUrl, $headers);
+$rows = $checkRes['ok'] ? json_decode((string) $checkRes['body'], true) : null;
+$q = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
+$ownerId = $sessionId !== ''
+    ? (string) ((($q['event_sessions']['events']['created_by'] ?? '') ?? ''))
+    : (string) (($q['events']['created_by'] ?? '') ?? '');
+if (!is_array($q) || $ownerId !== (string) ($user['id'] ?? '')) {
+    json_response(['ok' => false, 'error' => 'Forbidden'], 403);
 }
 
 $table = $sessionId !== '' ? 'event_session_evaluation_questions' : 'evaluation_questions';

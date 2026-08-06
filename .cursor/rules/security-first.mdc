@@ -10,9 +10,10 @@ Real student/teacher data is in this system. **Every feature must preserve the s
 ## Non-negotiables
 
 - **PHP BFF is the privileged path.** Service role key stays server-side only (`.env` / Hostinger). Never put `SUPABASE_KEY` / service role / SMTP passwords in Flutter.
-- **Do not reopen anon access** to: `users` (especially `password`), OTP/reset codes, `trusted_devices`, student docs/submissions, `fcm_tokens`, notification PII tables, `mobile_sessions`.
+- **Do not reopen anon access** to: `users` (especially `password`), OTP/reset codes, `trusted_devices`, student docs/submissions, `fcm_tokens`, notification PII tables, `mobile_sessions`, **`student_roster`** (school CSV import).
 - **Mobile mutations** that touch those tables go through session-authenticated PHP APIs (`mobile_api_validate_key` + `mobile_api_require_user`). Never trust client-supplied `user_id` alone.
-- **Flutter must not** `.select()` / `.update()` passwords or OTP tables via the anon/publishable key. Prefer `MobileBackendService` + secure storage for session tokens; strip `password` from prefs.
+- **Flutter must not** `.select()` / `.update()` passwords, OTP tables, or `student_roster` via the anon/publishable key. Prefer `MobileBackendService` + secure storage for session tokens; strip `password` from prefs.
+- **Roster signup:** Create Account looks up student number only via PHP BFF (`mobile_roster_lookup`); register claims roster server-side. No client-forged name/course/section.
 - **Fail closed:** empty `MOBILE_PUSH_API_KEY` must reject; rate-limit auth/reset; keep SSL verify on in production; session cookies Secure on HTTPS.
 - **Secrets:** never commit `.env` / `env.dart` secrets; never log tokens, passwords, or OTP codes.
 

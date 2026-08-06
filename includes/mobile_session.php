@@ -21,7 +21,7 @@ function mobile_session_generate_token(): string
  */
 function mobile_user_public_fields(): string
 {
-    return 'id,first_name,middle_name,last_name,suffix,email,role,section_id,course,'
+    return 'id,first_name,middle_name,last_name,suffix,email,role,section_id,course,student_id,'
         . 'photo_url,email_verified,email_verified_at,account_status,approval_note,'
         . 'registration_source,created_at,updated_at';
 }

@@ -26,9 +26,10 @@ MOBILE_PUSH_API_KEY=<long-random-string-at-least-32-chars>
    - [`051_drop_attendance_write_temps.sql`](supabase/migrations/051_drop_attendance_write_temps.sql) — after deploying PHP + Flutter scan/eval/absence via BFF
    - [`052_drop_remaining_write_temps.sql`](supabase/migrations/052_drop_remaining_write_temps.sql) — after deploying Phase B (event create / assistants / proposals via BFF)
    - [`053_advisor_info_locked_deny_policies.sql`](supabase/migrations/053_advisor_info_locked_deny_policies.sql) — explicit deny policies on locked tables (clears Advisor INFO; does **not** reopen anon)
+   - [`057_student_roster.sql`](supabase/migrations/057_student_roster.sql) — school CSV roster (`student_roster`); **service role only**; Create Account looks up via PHP BFF exact match
 3. Confirm:
    - Table `mobile_sessions` exists.
-   - Anon can **no longer** `select *` from `users`, `password_reset_codes`, `email_verification_codes`, `trusted_devices`, student-doc tables, or `fcm_tokens`.
+   - Anon can **no longer** `select *` from `users`, `password_reset_codes`, `email_verification_codes`, `trusted_devices`, student-doc tables, `fcm_tokens`, or **`student_roster`**.
    - Anon can **no longer** `insert/update/delete` on attendance, tickets, events, assistants, certs, proposals, evaluation answers/questions.
    - Advisor INFO “RLS Enabled No Policy” on those locked tables is cleared via `*_deny_clients` (`USING false`) — still fail-closed for anon.
 
@@ -99,7 +100,14 @@ Expected: empty / permission denied / RLS violation — **not** user rows.
 
 ### Firestore must NOT store
 
-users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, student names/photos, registrations, student docs, mobile sessions, or notification PII.
+users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, student names/photos, registrations, student docs, mobile sessions, notification PII, or **school student roster** rows.
+
+### Student roster (CSV import)
+
+- Admin imports real school lists via `api/students_roster_import.php` (CSRF + admin session + rate limit) into locked table `student_roster`.
+- Mobile Create Account uses `api/mobile_roster_lookup.php` (**exact** student number only; no list/search) then `api/mobile_register_user.php` claims the roster row.
+- Flutter must **never** `.select()` / `.insert()` `student_roster` with the anon key.
+- Student login prefers **student number + password**; email login remains for existing accounts when the identifier contains `@`.
 
 ### Concurrent / load hardening (no flow change)
 

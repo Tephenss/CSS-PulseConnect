@@ -13,6 +13,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/certificate_code_pool.php';
 
 $user = require_role(['teacher']);
 $userId = trim((string) ($user['id'] ?? ''));
@@ -54,7 +55,7 @@ if ($templateScope === 'session') {
 }
 
 $getUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
-    . '?select=id,created_by'
+    . '?select=id,created_by,' . ($table === 'event_session_certificate_templates' ? 'session_id' : 'event_id')
     . '&id=eq.' . rawurlencode($templateId)
     . '&limit=1';
 $getRes = supabase_request('GET', $getUrl, $headers);
@@ -65,7 +66,7 @@ $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : nul
 if (!$row && $templateScope !== 'session') {
     $table = 'event_session_certificate_templates';
     $getUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
-        . '?select=id,created_by'
+        . '?select=id,created_by,' . ($table === 'event_session_certificate_templates' ? 'session_id' : 'event_id')
         . '&id=eq.' . rawurlencode($templateId)
         . '&limit=1';
     $getRes = supabase_request('GET', $getUrl, $headers);
@@ -79,7 +80,7 @@ if (!$row && $templateScope !== 'session') {
 } elseif (!$row && $templateScope === 'session') {
     $table = 'certificate_templates';
     $getUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
-        . '?select=id,created_by'
+        . '?select=id,created_by,' . ($table === 'event_session_certificate_templates' ? 'session_id' : 'event_id')
         . '&id=eq.' . rawurlencode($templateId)
         . '&limit=1';
     $getRes = supabase_request('GET', $getUrl, $headers);
@@ -96,6 +97,49 @@ if (!$row) {
 $owner = (string) ($row['created_by'] ?? '');
 if ($owner !== '' && $owner !== $userId) {
     json_response(['ok' => false, 'error' => 'Forbidden'], 403);
+}
+
+// Same rule as create: the code printed on the design must not already belong
+// to another event/seminar, otherwise issuing would collide on unique(code).
+$scopeSessionId = trim((string) ($row['session_id'] ?? ''));
+$scopeEventId = trim((string) ($row['event_id'] ?? ''));
+if ($scopeSessionId !== '' && $scopeEventId === '') {
+    $sessRows = json_decode((string) (supabase_request(
+        'GET',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=event_id&id=eq.' . rawurlencode($scopeSessionId) . '&limit=1',
+        $headers
+    )['body'] ?? ''), true);
+    $scopeEventId = isset($sessRows[0]['event_id']) ? trim((string) $sessRows[0]['event_id']) : '';
+}
+
+// Only conflict-check when the printed seed CHANGES. Re-saving the same design
+// (thumb refresh, linked preview sync) must not 409 just because that seed is
+// already in this event's pool or already issued to participants.
+$existingCanvasUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+    . '?select=canvas_state&id=eq.' . rawurlencode($templateId) . '&limit=1';
+$existingCanvasRes = supabase_request('GET', $existingCanvasUrl, $headers);
+$existingCanvasRows = json_decode((string) ($existingCanvasRes['body'] ?? ''), true);
+$existingCanvas = is_array($existingCanvasRows) && isset($existingCanvasRows[0]['canvas_state'])
+    ? $existingCanvasRows[0]['canvas_state']
+    : null;
+$previousSeed = certificate_pool_extract_seed_from_canvas($existingCanvas);
+$seedOnDesign = certificate_pool_extract_seed_from_canvas($canvasState);
+$seedChanged = is_string($seedOnDesign) && $seedOnDesign !== ''
+    && strcasecmp($seedOnDesign, (string) ($previousSeed ?? '')) !== 0;
+if ($seedChanged) {
+    $usage = certificate_pool_code_usage(
+        $seedOnDesign,
+        $scopeEventId !== '' ? $scopeEventId : null,
+        $scopeSessionId !== '' ? $scopeSessionId : null
+    );
+    if (($usage['taken'] ?? false) === true) {
+        json_response([
+            'ok' => false,
+            'error' => certificate_pool_code_conflict_message($usage),
+            'code_conflict' => $usage,
+        ], 409);
+    }
 }
 
 $payload = ['canvas_state' => $canvasState];

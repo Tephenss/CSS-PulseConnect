@@ -25,10 +25,17 @@ function device_trust_write_headers(): array
 
 /**
  * Client public IP used as the trust key (shared across browsers on the same network).
+ *
+ * Hostinger/LiteSpeed often sets both REMOTE_ADDR and X-Forwarded-For; preferring an
+ * unstable XFF chain caused mid-day "reverify" false positives. Prefer the edge
+ * connection IP first, then CF, then the left-most public XFF hop.
  */
 function device_trust_client_ip(): string
 {
     $candidates = [];
+
+    $candidates[] = trim((string) ($_SERVER['REMOTE_ADDR'] ?? ''));
+    $candidates[] = trim((string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
 
     $forwarded = trim((string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''));
     if ($forwarded !== '') {
@@ -36,10 +43,10 @@ function device_trust_client_ip(): string
             $candidates[] = trim($part);
         }
     }
+    $candidates[] = trim((string) ($_SERVER['HTTP_X_REAL_IP'] ?? ''));
 
-    $candidates[] = trim((string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
-    $candidates[] = trim((string) ($_SERVER['REMOTE_ADDR'] ?? ''));
-
+    $public = '';
+    $any = '';
     foreach ($candidates as $raw) {
         if ($raw === '') {
             continue;
@@ -48,16 +55,29 @@ function device_trust_client_ip(): string
         if (preg_match('/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/', $raw, $m)) {
             $raw = $m[1];
         }
-        if (filter_var($raw, FILTER_VALIDATE_IP)) {
-            return strtolower($raw);
+        // [IPv6]:port
+        if (preg_match('/^\[([^\]]+)\]:\d+$/', $raw, $m)) {
+            $raw = $m[1];
+        }
+        if (!filter_var($raw, FILTER_VALIDATE_IP)) {
+            continue;
+        }
+        $raw = strtolower($raw);
+        if ($any === '') {
+            $any = $raw;
+        }
+        if (filter_var($raw, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            $public = $raw;
+            break;
         }
     }
 
-    return '';
+    return $public !== '' ? $public : $any;
 }
 
 /**
  * Normalize an IP into the trusted_devices.device_key value.
+ * IPv6 uses /64 so privacy-address rotations on the same network do not force re-OTP.
  */
 function device_trust_ip_key(?string $ip = null): string
 {
@@ -65,6 +85,19 @@ function device_trust_ip_key(?string $ip = null): string
     if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
         return '';
     }
+
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+        $packed = @inet_pton($ip);
+        if (is_string($packed) && strlen($packed) === 16) {
+            $prefix = substr($packed, 0, 8) . str_repeat("\0", 8);
+            $normalized = @inet_ntop($prefix);
+            if (is_string($normalized) && $normalized !== '') {
+                return 'ip6:' . strtolower($normalized) . '/64';
+            }
+        }
+        return 'ip6:' . $ip;
+    }
+
     return 'ip:' . $ip;
 }
 

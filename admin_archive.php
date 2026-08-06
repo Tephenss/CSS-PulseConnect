@@ -47,10 +47,51 @@ if ($resSec['ok']) {
     $sections = is_array($decodedSec) ? $decodedSec : [];
 }
 
-// Archived users are not yet wired to a dedicated archive marker in the schema.
-// Keep counts explicit to avoid showing misleading hardcoded values.
-$archivedTeachers = [];
+// Archived students (soft-archive on student_roster).
 $archivedStudents = [];
+$archivedTeachers = [];
+$secMap = [];
+$urlAllSec = rtrim(SUPABASE_URL, '/') . '/rest/v1/sections?select=id,name';
+$resAllSec = supabase_request('GET', $urlAllSec, $headers);
+if ($resAllSec['ok']) {
+    $allSec = json_decode((string) ($resAllSec['body'] ?? ''), true);
+    if (is_array($allSec)) {
+        foreach ($allSec as $sec) {
+            if (is_array($sec)) {
+                $secMap[(string) ($sec['id'] ?? '')] = (string) ($sec['name'] ?? '');
+            }
+        }
+    }
+}
+
+$archOffset = 0;
+while (true) {
+    $urlArchStud = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+        . '?select=id,student_no,first_name,middle_name,last_name,program_label,year_level,block,section_id,user_id,archived_at'
+        . '&archived_at=not.is.null'
+        . '&order=archived_at.desc'
+        . '&limit=500&offset=' . $archOffset;
+    $resArchStud = supabase_request('GET', $urlArchStud, $headers);
+    if (!$resArchStud['ok']) {
+        break;
+    }
+    $chunk = json_decode((string) ($resArchStud['body'] ?? ''), true);
+    if (!is_array($chunk) || $chunk === []) {
+        break;
+    }
+    foreach ($chunk as $row) {
+        if (is_array($row)) {
+            $archivedStudents[] = $row;
+        }
+    }
+    if (count($chunk) < 500) {
+        break;
+    }
+    $archOffset += 500;
+    if ($archOffset >= 3000) {
+        break;
+    }
+}
 
 render_header('Archived Events', $user);
 ?>
@@ -81,7 +122,7 @@ render_header('Archived Events', $user);
         <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= count($archivedStudents) ?></span>
     </button>
     <button id="btnTabSections" class="pb-3 border-b-2 border-transparent font-bold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors whitespace-nowrap px-1 group flex items-center gap-2">
-        Sections
+        Blocks
         <span class="bg-zinc-100 text-zinc-600 border border-zinc-200 text-[10px] font-black px-2 py-0.5 rounded-full group-hover:bg-zinc-200 transition-colors"><?= count($sections) ?></span>
     </button>
 </div>
@@ -216,8 +257,8 @@ render_header('Archived Events', $user);
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Name</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
                 <th class="px-4 py-4 font-bold text-zinc-900">Contact</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Grade Level</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Section</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Block</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 text-right">Actions</th>
             </tr>
         </thead>
@@ -237,17 +278,43 @@ render_header('Archived Events', $user);
         <thead class="bg-zinc-50 border-b border-zinc-200/80">
             <tr>
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Name</th>
-                <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Section</th>
                 <th class="px-4 py-4 font-bold text-zinc-900">Student Number</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Program</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Year / Block</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Block</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 text-right">Actions</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
+            <?php if (count($archivedStudents) > 0): ?>
+              <?php foreach ($archivedStudents as $as): ?>
+                <?php
+                  $rid = (string) ($as['id'] ?? '');
+                  $uid = (string) ($as['user_id'] ?? '');
+                  $sno = (string) ($as['student_no'] ?? '');
+                  $nm = trim((string) (($as['last_name'] ?? '') . ', ' . ($as['first_name'] ?? '')));
+                  $secName = $secMap[(string) ($as['section_id'] ?? '')] ?? '—';
+                  $yl = $as['year_level'] ?? null;
+                  $blk = trim((string) ($as['block'] ?? ''));
+                  $yearBlock = ($yl !== null && $yl !== '' ? (string) $yl : '—') . ($blk !== '' ? ' / ' . $blk : '');
+                ?>
+                <tr class="hover:bg-zinc-50 transition-colors" id="archStud-<?= htmlspecialchars($rid) ?>">
+                  <td class="px-6 py-4 font-bold text-zinc-900"><?= htmlspecialchars($nm !== ', ' ? $nm : '—') ?></td>
+                  <td class="px-4 py-4 font-mono text-xs text-zinc-700"><?= htmlspecialchars($sno) ?></td>
+                  <td class="px-4 py-4 text-zinc-600"><?= htmlspecialchars((string) ($as['program_label'] ?? '—')) ?></td>
+                  <td class="px-4 py-4 text-zinc-500"><?= htmlspecialchars($yearBlock) ?></td>
+                  <td class="px-4 py-4 text-zinc-500"><?= htmlspecialchars($secName) ?></td>
+                  <td class="px-6 py-4 text-right">
+                    <button type="button" class="btnRestoreStudent mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" data-roster-id="<?= htmlspecialchars($rid) ?>" data-user-id="<?= htmlspecialchars($uid) ?>" data-student-no="<?= htmlspecialchars($sno) ?>">Restore</button>
+                    <button type="button" class="btnHardDeleteStudent p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" data-roster-id="<?= htmlspecialchars($rid) ?>" data-user-id="<?= htmlspecialchars($uid) ?>" data-student-no="<?= htmlspecialchars($sno) ?>"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            <?php else: ?>
             <tr>
                 <td colspan="6" class="px-6 py-8 text-center text-zinc-500">No archived students available.</td>
             </tr>
+            <?php endif; ?>
         </tbody>
     </table>
   </div>
@@ -508,6 +575,72 @@ render_header('Archived Events', $user);
         btn.closest('tr').remove();
       } catch (e) {
         alert(e.message || 'Failed to delete section');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.btnRestoreStudent').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Restore this student to the active Users list?')) return;
+      const rosterId = btn.dataset.rosterId || '';
+      const userId = btn.dataset.userId || '';
+      const studentNo = btn.dataset.studentNo || '';
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = 'Restoring...';
+      try {
+        const res = await fetch('/api/students_roster_restore.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            csrf_token: window.CSRF_TOKEN,
+            roster_id: rosterId,
+            user_id: userId,
+            student_no: studentNo,
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        const countSpan = document.querySelector('#btnTabStudents span');
+        if (countSpan) countSpan.textContent = Math.max(0, parseInt(countSpan.textContent) - 1);
+        btn.closest('tr')?.remove();
+      } catch (e) {
+        alert(e.message || 'Failed to restore student');
+        btn.textContent = prev;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.btnHardDeleteStudent').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Permanently delete this student? This cannot be undone.')) return;
+      const rosterId = btn.dataset.rosterId || '';
+      const userId = btn.dataset.userId || '';
+      const studentNo = btn.dataset.studentNo || '';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/students_roster_delete.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            csrf_token: window.CSRF_TOKEN,
+            roster_id: rosterId,
+            user_id: userId,
+            student_no: studentNo,
+            permanent: true,
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        const countSpan = document.querySelector('#btnTabStudents span');
+        if (countSpan) countSpan.textContent = Math.max(0, parseInt(countSpan.textContent) - 1);
+        btn.closest('tr')?.remove();
+      } catch (e) {
+        alert(e.message || 'Failed to delete student');
       } finally {
         btn.disabled = false;
       }

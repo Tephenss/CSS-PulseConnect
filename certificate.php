@@ -180,6 +180,7 @@ $body = str_replace(
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Certificate</title>
+  <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
   <link rel="stylesheet" href="/assets/css/tailwind.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/tailwind.css') ?>" />
   <?php if (!empty($canvasState)): ?>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>

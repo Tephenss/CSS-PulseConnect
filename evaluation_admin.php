@@ -43,7 +43,16 @@ if (!is_array($event)) {
     exit;
 }
 
-if ($role === 'teacher' && (string) ($event['created_by'] ?? '') !== $userId) {
+$isEventCreator = (string) ($event['created_by'] ?? '') === $userId;
+
+// Questions tab is teacher-creator only — remove from admin.
+if ($tab === 'questions') {
+    if ($role !== 'teacher' || !$isEventCreator) {
+        http_response_code(403);
+        echo 'Forbidden';
+        exit;
+    }
+} elseif ($role === 'teacher' && !$isEventCreator) {
     http_response_code(403);
     echo 'Forbidden';
     exit;

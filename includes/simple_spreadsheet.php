@@ -246,64 +246,17 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
     return $binary;
 }
 
-function read_uploaded_spreadsheet_rows(string $path, string $originalName): array
+/**
+ * Parse one worksheet XML into a list of row arrays.
+ *
+ * @param list<string> $sharedStrings
+ * @return list<list<string>>
+ */
+function parse_xlsx_sheet_xml(string $sheetXml, array $sharedStrings): array
 {
-    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-    if ($extension === 'csv') {
-        $handle = fopen($path, 'rb');
-        if ($handle === false) {
-            throw new RuntimeException('Unable to read the uploaded CSV file.');
-        }
-
-        $rows = [];
-        while (($row = fgetcsv($handle)) !== false) {
-            $rows[] = array_map(static fn ($value): string => trim((string) $value), $row);
-        }
-        fclose($handle);
-        return $rows;
-    }
-
-    if ($extension !== 'xlsx') {
-        throw new RuntimeException('Please upload the exported .xlsx or .csv file.');
-    }
-
-    if (!class_exists('ZipArchive')) {
-        throw new RuntimeException('ZipArchive is required to import Excel files.');
-    }
-
-    $zip = new ZipArchive();
-    if ($zip->open($path) !== true) {
-        throw new RuntimeException('Unable to open the uploaded Excel file.');
-    }
-
-    $sharedStrings = [];
-    $sharedStringsXml = $zip->getFromName('xl/sharedStrings.xml');
-    if (is_string($sharedStringsXml) && $sharedStringsXml !== '') {
-        $xml = @simplexml_load_string($sharedStringsXml);
-        if ($xml !== false) {
-            $xml->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
-            foreach (($xml->xpath('//main:si') ?: []) as $item) {
-                $item->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
-                $texts = $item->xpath('.//main:t') ?: [];
-                $value = '';
-                foreach ($texts as $textNode) {
-                    $value .= (string) $textNode;
-                }
-                $sharedStrings[] = $value;
-            }
-        }
-    }
-
-    $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
-    $zip->close();
-
-    if (!is_string($sheetXml) || $sheetXml === '') {
-        throw new RuntimeException('The uploaded Excel file does not contain a readable first worksheet.');
-    }
-
     $xml = @simplexml_load_string($sheetXml);
     if ($xml === false) {
-        throw new RuntimeException('Unable to parse the uploaded Excel worksheet.');
+        return [];
     }
 
     $xml->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
@@ -354,3 +307,170 @@ function read_uploaded_spreadsheet_rows(string $path, string $originalName): arr
 
     return $rows;
 }
+
+/**
+ * Read every worksheet in an uploaded XLSX (or CSV as a single sheet).
+ *
+ * @return list<array{name:string,rows:list<list<string>>}>
+ */
+function read_uploaded_spreadsheet_sheets(string $path, string $originalName): array
+{
+    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    if ($extension === 'csv') {
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            throw new RuntimeException('Unable to read the uploaded CSV file.');
+        }
+
+        $rows = [];
+        while (($row = fgetcsv($handle)) !== false) {
+            $rows[] = array_map(static fn ($value): string => trim((string) $value), $row);
+        }
+        fclose($handle);
+        return [['name' => 'Sheet1', 'rows' => $rows]];
+    }
+
+    if ($extension !== 'xlsx') {
+        throw new RuntimeException('Please upload the exported .xlsx or .csv file.');
+    }
+
+    if (!class_exists('ZipArchive')) {
+        throw new RuntimeException('ZipArchive is required to import Excel files.');
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($path) !== true) {
+        throw new RuntimeException('Unable to open the uploaded Excel file.');
+    }
+
+    $sharedStrings = [];
+    $sharedStringsXml = $zip->getFromName('xl/sharedStrings.xml');
+    if (is_string($sharedStringsXml) && $sharedStringsXml !== '') {
+        $xml = @simplexml_load_string($sharedStringsXml);
+        if ($xml !== false) {
+            $xml->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+            foreach (($xml->xpath('//main:si') ?: []) as $item) {
+                $item->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+                $texts = $item->xpath('.//main:t') ?: [];
+                $value = '';
+                foreach ($texts as $textNode) {
+                    $value .= (string) $textNode;
+                }
+                $sharedStrings[] = $value;
+            }
+        }
+    }
+
+    // Map rId → worksheet path from workbook relationships.
+    $ridToTarget = [];
+    $relsXml = $zip->getFromName('xl/_rels/workbook.xml.rels');
+    if (is_string($relsXml) && $relsXml !== '') {
+        $rels = @simplexml_load_string($relsXml);
+        if ($rels !== false) {
+            foreach ($rels->Relationship as $rel) {
+                $id = (string) ($rel['Id'] ?? '');
+                $target = (string) ($rel['Target'] ?? '');
+                $type = (string) ($rel['Type'] ?? '');
+                if ($id === '' || $target === '') {
+                    continue;
+                }
+                if ($type !== '' && !str_contains($type, '/worksheet')) {
+                    continue;
+                }
+                $target = ltrim(str_replace('\\', '/', $target), '/');
+                if (!str_starts_with($target, 'xl/')) {
+                    $target = 'xl/' . $target;
+                }
+                // Sometimes Target is "worksheets/sheet1.xml"
+                if (!str_starts_with($target, 'xl/') && str_starts_with($target, 'worksheets/')) {
+                    $target = 'xl/' . $target;
+                }
+                $ridToTarget[$id] = $target;
+            }
+        }
+    }
+
+    $sheetMetas = [];
+    $workbookXml = $zip->getFromName('xl/workbook.xml');
+    if (is_string($workbookXml) && $workbookXml !== '') {
+        $wb = @simplexml_load_string($workbookXml);
+        if ($wb !== false) {
+            $wb->registerXPathNamespace('main', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+            $wb->registerXPathNamespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships');
+            foreach (($wb->xpath('//main:sheets/main:sheet') ?: []) as $sheetNode) {
+                $name = trim((string) ($sheetNode['name'] ?? ''));
+                $rid = (string) ($sheetNode->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'] ?? '');
+                if ($rid === '') {
+                    $rid = (string) ($sheetNode['id'] ?? '');
+                }
+                $state = strtolower(trim((string) ($sheetNode['state'] ?? 'visible')));
+                if ($state === 'hidden' || $state === 'veryhidden') {
+                    continue;
+                }
+                $sheetMetas[] = ['name' => $name !== '' ? $name : 'Sheet', 'rid' => $rid];
+            }
+        }
+    }
+
+    // Fallback: discover worksheet files directly.
+    if ($sheetMetas === []) {
+        for ($i = 1; $i <= 30; $i++) {
+            $candidate = 'xl/worksheets/sheet' . $i . '.xml';
+            if ($zip->locateName($candidate) !== false) {
+                $sheetMetas[] = ['name' => 'Sheet' . $i, 'rid' => '', 'path' => $candidate];
+            }
+        }
+    }
+
+    $sheets = [];
+    foreach ($sheetMetas as $meta) {
+        $pathInZip = (string) ($meta['path'] ?? '');
+        if ($pathInZip === '') {
+            $rid = (string) ($meta['rid'] ?? '');
+            $pathInZip = $ridToTarget[$rid] ?? '';
+        }
+        if ($pathInZip === '') {
+            continue;
+        }
+        // Normalize path variants.
+        $pathInZip = ltrim(str_replace('\\', '/', $pathInZip), '/');
+        if (!str_starts_with($pathInZip, 'xl/')) {
+            $pathInZip = 'xl/' . ltrim($pathInZip, '/');
+        }
+
+        $sheetXml = $zip->getFromName($pathInZip);
+        if (!is_string($sheetXml) || $sheetXml === '') {
+            // Try worksheets/ relative fix
+            $alt = preg_replace('#^xl/#', '', $pathInZip) ?? $pathInZip;
+            $sheetXml = $zip->getFromName('xl/' . ltrim($alt, '/'));
+        }
+        if (!is_string($sheetXml) || $sheetXml === '') {
+            continue;
+        }
+
+        $rows = parse_xlsx_sheet_xml($sheetXml, $sharedStrings);
+        if ($rows === []) {
+            continue;
+        }
+        $sheets[] = [
+            'name' => (string) ($meta['name'] ?? 'Sheet'),
+            'rows' => $rows,
+        ];
+    }
+
+    $zip->close();
+
+    if ($sheets === []) {
+        throw new RuntimeException('The uploaded Excel file does not contain a readable worksheet.');
+    }
+
+    return $sheets;
+}
+
+function read_uploaded_spreadsheet_rows(string $path, string $originalName): array
+{
+    $sheets = read_uploaded_spreadsheet_sheets($path, $originalName);
+    // Backward compatible: first sheet only (registration access, etc.).
+    return $sheets[0]['rows'] ?? [];
+}
+

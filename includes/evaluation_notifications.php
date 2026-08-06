@@ -31,31 +31,58 @@ function evaluation_event_has_open_questions(
 
     $headers = evaluation_notify_headers();
 
-    // Session-level questions still count when sessionId is provided.
-    if ($sessionId !== '') {
-        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions'
-            . '?select=id'
-            . '&session_id=eq.' . rawurlencode($sessionId)
-            . '&limit=1';
-        $res = supabase_request('GET', $url, $headers);
-        if ($res['ok'] ?? false) {
-            $rows = json_decode((string) ($res['body'] ?? ''), true);
-            if (is_array($rows) && $rows !== []) {
-                return true;
-            }
-        }
-    }
-
+    // Event-level questions.
     $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions'
         . '?select=id'
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $eventRes = supabase_request('GET', $eventUrl, $headers);
-    if (!($eventRes['ok'] ?? false)) {
+    if ($eventRes['ok'] ?? false) {
+        $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+        if (is_array($eventRows) && $eventRows !== []) {
+            return true;
+        }
+    }
+
+    // Multi-seminar: questions may live on seminar 1 while the final timeout is
+    // seminar 2 — check any session of this event, not only the timed-out one.
+    if (!function_exists('fetch_event_sessions')) {
+        require_once __DIR__ . '/event_sessions.php';
+    }
+    $sessions = fetch_event_sessions($eventId, $headers);
+    $sessionIds = [];
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            $sid = trim((string) ($session['id'] ?? ''));
+            if ($sid !== '') {
+                $sessionIds[] = $sid;
+            }
+        }
+    }
+    if ($sessionId !== '' && !in_array($sessionId, $sessionIds, true)) {
+        $sessionIds[] = $sessionId;
+    }
+    if ($sessionIds === []) {
         return false;
     }
-    $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
-    return is_array($eventRows) && $eventRows !== [];
+
+    $inList = '(' . implode(',', array_map(
+        static fn (string $id): string => rawurlencode($id),
+        $sessionIds
+    )) . ')';
+    $sessUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions'
+        . '?select=id'
+        . '&session_id=in.' . $inList
+        . '&limit=1';
+    $sessRes = supabase_request('GET', $sessUrl, $headers);
+    if (!($sessRes['ok'] ?? false)) {
+        return false;
+    }
+    $sessRows = json_decode((string) ($sessRes['body'] ?? ''), true);
+    return is_array($sessRows) && $sessRows !== [];
 }
 
 /**

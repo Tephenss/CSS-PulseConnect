@@ -93,6 +93,23 @@ $codeStrings = certificate_pool_normalize_codes($codeStrings);
 $codeStrings = certificate_pool_collapse_to_seed($codeStrings);
 $sampleCode = $codeStrings[0] ?? '';
 
+// Stop here when the registrar seed is already in use — importing it would either
+// collide on unique(code) or print a code that differs from the issued one.
+if ($sampleCode !== '') {
+    $usage = certificate_pool_code_usage(
+        $sampleCode,
+        $eventId,
+        $sessionId !== '' ? $sessionId : null
+    );
+    if (($usage['taken'] ?? false) === true) {
+        json_response([
+            'ok' => false,
+            'error' => certificate_pool_code_conflict_message($usage, 'scanned code'),
+            'code_conflict' => $usage,
+        ], 409);
+    }
+}
+
 $matchedTemplateId = trim((string) ($extracted['template_id'] ?? ''));
 $matchSource = $matchedTemplateId !== '' ? 'pptx_meta' : '';
 if ($matchedTemplateId === '') {

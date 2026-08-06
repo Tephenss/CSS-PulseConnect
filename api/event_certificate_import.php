@@ -82,6 +82,63 @@ $filename = 'manual-entry';
 $codes = [];
 $syncResult = null;
 
+/**
+ * Reject a code that another event/seminar already owns, before anything is written.
+ * @param list<string> $rawCodes
+ */
+function certificate_import_guard_codes(array $rawCodes, string $eventId, string $sessionId): void
+{
+    $normalized = certificate_pool_collapse_to_seed(certificate_pool_normalize_codes($rawCodes));
+    foreach ($normalized as $code) {
+        $usage = certificate_pool_code_usage($code, $eventId, $sessionId !== '' ? $sessionId : null);
+        if (($usage['taken'] ?? false) === true) {
+            json_response([
+                'ok' => false,
+                'error' => certificate_pool_code_conflict_message($usage),
+                'code_conflict' => $usage,
+            ], 409);
+        }
+    }
+}
+
+/**
+ * Same guard for the code printed on a template that is about to be linked.
+ */
+function certificate_import_guard_template_seed(string $templateId, string $eventId, string $sessionId): void
+{
+    $templateId = trim($templateId);
+    if ($templateId === '') {
+        return;
+    }
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $canvas = null;
+    foreach (['certificate_templates', 'event_session_certificate_templates'] as $table) {
+        $res = supabase_request(
+            'GET',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+                . '?select=canvas_state&id=eq.' . rawurlencode($templateId) . '&limit=1',
+            $headers
+        );
+        $rows = json_decode((string) ($res['body'] ?? ''), true);
+        if (is_array($rows) && isset($rows[0]['canvas_state'])) {
+            $canvas = $rows[0]['canvas_state'];
+            break;
+        }
+    }
+    if ($canvas === null) {
+        return;
+    }
+    $seed = certificate_pool_extract_seed_from_canvas($canvas);
+    if (!is_string($seed) || $seed === '') {
+        return;
+    }
+    certificate_import_guard_codes([$seed], $eventId, $sessionId);
+}
+
 if ($hasFile) {
     $file = $_FILES['file'];
     if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
@@ -134,6 +191,7 @@ if ($hasFile) {
     }
 } elseif ($templateId !== '') {
     // Template-only link (no codes this round).
+    certificate_import_guard_template_seed($templateId, $eventId, $sessionId);
     $sessionLinked = null;
     $eventScopedTemplateId = $templateId;
     if ($sessionId !== '') {
@@ -199,6 +257,17 @@ if ($hasFile) {
 } else {
     json_response(['ok' => false, 'error' => 'Upload a PPTX, provide scanned codes, or select a saved template.'], 400);
 }
+
+// Validate before any write, so a duplicate code never leaves a half-linked design.
+$incomingCodes = [];
+foreach ((array) $codes as $row) {
+    if (is_array($row)) {
+        $incomingCodes[] = (string) ($row['code'] ?? '');
+    } elseif (is_string($row)) {
+        $incomingCodes[] = $row;
+    }
+}
+certificate_import_guard_codes($incomingCodes, $eventId, $sessionId);
 
 // Link first (copy Library → event/session scoped design), then sync layout
 // onto that copy only — never mutate the reusable Library row.

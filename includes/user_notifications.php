@@ -185,15 +185,19 @@ function dispatch_user_notifications_detailed(array $userIds, string $title, str
     }
 
     $fcm = send_fcm_notification_detailed(array_keys($tokens), $title, $body, $data);
+    $sent = (int) ($fcm['sent'] ?? 0);
+    $failed = (int) ($fcm['failed'] ?? 0);
+    $delivered = $sent > 0;
     return [
         'targets' => count($userIds),
         'tokens' => $tokenCount,
         'inbox' => true,
-        'fcm_ok' => !empty($fcm['ok']),
-        'error' => !empty($fcm['ok']) ? null : (string) ($fcm['error'] ?? 'fcm_send_failed'),
-        'detail' => $fcm['detail'] ?? null,
+        'fcm_ok' => $delivered,
+        'error' => $delivered ? null : (string) ($fcm['error'] ?? 'fcm_send_failed'),
+        'detail' => $delivered ? null : ($fcm['detail'] ?? null),
         'http_status' => $fcm['http_status'] ?? null,
-        'fcm_sent' => (int) ($fcm['sent'] ?? 0),
-        'fcm_failed' => (int) ($fcm['failed'] ?? 0),
+        'fcm_sent' => $sent,
+        'fcm_failed' => $failed,
+        'partial' => $delivered && $failed > 0,
     ];
 }

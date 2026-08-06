@@ -526,6 +526,9 @@ $publishPush = [
     'tokens' => 0,
     'inbox' => false,
     'fcm_ok' => false,
+    'fcm_sent' => 0,
+    'fcm_failed' => 0,
+    'partial' => false,
     'error' => null,
     'event_for' => null,
 ];
@@ -605,6 +608,9 @@ if (is_array($mergedEvent)
                 $publishPush['tokens'] = (int) ($dispatch['tokens'] ?? 0);
                 $publishPush['inbox'] = !empty($dispatch['inbox']);
                 $publishPush['fcm_ok'] = !empty($dispatch['fcm_ok']);
+                $publishPush['fcm_sent'] = (int) ($dispatch['fcm_sent'] ?? 0);
+                $publishPush['fcm_failed'] = (int) ($dispatch['fcm_failed'] ?? 0);
+                $publishPush['partial'] = !empty($dispatch['partial']);
                 $publishPush['detail'] = $dispatch['detail'] ?? null;
                 $publishPush['http_status'] = $dispatch['http_status'] ?? null;
                 if (!empty($dispatch['error']) && ($publishPush['error'] === null || $publishPush['error'] === 'used_all_students_fallback')) {

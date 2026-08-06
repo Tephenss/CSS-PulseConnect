@@ -167,6 +167,59 @@ usort($templates, static function (array $a, array $b): int {
     return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
 });
 
+// Collapse accidental duplicates (same teacher + same title): keep newest, remove older rows.
+$deduped = [];
+$seenTitleKeys = [];
+$duplicateIdsToDelete = [];
+foreach ($templates as $tpl) {
+    if (!is_array($tpl)) {
+        continue;
+    }
+    $tid = trim((string) ($tpl['id'] ?? ''));
+    $titleKey = strtolower(preg_replace('/\s+/', ' ', trim((string) ($tpl['title'] ?? ''))) ?? '');
+    if ($titleKey === '') {
+        $titleKey = '__untitled__:' . $tid;
+    }
+    if (isset($seenTitleKeys[$titleKey])) {
+        if ($tid !== '') {
+            $duplicateIdsToDelete[] = $tid;
+        }
+        continue;
+    }
+    $seenTitleKeys[$titleKey] = true;
+    $deduped[] = $tpl;
+}
+$templates = $deduped;
+
+if ($duplicateIdsToDelete !== [] && $userId !== '') {
+    $delHeaders = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: return=minimal',
+    ];
+    foreach ($duplicateIdsToDelete as $dupId) {
+        $dupId = trim((string) $dupId);
+        if ($dupId === '') {
+            continue;
+        }
+        $delUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates'
+            . '?id=eq.' . rawurlencode($dupId)
+            . '&event_id=is.null'
+            . '&created_by=eq.' . rawurlencode($userId);
+        $delRes = supabase_request('DELETE', $delUrl, $delHeaders);
+        if (!empty($delRes['ok'])) {
+            continue;
+        }
+        // Orphans claimed visually but not yet owned.
+        $delOrphanUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates'
+            . '?id=eq.' . rawurlencode($dupId)
+            . '&event_id=is.null'
+            . '&created_by=is.null';
+        supabase_request('DELETE', $delOrphanUrl, $delHeaders);
+    }
+}
+
 render_header('Certificates Library', $user);
 ?>
 

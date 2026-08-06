@@ -26,6 +26,9 @@ if ($res['ok']) {
 }
 
 $extractProgram = static function (string $rawName): string {
+    if (strcasecmp(trim($rawName), 'IRREGULAR') === 0) {
+        return 'IRREGULAR';
+    }
     if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\b/i', trim($rawName), $m)) {
         $program = strtoupper(trim((string) $m[1]));
         return $program === 'BSIT' ? 'BSIT SD' : $program;
@@ -48,17 +51,20 @@ foreach ($sections as $secRow) {
     $courseSeen[$program] = true;
 }
 $courseTabs = $courseOrder;
+if (isset($courseSeen['IRREGULAR'])) {
+    $courseTabs[] = 'IRREGULAR';
+}
 if (isset($courseSeen['OTHER'])) {
     $courseTabs[] = 'OTHER';
 }
 
-render_header('Manage Sections', $user);
+render_header('Manage Blocks', $user);
 ?>
 
 <div class="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
   <div>
-    <h2 class="text-xl font-bold text-zinc-900 mb-1">Sections Management</h2>
-    <p class="text-zinc-600 text-sm">Add or remove sections for student registration.</p>
+    <h2 class="text-xl font-bold text-zinc-900 mb-1">Blocks Management</h2>
+    <p class="text-zinc-600 text-sm">Add or remove blocks for student registration.</p>
   </div>
   <!-- Buttons -->
   <div class="flex gap-3">
@@ -68,7 +74,7 @@ render_header('Manage Sections', $user);
     </button>
     <button id="openModalBtn" class="flex items-center gap-2 rounded-xl bg-orange-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-orange-700 transition shadow-sm">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
-      Add Section
+      Add Block
     </button>
   </div>
 </div>
@@ -82,7 +88,9 @@ render_header('Manage Sections', $user);
         $tabClass = $activeTab
           ? 'course-tab border-orange-500 text-orange-600 font-bold'
           : 'course-tab border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 font-semibold';
-        $tabLabel = $courseCode === 'OTHER' ? 'Other Courses' : $courseCode;
+        $tabLabel = $courseCode === 'OTHER'
+            ? 'Other Courses'
+            : ($courseCode === 'IRREGULAR' ? 'Irregular' : $courseCode);
       ?>
       <button
         type="button"
@@ -136,10 +144,10 @@ render_header('Manage Sections', $user);
       <!-- Top Row: Actions only -->
       <div class="flex items-start justify-end mb-4">
         <div class="flex items-center gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-200 bg-white/50 backdrop-blur-sm rounded-lg p-0.5">
-          <button class="btnEdit p-1.5 rounded-lg text-sky-600 hover:text-sky-700 hover:bg-sky-50 transition-colors" data-id="<?= htmlspecialchars($sid) ?>" data-raw-name="<?= htmlspecialchars($rawName) ?>" title="Edit Section">
+          <button class="btnEdit p-1.5 rounded-lg text-sky-600 hover:text-sky-700 hover:bg-sky-50 transition-colors" data-id="<?= htmlspecialchars($sid) ?>" data-raw-name="<?= htmlspecialchars($rawName) ?>" title="Edit Block">
              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
           </button>
-          <button class="btnDelete p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors" data-id="<?= htmlspecialchars($sid) ?>" title="Drop Section">
+          <button class="btnDelete p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors" data-id="<?= htmlspecialchars($sid) ?>" title="Drop Block">
              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
           </button>
         </div>
@@ -148,7 +156,7 @@ render_header('Manage Sections', $user);
       <!-- Section Content -->
       <div class="mt-auto">
         <h3 class="text-xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars($sectionName) ?></h3>
-        <p class="text-xs font-semibold tracking-wide text-zinc-500 mt-1 uppercase">Class Section</p>
+        <p class="text-xs font-semibold tracking-wide text-zinc-500 mt-1 uppercase">Class Block</p>
       </div>
 
       <!-- Decorative subtle element -->
@@ -162,13 +170,13 @@ render_header('Manage Sections', $user);
       <div class="w-16 h-16 rounded-full bg-zinc-50 border border-zinc-200 flex items-center justify-center mb-5 shadow-sm">
         <svg class="w-7 h-7 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
       </div>
-      <p class="text-zinc-800 font-bold text-lg mb-1">No sections exist</p>
-      <p class="text-zinc-500 text-sm max-w-sm">Click "Add Section" to create your first class directory element. They will appear here statically.</p>
+      <p class="text-zinc-800 font-bold text-lg mb-1">No blocks exist</p>
+      <p class="text-zinc-500 text-sm max-w-sm">Click "Add Block" to create your first class directory element. They will appear here statically.</p>
     </div>
   <?php endif; ?>
 </div>
 
-<!-- Add Section Modal Overlay -->
+<!-- Add Block Modal Overlay -->
 <div id="sectionModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none opacity-0 transition-opacity duration-300">
   <div id="modalBackdrop" class="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"></div>
   
@@ -178,7 +186,7 @@ render_header('Manage Sections', $user);
         <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
         </div>
-        <h3 id="modalTitle" class="text-xl font-bold text-zinc-900 tracking-tight">Add Section</h3>
+        <h3 id="modalTitle" class="text-xl font-bold text-zinc-900 tracking-tight">Add Block</h3>
       </div>
       
       <form id="sectionForm">
@@ -219,7 +227,7 @@ render_header('Manage Sections', $user);
 
         <!-- Block Selection -->
         <div class="mb-8">
-          <label class="block text-[13px] font-semibold text-zinc-700 mb-3">Block Section</label>
+          <label class="block text-[13px] font-semibold text-zinc-700 mb-3">Block Letter</label>
           <div class="flex flex-wrap gap-3" id="blockContainer">
             <?php 
               $blocks = ['A','B','C','D','E','F'];
@@ -234,7 +242,7 @@ render_header('Manage Sections', $user);
         </div>
 
         <button type="submit" id="btnSubmit" class="w-full rounded-xl bg-orange-600 text-white px-4 py-3.5 text-[15px] font-bold hover:bg-orange-700 transition-colors shadow-sm">
-          Save Section
+          Save Block
         </button>
         <div id="formMsg" class="text-sm font-medium text-center mt-3 empty:hidden"></div>
       </form>
@@ -342,9 +350,9 @@ render_header('Manage Sections', $user);
     document.getElementById('formMsg').textContent = '';
     
     if (isEdit) {
-      modalTitle.textContent = 'Edit Section';
+      modalTitle.textContent = 'Edit Block';
       sectionIdInput.value = id;
-      document.getElementById('btnSubmit').textContent = 'Update Section';
+      document.getElementById('btnSubmit').textContent = 'Update Block';
 
       let parseName = currentName.includes('-') ? currentName.split('-')[1].trim() : currentName;
       const match = parseName.match(/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*(\d)([A-Z])$/i);
@@ -358,12 +366,12 @@ render_header('Manage Sections', $user);
         setBlock("A");
       }
     } else {
-      modalTitle.textContent = 'Add Section';
+      modalTitle.textContent = 'Add Block';
       sectionIdInput.value = '';
       courseSel.value = "BSIT SD";
       yearSel.value = "1";
       setBlock("A"); // pre-select A initially for Add Mode 
-      document.getElementById('btnSubmit').textContent = 'Save Sections';
+      document.getElementById('btnSubmit').textContent = 'Save Blocks';
     }
   }
   
@@ -409,7 +417,7 @@ render_header('Manage Sections', $user);
     const activeBlocks = Array.from(document.querySelectorAll('.selected-block')).map(b => b.dataset.val);
     
     if (activeBlocks.length === 0) {
-      msg.textContent = 'Please select at least one block section';
+      msg.textContent = 'Please select at least one block';
       msg.className = 'text-sm font-bold text-center mt-3 text-red-500';
       return;
     }
@@ -442,9 +450,9 @@ render_header('Manage Sections', $user);
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed to save section');
+      if (!data.ok) throw new Error(data.error || 'Failed to save block');
       
-      msg.textContent = isEditMode ? 'Section updated!' : `${activeBlocks.length} Section(s) added!`;
+      msg.textContent = isEditMode ? 'Block updated!' : `${activeBlocks.length} Block(s) added!`;
       msg.className = 'text-sm font-bold text-center mt-3 text-emerald-500';
       btn.textContent = 'Success';
       btn.classList.add('bg-emerald-500');
@@ -454,14 +462,14 @@ render_header('Manage Sections', $user);
       msg.textContent = err.message || 'Failed';
       msg.className = 'text-sm font-bold text-center mt-3 text-red-500';
       btn.disabled = false;
-      btn.textContent = isEditMode ? 'Update Section' : 'Save Sections';
+      btn.textContent = isEditMode ? 'Update Block' : 'Save Blocks';
       btn.classList.remove('opacity-70', 'cursor-not-allowed');
     }
   });
 
   document.querySelectorAll('.btnDelete').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if(!confirm('Are you sure you want to delete this section? All students in this section will be affected.')) return;
+      if(!confirm('Are you sure you want to delete this block? All students in this block will be affected.')) return;
       const id = btn.dataset.id;
       const card = btn.closest('.group');
       
@@ -473,7 +481,7 @@ render_header('Manage Sections', $user);
           body: JSON.stringify({ id, action: 'delete', csrf_token: window.CSRF_TOKEN })
         });
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Failed to delete section');
+        if (!data.ok) throw new Error(data.error || 'Failed to delete block');
         
         if (card) {
           card.style.transition = 'opacity 0.3s, transform 0.3s';
@@ -493,8 +501,8 @@ render_header('Manage Sections', $user);
   if(resetSectionsBtn) {
     resetSectionsBtn.addEventListener('click', async () => {
       const confirmReset = confirm(
-        'GLOBAL RESET: Are you sure you want to reset the sections of ALL students?\n\n' +
-        'This will clear their section data and force them to re-select their Year & Section the next time they open the app. ' +
+        'GLOBAL RESET: Are you sure you want to reset the blocks of ALL students?\n\n' +
+        'This will clear their block data and force them to re-select their Year & Block the next time they open the app. ' +
         'Usually done at the end of the school year.'
       );
       if (!confirmReset) return;
@@ -512,7 +520,7 @@ render_header('Manage Sections', $user);
         const data = await res.json();
         if(!data.ok) throw new Error(data.error || 'Failed to perform global reset');
 
-        alert('Global Reset Successful. All students have been unassigned from their sections.');
+        alert('Global Reset Successful. All students have been unassigned from their blocks.');
         window.location.reload();
       } catch (err) {
         alert(err.message || 'Failed to perform global reset.');

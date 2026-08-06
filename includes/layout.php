@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/csrf.php';
+require_once __DIR__ . '/favicon.php';
 
 function render_header(string $title, ?array $user): void
 {
@@ -27,6 +28,7 @@ function render_header(string $title, ?array $user): void
     echo '<!doctype html><html lang="en"><head>';
     echo '<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>';
     echo '<title>' . htmlspecialchars($title) . ' — PulseCONNECT</title>';
+    render_favicon_tags();
     // Stable asset versions (filemtime) so browsers can cache CSS across navigations.
     // Avoid ?v=time() — that forced a full CSS redownload on every click.
     $assetVersion = static function (string $relativePath): string {
@@ -137,9 +139,9 @@ function render_header(string $title, ?array $user): void
     if ($role === 'admin') {
         echo '<div class="sidebar-section">Admin</div>';
 
-        echo '<a href="/admin_sections" data-tooltip="Sections" class="sidebar-link ' . (str_contains($title, 'Sections') ? 'active' : '') . '">';
+        echo '<a href="/admin_sections" data-tooltip="Blocks" class="sidebar-link ' . ((str_contains($title, 'Block') || str_contains($title, 'Section')) ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>';
-        echo '<span class="sidebar-label">Sections</span></a>';
+        echo '<span class="sidebar-label">Blocks</span></a>';
 
         echo '<a href="/admin_archive" data-tooltip="Archive" class="sidebar-link ' . (str_contains($title, 'Archive') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H2.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/></svg>';

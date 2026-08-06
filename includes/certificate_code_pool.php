@@ -93,6 +93,181 @@ function certificate_pool_code_already_on_certificate(string $code, string $stud
 }
 
 /**
+ * Where is this registrar code already used? Checks the code pool and both issued
+ * certificate tables. Rows inside the allowed scope (same event, and same seminar
+ * when $scopeSessionId is given) are ignored so re-saving your own design is fine.
+ *
+ * @return array{
+ *   taken:bool,
+ *   code:string,
+ *   event_id:string,
+ *   session_id:string,
+ *   event_title:string,
+ *   session_title:string,
+ *   issued:bool,
+ *   same_event:bool
+ * }
+ */
+function certificate_pool_code_usage(
+    string $code,
+    ?string $scopeEventId = null,
+    ?string $scopeSessionId = null
+): array {
+    $code = trim($code);
+    $scopeEventId = $scopeEventId !== null ? trim($scopeEventId) : '';
+    $scopeSessionId = $scopeSessionId !== null ? trim($scopeSessionId) : '';
+    $out = [
+        'taken' => false,
+        'code' => $code,
+        'event_id' => '',
+        'session_id' => '',
+        'event_title' => '',
+        'session_title' => '',
+        'issued' => false,
+        'same_event' => false,
+    ];
+    if ($code === '') {
+        return $out;
+    }
+
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $get = static function (string $url) use ($headers): array {
+        $res = function_exists('supabase_request_once')
+            ? supabase_request_once('GET', $url, $headers)
+            : supabase_request('GET', $url, $headers);
+        $rows = json_decode((string) ($res['body'] ?? ''), true);
+        return is_array($rows) ? $rows : [];
+    };
+
+    // Same code, different scope? Session-scoped designs must not share a code,
+    // so a hit in another seminar of the same event still counts as taken.
+    $inAllowedScope = static function (string $rowEvent, string $rowSession) use ($scopeEventId, $scopeSessionId): bool {
+        if ($scopeEventId === '' || $rowEvent !== $scopeEventId) {
+            return false;
+        }
+        if ($scopeSessionId !== '') {
+            return $rowSession === $scopeSessionId;
+        }
+        return $rowSession === '';
+    };
+
+    $claim = static function (array &$out, string $eventId, string $sessionId, bool $issued): void {
+        $out['taken'] = true;
+        $out['event_id'] = $eventId;
+        $out['session_id'] = $sessionId;
+        $out['issued'] = $out['issued'] || $issued;
+    };
+
+    foreach ($get(
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+            . '?select=event_id,session_id,status&code=eq.' . rawurlencode($code) . '&limit=20'
+    ) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $rowEvent = trim((string) ($row['event_id'] ?? ''));
+        $rowSession = trim((string) ($row['session_id'] ?? ''));
+        if ($inAllowedScope($rowEvent, $rowSession)) {
+            continue;
+        }
+        $claim($out, $rowEvent, $rowSession, (string) ($row['status'] ?? '') === 'assigned');
+        break;
+    }
+
+    if (!$out['taken']) {
+        foreach ($get(
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificates'
+                . '?select=event_id,session_id,event_title,session_title'
+                . '&certificate_code=eq.' . rawurlencode($code) . '&limit=20'
+        ) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $rowEvent = trim((string) ($row['event_id'] ?? ''));
+            $rowSession = trim((string) ($row['session_id'] ?? ''));
+            if ($inAllowedScope($rowEvent, $rowSession)) {
+                continue;
+            }
+            $claim($out, $rowEvent, $rowSession, true);
+            $out['event_title'] = trim((string) ($row['event_title'] ?? ''));
+            $out['session_title'] = trim((string) ($row['session_title'] ?? ''));
+            break;
+        }
+    }
+
+    if (!$out['taken']) {
+        foreach ($get(
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
+                . '?select=event_id,event_title&certificate_code=eq.' . rawurlencode($code) . '&limit=20'
+        ) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $rowEvent = trim((string) ($row['event_id'] ?? ''));
+            if ($inAllowedScope($rowEvent, '')) {
+                continue;
+            }
+            $claim($out, $rowEvent, '', true);
+            $out['event_title'] = trim((string) ($row['event_title'] ?? ''));
+            break;
+        }
+    }
+
+    if (!$out['taken']) {
+        return $out;
+    }
+
+    $out['same_event'] = $scopeEventId !== '' && $out['event_id'] === $scopeEventId;
+
+    if ($out['event_title'] === '' && $out['event_id'] !== '') {
+        $rows = $get(
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?select=title&id=eq.' . rawurlencode($out['event_id']) . '&limit=1'
+        );
+        $out['event_title'] = isset($rows[0]['title']) ? trim((string) $rows[0]['title']) : '';
+    }
+    if ($out['session_title'] === '' && $out['session_id'] !== '') {
+        $rows = $get(
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+                . '?select=title,topic&id=eq.' . rawurlencode($out['session_id']) . '&limit=1'
+        );
+        $sess = isset($rows[0]) && is_array($rows[0]) ? $rows[0] : [];
+        $out['session_title'] = trim((string) (($sess['title'] ?? '') ?: ($sess['topic'] ?? '')));
+    }
+
+    return $out;
+}
+
+/**
+ * Teacher-facing message for a code that is already in use elsewhere.
+ *
+ * @param array<string,mixed> $usage result of certificate_pool_code_usage()
+ */
+function certificate_pool_code_conflict_message(array $usage, string $what = 'certificate code'): string
+{
+    $code = trim((string) ($usage['code'] ?? ''));
+    $eventTitle = trim((string) ($usage['event_title'] ?? ''));
+    $sessionTitle = trim((string) ($usage['session_title'] ?? ''));
+    $sameEvent = (bool) ($usage['same_event'] ?? false);
+
+    $where = $eventTitle !== '' ? '"' . $eventTitle . '"' : 'another event';
+    if ($sameEvent) {
+        $where = $sessionTitle !== ''
+            ? 'another seminar of this event (' . $sessionTitle . ')'
+            : 'this event';
+    } elseif ($sessionTitle !== '') {
+        $where .= ' (' . $sessionTitle . ')';
+    }
+
+    return 'The ' . $what . ' ' . ($code !== '' ? $code . ' ' : '')
+        . 'is already used in ' . $where . '. Change the code before saving.';
+}
+
+/**
  * Reuse a code already assigned to this student in the same pool (idempotent),
  * but only if it is not already written onto a certificate row.
  * Prevents double-submit from burning a second FIFO code.
@@ -207,34 +382,71 @@ function certificate_pool_claim_in_scope(string $eventId, string $studentId, ?st
     $attempts = max(1, min(8, $maxAttempts));
 
     for ($i = 0; $i < $attempts; $i++) {
+        $linkedSeed = certificate_pool_read_seed_from_linked_template($eventId, $sessionId);
+        $linkedCode = trim((string) ($linkedSeed['code'] ?? ''));
+        $linkedParsed = $linkedCode !== '' ? certificate_pool_parse_sequence($linkedCode) : null;
+
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
             . '?select=id,code,status'
             . '&event_id=eq.' . rawurlencode($eventId)
             . '&status=eq.available'
             . certificate_pool_scope_filter($sessionId)
             . '&order=sort_order.asc,created_at.asc'
-            . '&limit=1';
+            . '&limit=20';
         $res = function_exists('supabase_request_once')
             ? supabase_request_once('GET', $url, $readHeaders)
             : supabase_request('GET', $url, $readHeaders);
         $rows = json_decode((string) ($res['body'] ?? ''), true);
-        $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
-        if (!$row) {
-            // Pool empty → try seed from linked canvas (usually event-level).
-            certificate_pool_ensure_seed_from_linked_template($eventId, $sessionId);
-            if ($sessionId !== null && $sessionId !== '') {
-                // Session pool may still be empty; mint only if this seminar has its own seed.
-                // Otherwise claim_next falls back to the shared event-level pool.
-                return certificate_pool_mint_next_sequential($eventId, $studentId, $sessionId);
+        $row = null;
+        if (is_array($rows)) {
+            foreach ($rows as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+                $candCode = trim((string) ($candidate['code'] ?? ''));
+                if ($candCode === '') {
+                    continue;
+                }
+                // Prefer the current linked seed / same prefix; skip leftover …01.* after a re-link to …03.*.
+                if ($linkedParsed !== null) {
+                    $candParsed = certificate_pool_parse_sequence($candCode);
+                    if ($candParsed === null || $candParsed['prefix'] !== $linkedParsed['prefix']) {
+                        continue;
+                    }
+                }
+                $row = $candidate;
+                break;
             }
+        }
+        if (!$row) {
+            // Pool empty (or only stale wrong-prefix rows) → insert linked seed, then claim it.
+            // Always re-query after seeding so the FIRST participant receives the seed itself.
+            certificate_pool_ensure_seed_from_linked_template($eventId, $sessionId);
             $retry = function_exists('supabase_request_once')
                 ? supabase_request_once('GET', $url, $readHeaders)
                 : supabase_request('GET', $url, $readHeaders);
             $retryRows = json_decode((string) ($retry['body'] ?? ''), true);
-            $row = is_array($retryRows) && isset($retryRows[0]) && is_array($retryRows[0])
-                ? $retryRows[0]
-                : null;
+            if (is_array($retryRows)) {
+                foreach ($retryRows as $candidate) {
+                    if (!is_array($candidate)) {
+                        continue;
+                    }
+                    $candCode = trim((string) ($candidate['code'] ?? ''));
+                    if ($candCode === '') {
+                        continue;
+                    }
+                    if ($linkedParsed !== null) {
+                        $candParsed = certificate_pool_parse_sequence($candCode);
+                        if ($candParsed === null || $candParsed['prefix'] !== $linkedParsed['prefix']) {
+                            continue;
+                        }
+                    }
+                    $row = $candidate;
+                    break;
+                }
+            }
             if (!$row) {
+                // Seed could not be stored as available — mint starting AT the seed serial.
                 return certificate_pool_mint_next_sequential($eventId, $studentId, $sessionId);
             }
         }
@@ -709,6 +921,22 @@ function certificate_pool_ensure_sequence_import(
     $eventId = trim($eventId);
     $sessionId = $sessionId !== null ? trim($sessionId) : '';
     $headers = certificate_pool_headers();
+
+    // Reuse this scope's auto-sequence batch instead of creating one per minted code.
+    $lookupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_imports'
+        . '?select=id&event_id=eq.' . rawurlencode($eventId)
+        . certificate_pool_scope_filter($sessionId !== '' ? $sessionId : null)
+        . '&source_filename=eq.auto-sequence'
+        . '&order=created_at.desc'
+        . '&limit=1';
+    $lookupRes = function_exists('supabase_request_once')
+        ? supabase_request_once('GET', $lookupUrl, $headers)
+        : supabase_request('GET', $lookupUrl, $headers);
+    $lookupRows = json_decode((string) ($lookupRes['body'] ?? ''), true);
+    if (is_array($lookupRows) && isset($lookupRows[0]['id'])) {
+        return (string) $lookupRows[0]['id'];
+    }
+
     $payload = [
         'event_id' => $eventId,
         'session_id' => $sessionId !== '' ? $sessionId : null,
@@ -899,6 +1127,138 @@ function certificate_pool_read_seed_from_linked_template(string $eventId, ?strin
 }
 
 /**
+ * Highest serial already used for this prefix across ALL events (unique(code) is global).
+ */
+function certificate_pool_global_max_serial(string $prefix): ?int
+{
+    $prefix = trim($prefix);
+    if ($prefix === '') {
+        return null;
+    }
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+        . '?select=code'
+        . '&code=like.' . rawurlencode($prefix) . '*'
+        . '&limit=500';
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $res = function_exists('supabase_request_once')
+        ? supabase_request_once('GET', $url, $headers)
+        : supabase_request('GET', $url, $headers);
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (!is_array($rows)) {
+        return null;
+    }
+    $max = null;
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $parsed = certificate_pool_parse_sequence((string) ($row['code'] ?? ''));
+        if ($parsed === null || $parsed['prefix'] !== $prefix) {
+            continue;
+        }
+        if ($max === null || $parsed['number'] > $max) {
+            $max = $parsed['number'];
+        }
+    }
+    return $max;
+}
+
+function certificate_pool_code_globally_taken(string $code): bool
+{
+    $code = trim($code);
+    if ($code === '') {
+        return false;
+    }
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+        . '?select=id&code=eq.' . rawurlencode($code) . '&limit=1';
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $res = function_exists('supabase_request_once')
+        ? supabase_request_once('GET', $url, $headers)
+        : supabase_request('GET', $url, $headers);
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    return is_array($rows) && isset($rows[0]);
+}
+
+/**
+ * Cursor for auto-count: ALWAYS driven by the linked seminar/event design seed.
+ * Only the last digit changes (…03.01 → …03.02). Stale pool rows from an older
+ * seed prefix (e.g. leftover …01.*) are ignored so a re-link takes effect.
+ *
+ * @return array{prefix:string,next:int,width:int,import_id:string,seed:string}|null
+ */
+function certificate_pool_linked_seed_cursor(string $eventId, ?string $sessionId = null): ?array
+{
+    $read = certificate_pool_read_seed_from_linked_template($eventId, $sessionId);
+    $seed = trim((string) ($read['code'] ?? ''));
+    if ($seed === '') {
+        return null;
+    }
+    $parsed = certificate_pool_parse_sequence($seed);
+    if ($parsed === null) {
+        return null;
+    }
+
+    $prefix = $parsed['prefix'];
+    $width = $parsed['width'];
+    $start = $parsed['number'];
+    $importId = '';
+
+    // Max serial already issued in THIS event/session under the current seed prefix.
+    $eventId = trim($eventId);
+    $sessionId = $sessionId !== null ? trim($sessionId) : '';
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+        . '?select=id,code,import_id'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . certificate_pool_scope_filter($sessionId !== '' ? $sessionId : null)
+        . '&limit=500';
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $res = function_exists('supabase_request_once')
+        ? supabase_request_once('GET', $url, $headers)
+        : supabase_request('GET', $url, $headers);
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    $maxInScope = null;
+    if (is_array($rows)) {
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $p = certificate_pool_parse_sequence((string) ($row['code'] ?? ''));
+            if ($p === null || $p['prefix'] !== $prefix) {
+                continue; // ignore leftover codes from a previous seed/link
+            }
+            if ($importId === '') {
+                $importId = trim((string) ($row['import_id'] ?? ''));
+            }
+            if ($maxInScope === null || $p['number'] > $maxInScope) {
+                $maxInScope = $p['number'];
+            }
+        }
+    }
+
+    // First participant gets the seed itself; later ones bump the last digit.
+    $next = $maxInScope === null ? $start : ($maxInScope + 1);
+    return [
+        'prefix' => $prefix,
+        'next' => $next,
+        'width' => $width,
+        'import_id' => $importId,
+        'seed' => $seed,
+    ];
+}
+
+/**
  * If the pool is empty, insert a seed from the linked template canvas (when present).
  * Returns true when the pool already had codes or a seed was inserted.
  *
@@ -913,15 +1273,57 @@ function certificate_pool_ensure_seed_from_linked_template(string $eventId, ?str
         return false;
     }
     $scopeSession = $sessionId !== '' ? $sessionId : null;
-    if (certificate_pool_has_any_code($eventId, $scopeSession)) {
-        return true;
-    }
 
     $read = certificate_pool_read_seed_from_linked_template($eventId, $scopeSession);
     $seed = trim((string) ($read['code'] ?? ''));
     if ($seed === '') {
+        // No linked seed — fall back to "any pool row exists" for legacy events.
+        return certificate_pool_has_any_code($eventId, $scopeSession);
+    }
+    $seedParsed = certificate_pool_parse_sequence($seed);
+
+    // Already have an AVAILABLE row for the current seed (or same prefix)? Claim that.
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+        . '?select=id,code,status'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . certificate_pool_scope_filter($scopeSession)
+        . '&status=eq.available'
+        . '&limit=50';
+    $headers = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $res = function_exists('supabase_request_once')
+        ? supabase_request_once('GET', $url, $headers)
+        : supabase_request('GET', $url, $headers);
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (is_array($rows)) {
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $code = trim((string) ($row['code'] ?? ''));
+            if ($code === '') {
+                continue;
+            }
+            if (strcasecmp($code, $seed) === 0) {
+                return true;
+            }
+            if ($seedParsed !== null) {
+                $p = certificate_pool_parse_sequence($code);
+                if ($p !== null && $p['prefix'] === $seedParsed['prefix']) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // unique(code) is global — don't create an orphan import batch when another event owns this seed.
+    if (certificate_pool_code_globally_taken($seed)) {
         return false;
     }
+
     $createdBy = trim((string) ($read['created_by'] ?? ''));
     if ($createdBy === '') {
         $evUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
@@ -954,7 +1356,8 @@ function certificate_pool_ensure_seed_from_linked_template(string $eventId, ?str
 
 /**
  * Mint the next sequential registrar code and assign it to the student.
- * Used when the FIFO pool is empty but a seed like LU-AA-FO-180-01 was linked.
+ * Driven by the linked design seed: first free last-digit under that prefix.
+ * Example: seed LU-AA-CE-199.03.01 → first gets …03.01, second …03.02.
  */
 function certificate_pool_mint_next_sequential(string $eventId, string $studentId, ?string $sessionId = null): ?string
 {
@@ -965,15 +1368,13 @@ function certificate_pool_mint_next_sequential(string $eventId, string $studentI
         return null;
     }
 
-    $cursor = certificate_pool_sequence_cursor($eventId, $sessionId !== '' ? $sessionId : null);
+    $cursor = certificate_pool_linked_seed_cursor($eventId, $sessionId !== '' ? $sessionId : null);
     if ($cursor === null) {
-        // Linked design may already show LU-…-01 on canvas even if Import never saved a seed.
-        if (certificate_pool_ensure_seed_from_linked_template($eventId, $sessionId !== '' ? $sessionId : null)) {
-            $cursor = certificate_pool_sequence_cursor($eventId, $sessionId !== '' ? $sessionId : null);
+        // Legacy fallback: pool rows only (no linked canvas seed).
+        $cursor = certificate_pool_sequence_cursor($eventId, $sessionId !== '' ? $sessionId : null);
+        if ($cursor === null) {
+            return null;
         }
-    }
-    if ($cursor === null) {
-        return null;
     }
 
     $importId = certificate_pool_ensure_sequence_import(
@@ -987,7 +1388,7 @@ function certificate_pool_mint_next_sequential(string $eventId, string $studentI
 
     $headers = certificate_pool_headers();
     // Retry a few serial numbers if a global unique(code) collision occurs.
-    for ($i = 0; $i < 8; $i++) {
+    for ($i = 0; $i < 12; $i++) {
         $number = $cursor['next'] + $i;
         $code = certificate_pool_format_sequence($cursor['prefix'], $number, $cursor['width']);
         $payload = [

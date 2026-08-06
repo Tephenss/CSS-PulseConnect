@@ -427,11 +427,39 @@ switch ($action) {
         $res = supabase_request(
             'POST',
             rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table,
-            array_merge($writeHeaders, ['Prefer: resolution=merge-duplicates,return=minimal']),
+            // Prefer is already on $writeHeaders — do not merge a second Prefer line.
+            $writeHeaders,
             json_encode($normalized, JSON_UNESCAPED_SLASHES)
         );
+        $ok = (bool) ($res['ok'] ?? false);
+        $status = (int) ($res['status'] ?? 0);
+        $bodyLower = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        // Idempotent re-submit: unique(question_id, student_id) conflict means
+        // answers are already saved — treat as success (stops HTTP 500 loops).
+        if (
+            !$ok
+            && (
+                $status === 409
+                || str_contains($bodyLower, 'duplicate')
+                || str_contains($bodyLower, 'unique')
+                || str_contains($bodyLower, 'conflict')
+            )
+        ) {
+            $ok = true;
+        }
+        if (!$ok) {
+            json_response([
+                'ok' => false,
+                'error' => build_error(
+                    $res['body'] ?? null,
+                    $status,
+                    $res['error'] ?? null,
+                    'Evaluation submission failed'
+                ),
+            ], $status >= 400 ? $status : 500);
+        }
         // Certificate issuance is a separate BFF action after full eval submit.
-        json_response(['ok' => (bool) $res['ok']], $res['ok'] ? 200 : 500);
+        json_response(['ok' => true], 200);
         break;
     }
 

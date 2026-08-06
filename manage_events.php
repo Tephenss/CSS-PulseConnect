@@ -5383,7 +5383,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       if (!data.ok) throw new Error(data.error || 'Failed to publish event.');
       if (data.push) {
         console.log('[publish push]', data.push);
-        if (data.push.attempted && !data.push.fcm_ok) {
+        const sent = Number(data.push.fcm_sent ?? 0);
+        const failed = Number(data.push.fcm_failed ?? 0);
+        // Only alert when nothing delivered. Stale NotRegistered tokens often fail while
+        // other devices (and inbox) still succeed — that used to look like a full failure.
+        if (data.push.attempted && !data.push.fcm_ok && sent === 0) {
           const detail = [
             'Event published, but push notification failed.',
             'targets=' + (data.push.targets ?? 0),
@@ -5393,6 +5397,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data.push.detail ? ('detail=' + data.push.detail) : null,
           ].filter(Boolean).join('\n');
           alert(detail);
+        } else if (data.push.partial || (sent > 0 && failed > 0)) {
+          console.warn('[publish push] delivered with some stale tokens cleaned up', { sent, failed });
         }
       }
       window.location.reload();

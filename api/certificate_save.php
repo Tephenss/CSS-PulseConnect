@@ -8,6 +8,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/certificate_code_pool.php';
 
 $user = require_role(['teacher']);
 $input = require_post_json();
@@ -15,6 +16,7 @@ csrf_validate($input['csrf_token'] ?? null);
 
 $event_id = trim((string) ($input['event_id'] ?? ''));
 $session_id = trim((string) ($input['session_id'] ?? ''));
+$template_id = trim((string) ($input['template_id'] ?? ''));
 $template_scope = strtolower(trim((string) ($input['template_scope'] ?? 'library')));
 $name = trim((string) ($input['title'] ?? 'Custom Layout'));
 $canvas_state = $input['canvas_state'] ?? null;
@@ -94,6 +96,24 @@ if (json_last_error() !== JSON_ERROR_NONE && is_string($canvas_state)) {
     $payload['canvas_state'] = [];
 }
 
+// A printed registrar code becomes a real certificate code later — block a design
+// that reuses one already taken by another event/seminar (unique(code) is global).
+$seedOnDesign = certificate_pool_extract_seed_from_canvas($payload['canvas_state']);
+if (is_string($seedOnDesign) && $seedOnDesign !== '') {
+    $usage = certificate_pool_code_usage(
+        $seedOnDesign,
+        $template_scope === 'library' ? null : $event_id,
+        $template_scope === 'session' ? $session_id : null
+    );
+    if (($usage['taken'] ?? false) === true) {
+        json_response([
+            'ok' => false,
+            'error' => certificate_pool_code_conflict_message($usage),
+            'code_conflict' => $usage,
+        ], 409);
+    }
+}
+
 $urlPath = '/rest/v1/certificate_templates';
 if ($template_scope === 'session') {
     $urlPath = '/rest/v1/event_session_certificate_templates';
@@ -117,6 +137,40 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
     'Prefer: return=representation',
 ];
+
+// If client already has a template id, update in place — never create a second library card.
+if ($template_id !== '') {
+    $table = $template_scope === 'session' ? 'event_session_certificate_templates' : 'certificate_templates';
+    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+        . '?select=id,created_by&id=eq.' . rawurlencode($template_id) . '&limit=1';
+    $checkRes = supabase_request('GET', $checkUrl, $headersRead);
+    $checkRows = json_decode((string) ($checkRes['body'] ?? ''), true);
+    $existing = is_array($checkRows) && isset($checkRows[0]) && is_array($checkRows[0]) ? $checkRows[0] : null;
+    if ($existing) {
+        $owner = trim((string) ($existing['created_by'] ?? ''));
+        if ($owner !== '' && $owner !== $userId) {
+            json_response(['ok' => false, 'error' => 'Forbidden'], 403);
+        }
+        $patchPayload = $payload;
+        // Don't force created_by overwrite on update unless empty.
+        if ($owner !== '') {
+            unset($patchPayload['created_by']);
+        }
+        $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table . '?id=eq.' . rawurlencode($template_id);
+        $res = supabase_request('PATCH', $patchUrl, $headers, json_encode($patchPayload, JSON_UNESCAPED_SLASHES));
+        if (!$res['ok']) {
+            $err = build_error($res['body'], $res['status'], $res['error'], 'Failed to update certificate template.');
+            json_response(['ok' => false, 'error' => $err], 500);
+        }
+        json_response([
+            'ok' => true,
+            'template_id' => $template_id,
+            'template_scope' => $template_scope === 'library' ? 'library' : $template_scope,
+            'session_id' => $session_id,
+            'updated' => true,
+        ]);
+    }
+}
 
 $res = supabase_request('POST', $url, $headers, json_encode($payload));
 

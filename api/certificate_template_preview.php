@@ -18,6 +18,10 @@ $user = require_role(['teacher']);
 $userId = trim((string) ($user['id'] ?? ''));
 $templateId = trim((string) ($_GET['template_id'] ?? ''));
 
+// Import/Link must always show the live design — never a cached canvas.
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+
 if ($templateId === '') {
     json_response(['ok' => false, 'error' => 'template_id required'], 400);
 }

@@ -97,27 +97,42 @@ function auth_enforce_daily_web_verification(array $user): void
         $verifiedAt = (string) $rows[0]['verified_at'];
     }
 
-    // Older Hostinger deploys may still have device_trust_is_trusted only.
-    if (function_exists('device_trust_status')) {
-        $trustStatus = device_trust_status($userId, $trustKey);
-        if ($trustStatus === null) {
-            error_log('auth_enforce_daily_web_verification: trusted_devices lookup failed; keeping session');
-            return;
-        }
-    } else {
-        $trustStatus = device_trust_is_trusted($userId, $trustKey);
-    }
-
     $verifiedToday = auth_verified_on_current_ph_day($verifiedAt);
 
-    if ($verifiedToday && $trustStatus === true) {
-        $_SESSION['web_daily_ok_user'] = $userId;
-        $_SESSION['web_daily_ok_trust'] = $trustKey;
-        $_SESSION['web_daily_ok_ph_day'] = $phDay;
-        $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
-        // Touch once per successful revalidation window (not every sidebar click).
-        device_trust_touch($userId, $trustKey);
-        return;
+    // Cannot resolve client IP (proxy glitch) — do not treat as "new network" if
+    // the Manila daily OTP is still valid for today.
+    if ($trustKey === '') {
+        if ($verifiedToday) {
+            $_SESSION['web_daily_ok_user'] = $userId;
+            $_SESSION['web_daily_ok_trust'] = '';
+            $_SESSION['web_daily_ok_ph_day'] = $phDay;
+            $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
+            return;
+        }
+        $why = 'day';
+    } else {
+        // Older Hostinger deploys may still have device_trust_is_trusted only.
+        if (function_exists('device_trust_status')) {
+            $trustStatus = device_trust_status($userId, $trustKey);
+            if ($trustStatus === null) {
+                error_log('auth_enforce_daily_web_verification: trusted_devices lookup failed; keeping session');
+                return;
+            }
+        } else {
+            $trustStatus = device_trust_is_trusted($userId, $trustKey);
+        }
+
+        if ($verifiedToday && $trustStatus === true) {
+            $_SESSION['web_daily_ok_user'] = $userId;
+            $_SESSION['web_daily_ok_trust'] = $trustKey;
+            $_SESSION['web_daily_ok_ph_day'] = $phDay;
+            $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
+            // Touch once per successful revalidation window (not every sidebar click).
+            device_trust_touch($userId, $trustKey);
+            return;
+        }
+
+        $why = !$verifiedToday ? 'day' : 'ip';
     }
 
     unset(
@@ -141,7 +156,9 @@ function auth_enforce_daily_web_verification(array $user): void
     }
     session_destroy();
 
-    header('Location: /login?reverify=1');
+    $why = isset($why) && in_array($why, ['day', 'ip'], true) ? $why : 'unknown';
+    error_log('auth_enforce_daily_web_verification: forcing reverify user=' . $userId . ' why=' . $why . ' trust=' . $trustKey);
+    header('Location: /login?reverify=1&why=' . rawurlencode($why));
     exit;
 }
 

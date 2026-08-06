@@ -11,7 +11,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 
-$user = require_role(['teacher', 'admin']);
+$user = require_role(['teacher']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
@@ -30,33 +30,31 @@ if (!in_array($fieldType, ['text', 'rating'], true)) {
 }
 if ($sortOrder < 0) $sortOrder = 0;
 
-// Optional: teacher can only manage their own events.
-if ((string) ($user['role'] ?? 'teacher') === 'teacher') {
-    if ($sessionId !== '') {
-        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions?select=id,event_id,events(created_by)&'
-            . 'id=eq.' . rawurlencode($sessionId) . '&limit=1';
-    } else {
-        $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,created_by&'
-            . 'id=eq.' . rawurlencode($eventId) . '&limit=1';
-    }
-    $headers = [
-        'Accept: application/json',
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY,
-    ];
-    $checkRes = supabase_request('GET', $checkUrl, $headers);
-    $checkRows = $checkRes['ok'] ? json_decode((string) $checkRes['body'], true) : null;
-    $ev = is_array($checkRows) && isset($checkRows[0]) ? $checkRows[0] : null;
-    if (!is_array($ev)) json_response(['ok' => false, 'error' => 'Event lookup failed'], 404);
-    $ownerId = $sessionId !== ''
-        ? (string) (($ev['events']['created_by'] ?? '') ?? '')
-        : (string) ($ev['created_by'] ?? '');
-    if ($ownerId !== (string) ($user['id'] ?? '')) {
-        json_response(['ok' => false, 'error' => 'Forbidden'], 403);
-    }
-    if ($sessionId !== '' && $eventId === '') {
-        $eventId = (string) ($ev['event_id'] ?? '');
-    }
+// Only the teacher who created the event may manage questions.
+if ($sessionId !== '') {
+    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions?select=id,event_id,events(created_by)&'
+        . 'id=eq.' . rawurlencode($sessionId) . '&limit=1';
+} else {
+    $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,created_by&'
+        . 'id=eq.' . rawurlencode($eventId) . '&limit=1';
+}
+$headers = [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+$checkRes = supabase_request('GET', $checkUrl, $headers);
+$checkRows = $checkRes['ok'] ? json_decode((string) $checkRes['body'], true) : null;
+$ev = is_array($checkRows) && isset($checkRows[0]) ? $checkRows[0] : null;
+if (!is_array($ev)) json_response(['ok' => false, 'error' => 'Event lookup failed'], 404);
+$ownerId = $sessionId !== ''
+    ? (string) (($ev['events']['created_by'] ?? '') ?? '')
+    : (string) ($ev['created_by'] ?? '');
+if ($ownerId !== (string) ($user['id'] ?? '')) {
+    json_response(['ok' => false, 'error' => 'Forbidden'], 403);
+}
+if ($sessionId !== '' && $eventId === '') {
+    $eventId = (string) ($ev['event_id'] ?? '');
 }
 
 $payload = $sessionId !== ''

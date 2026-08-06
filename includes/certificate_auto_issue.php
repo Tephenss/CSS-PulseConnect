@@ -771,6 +771,7 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         // Load all session certs for this event's sessions.
         $sessionIds = [];
         $sessionTitles = [];
+        $sessionOrder = [];
         foreach ($sessions as $s) {
             if (!is_array($s)) {
                 continue;
@@ -780,6 +781,7 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                 continue;
             }
             $sessionIds[] = $sid;
+            $sessionOrder[$sid] = count($sessionIds);
             $sessionTitles[$sid] = function_exists('build_session_display_name')
                 ? build_session_display_name($s)
                 : trim((string) (($s['topic'] ?? '') ?: ($s['title'] ?? 'Seminar')));
@@ -827,6 +829,7 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                     $receivedSessions[] = [
                         'session_id' => $sessId,
                         'session_title' => $sessionTitles[$sessId] ?? 'Seminar',
+                        'sort_order' => $sessionOrder[$sessId] ?? 999,
                         'certificate_code' => (string) ($c['certificate_code'] ?? ''),
                         'issued_at' => (string) ($c['issued_at'] ?? ''),
                     ];
@@ -834,9 +837,15 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                     $missingSessions[] = [
                         'session_id' => $sessId,
                         'session_title' => $sessionTitles[$sessId] ?? 'Seminar',
+                        'sort_order' => $sessionOrder[$sessId] ?? 999,
                     ];
                 }
             }
+
+            // Keep seminar order (Seminar 1 then Seminar 2) so codes read …05.01/…06.01.
+            $bySeminarOrder = static fn (array $a, array $b): int => ((int) ($a['sort_order'] ?? 999)) <=> ((int) ($b['sort_order'] ?? 999));
+            usort($receivedSessions, $bySeminarOrder);
+            usort($missingSessions, $bySeminarOrder);
 
             $profile = $namesById[$studentId] ?? ['name' => 'Student', 'email' => ''];
             if ($receivedSessions !== []) {
@@ -934,6 +943,22 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         // Canvas may still hold a seed even if Import never wrote the pool.
         $fromCanvas = certificate_pool_read_seed_from_linked_template($eventId, null);
         $poolReady = trim((string) ($fromCanvas['code'] ?? '')) !== '';
+    }
+    if (!$poolReady && $usesSessions && is_array($sessions)) {
+        foreach ($sessions as $sess) {
+            if (!is_array($sess)) {
+                continue;
+            }
+            $sid = trim((string) ($sess['id'] ?? ''));
+            if ($sid === '') {
+                continue;
+            }
+            $sessCanvas = certificate_pool_read_seed_from_linked_template($eventId, $sid);
+            if (trim((string) ($sessCanvas['code'] ?? '')) !== '') {
+                $poolReady = true;
+                break;
+            }
+        }
     }
 
     $missingReason = $poolReady

@@ -144,9 +144,32 @@ function mobile_scan_can_scan_event(string $userId, string $role, string $eventI
     return is_array($assistRows) && count($assistRows) > 0;
 }
 
+function mobile_scan_format_participant_name(array $user): string
+{
+    $last = trim((string) ($user['last_name'] ?? ''));
+    $first = trim((string) ($user['first_name'] ?? ''));
+    $middle = trim((string) ($user['middle_name'] ?? ''));
+    $suffix = trim((string) ($user['suffix'] ?? ''));
+    $given = trim(implode(' ', array_values(array_filter(
+        [$first, $middle],
+        static fn($p) => $p !== ''
+    ))));
+    if ($last === '' && $given === '') {
+        return $suffix;
+    }
+    if ($last === '') {
+        return $suffix !== '' ? ($given . ' ' . $suffix) : $given;
+    }
+    $name = $given !== '' ? ($last . ', ' . $given) : $last;
+    if ($suffix !== '') {
+        $name .= ' ' . $suffix;
+    }
+    return $name;
+}
+
 function mobile_scan_load_ticket(string $ticketId, string $token, array $headers): ?array
 {
-    $select = 'id,token,registration_id,event_registrations(event_id,student_id,users:student_id(id,first_name,middle_name,last_name,suffix,photo_url))';
+    $select = 'id,token,registration_id,event_registrations(event_id,student_id,users:student_id(id,student_id,first_name,middle_name,last_name,suffix,photo_url))';
     if ($ticketId !== '') {
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets'
             . '?select=' . rawurlencode($select)
@@ -179,51 +202,47 @@ function mobile_scan_participant_from_ticket(array $ticket, array $headers): arr
 {
     $name = '';
     $photo = '';
-    $studentId = '';
+    $userUuid = '';
+    $studentNo = '';
     $reg = $ticket['event_registrations'] ?? null;
     if (is_array($reg)) {
-        $studentId = (string) ($reg['student_id'] ?? '');
+        $userUuid = trim((string) ($reg['student_id'] ?? ''));
         $user = $reg['users'] ?? null;
         if (is_array($user)) {
-            $parts = array_filter([
-                trim((string) ($user['first_name'] ?? '')),
-                trim((string) ($user['middle_name'] ?? '')),
-                trim((string) ($user['last_name'] ?? '')),
-                trim((string) ($user['suffix'] ?? '')),
-            ], static fn($p) => $p !== '');
-            $name = implode(' ', $parts);
+            $name = mobile_scan_format_participant_name($user);
             $photo = trim((string) ($user['photo_url'] ?? ''));
-            if ($studentId === '') {
-                $studentId = (string) ($user['id'] ?? '');
+            $studentNo = trim((string) ($user['student_id'] ?? ''));
+            if ($userUuid === '') {
+                $userUuid = trim((string) ($user['id'] ?? ''));
             }
         }
     }
-    if (($name === '' || $photo === '') && $studentId !== '') {
+    if (($name === '' || $photo === '' || $studentNo === '') && $userUuid !== '') {
         $uUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
-            . '?select=id,first_name,middle_name,last_name,suffix,photo_url'
-            . '&id=eq.' . rawurlencode($studentId) . '&limit=1';
+            . '?select=id,student_id,first_name,middle_name,last_name,suffix,photo_url'
+            . '&id=eq.' . rawurlencode($userUuid) . '&limit=1';
         $uRes = supabase_request('GET', $uUrl, $headers);
         $uRows = json_decode((string) ($uRes['body'] ?? ''), true);
         $user = is_array($uRows) && isset($uRows[0]) ? $uRows[0] : null;
         if (is_array($user)) {
             if ($name === '') {
-                $parts = array_filter([
-                    trim((string) ($user['first_name'] ?? '')),
-                    trim((string) ($user['middle_name'] ?? '')),
-                    trim((string) ($user['last_name'] ?? '')),
-                    trim((string) ($user['suffix'] ?? '')),
-                ], static fn($p) => $p !== '');
-                $name = implode(' ', $parts);
+                $name = mobile_scan_format_participant_name($user);
             }
             if ($photo === '') {
                 $photo = trim((string) ($user['photo_url'] ?? ''));
+            }
+            if ($studentNo === '') {
+                $studentNo = trim((string) ($user['student_id'] ?? ''));
             }
         }
     }
     return [
         'participant_name' => $name,
         'participant_photo_url' => $photo,
-        'participant_student_id' => $studentId,
+        // School student number for UI; keep UUID only as fallback when no. missing.
+        'participant_student_id' => $studentNo !== '' ? $studentNo : $userUuid,
+        'participant_student_no' => $studentNo,
+        'participant_user_id' => $userUuid,
     ];
 }
 
@@ -456,6 +475,7 @@ $success = static function (
         'participant_name' => $participant['participant_name'],
         'participant_photo_url' => $participant['participant_photo_url'],
         'participant_student_id' => $participant['participant_student_id'],
+        'participant_student_no' => $participant['participant_student_no'] ?? '',
         'message' => $message,
         'dry_run' => $dryRun,
     ];
@@ -479,6 +499,7 @@ $already = static function (string $message, ?string $checkInAt = null) use ($ti
         'participant_name' => $participant['participant_name'],
         'participant_photo_url' => $participant['participant_photo_url'],
         'participant_student_id' => $participant['participant_student_id'],
+        'participant_student_no' => $participant['participant_student_no'] ?? '',
     ];
     $checkInAt = trim((string) $checkInAt);
     if ($checkInAt !== '') {
@@ -541,6 +562,7 @@ if ($source === 'session') {
                 'participant_name' => $participant['participant_name'],
                 'participant_photo_url' => $participant['participant_photo_url'],
                 'participant_student_id' => $participant['participant_student_id'],
+                'participant_student_no' => $participant['participant_student_no'] ?? '',
                 'check_in_at' => (string) ($existing['check_in_at'] ?? ''),
                 'check_out_at' => (string) ($existing['check_out_at'] ?? ''),
                 'action' => 'check_out',
@@ -594,14 +616,15 @@ if ($source === 'session') {
             $fail = mobile_attendance_require_write($writeOutcome, 'Time-out failed. Please try again.');
             json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
         }
-        if (empty($writeOutcome['queued'])) {
-            notify_student_evaluation_open_after_timeout(
-                (string) ($participant['participant_student_id'] ?? ''),
-                $eventId,
-                (string) ($event['title'] ?? ''),
-                $sessionId
-            );
-        }
+        // Notify even when the attendance write is queued — eligibility is
+        // re-checked when the student opens the form. Skipping here caused
+        // missing eval pushes after offline/sync timeouts.
+        notify_student_evaluation_open_after_timeout(
+            (string) ($participant['participant_student_id'] ?? ''),
+            $eventId,
+            (string) ($event['title'] ?? ''),
+            $sessionId
+        );
         $payload = $success(
             'checked_out',
             'Timed out for ' . $sessionName . '.' . mobile_attendance_queued_suffix($writeOutcome),
@@ -819,6 +842,7 @@ if ($alreadyOut) {
         'participant_name' => $participant['participant_name'],
         'participant_photo_url' => $participant['participant_photo_url'],
         'participant_student_id' => $participant['participant_student_id'],
+        'participant_student_no' => $participant['participant_student_no'] ?? '',
         'check_in_at' => (string) ($att['check_in_at'] ?? ''),
         'check_out_at' => (string) ($att['check_out_at'] ?? ''),
         'action' => 'check_out',
@@ -847,14 +871,12 @@ if ($alreadyOut) {
             $fail = mobile_attendance_require_write($writeOutcome, 'Time-out failed. Please try again.');
             json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
         }
-        if (empty($writeOutcome['queued'])) {
-            notify_student_evaluation_open_after_timeout(
-                (string) ($participant['participant_student_id'] ?? ''),
-                $eventId,
-                (string) ($event['title'] ?? ''),
-                null
-            );
-        }
+        notify_student_evaluation_open_after_timeout(
+            (string) ($participant['participant_student_id'] ?? ''),
+            $eventId,
+            (string) ($event['title'] ?? ''),
+            null
+        );
         $payload = $success(
             'checked_out',
             'Timed out successfully!' . mobile_attendance_queued_suffix($writeOutcome),
@@ -882,6 +904,7 @@ if ($alreadyOut) {
             'participant_name' => $participant['participant_name'],
             'participant_photo_url' => $participant['participant_photo_url'],
             'participant_student_id' => $participant['participant_student_id'],
+            'participant_student_no' => $participant['participant_student_no'] ?? '',
             'check_in_at' => (string) ($att['check_in_at'] ?? ''),
             'action' => 'check_out',
         ], 409);

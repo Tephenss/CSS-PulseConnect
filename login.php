@@ -43,7 +43,14 @@ $challenge = (isset($_SESSION['admin_login_challenge']) && is_array($_SESSION['a
 $isVerificationStep = isset($_GET['step']) && (string) $_GET['step'] === 'verify';
 
 if (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1') {
-    $info = 'Verification required again — new day (12:00 AM Manila) or new network/IP detected.';
+    $why = strtolower(trim((string) ($_GET['why'] ?? '')));
+    if ($why === 'ip') {
+        $info = 'New network/IP detected — verify again to continue. (This is not the 12:00 AM Manila daily reset.)';
+    } elseif ($why === 'day') {
+        $info = 'New day after 12:00 AM (Manila) — verify again to continue.';
+    } else {
+        $info = 'Verification required again — new day (12:00 AM Manila) or new network/IP detected.';
+    }
 }
 
 function admin_login_headers(): array
@@ -157,16 +164,123 @@ function admin_login_store_daily_verification(string $userId): void
     );
 }
 
-function admin_login_establish_user_session(string $userId, string $fullName, string $email, string $role = 'admin'): void
+function admin_login_normalize_staff_role(string $role): ?string
 {
+    $role = strtolower(trim($role));
+    if ($role === 'admin' || $role === 'teacher') {
+        return $role;
+    }
+    return null;
+}
+
+/**
+ * Prefer live DB role over session challenge (challenge can be corrupted, e.g. Resend
+ * historically dropped role and defaulted to admin).
+ */
+function admin_login_fetch_staff_role(string $userId): ?string
+{
+    $userId = trim($userId);
+    if ($userId === '') {
+        return null;
+    }
+
+    $res = supabase_request(
+        'GET',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+            . '?select=role'
+            . '&id=eq.' . rawurlencode($userId)
+            . '&limit=1',
+        admin_login_headers()
+    );
+    if (!($res['ok'] ?? false)) {
+        return null;
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+        return null;
+    }
+
+    return admin_login_normalize_staff_role((string) ($rows[0]['role'] ?? ''));
+}
+
+function admin_login_establish_user_session(string $userId, string $fullName, string $email, string $role): void
+{
+    $normalized = admin_login_normalize_staff_role($role);
+    if ($normalized === null) {
+        throw new InvalidArgumentException('Invalid staff role for web session.');
+    }
+
     session_regenerate_id(true);
     $_SESSION['user'] = [
         'id' => $userId,
-        'full_name' => $fullName !== '' ? $fullName : 'Admin',
+        'full_name' => $fullName !== '' ? $fullName : ($normalized === 'teacher' ? 'Teacher' : 'Admin'),
         'email' => $email,
-        'role' => $role,
+        'role' => $normalized,
     ];
     unset($_SESSION['admin_login_challenge']);
+}
+
+function admin_login_resend_cooldown_seconds(): int
+{
+    return 60;
+}
+
+function admin_login_parse_sent_at(?string $raw): ?int
+{
+    $raw = trim((string) $raw);
+    if ($raw === '') {
+        return null;
+    }
+    $ts = strtotime($raw);
+    return ($ts !== false && $ts > 0) ? $ts : null;
+}
+
+/**
+ * Seconds remaining before another OTP email may be sent (0 = allowed).
+ */
+function admin_login_resend_seconds_remaining(string $userId, ?array $challenge = null): int
+{
+    $cooldown = admin_login_resend_cooldown_seconds();
+    $now = time();
+    $lastSent = null;
+
+    $issuedAt = is_array($challenge) ? (int) ($challenge['issued_at'] ?? 0) : 0;
+    if ($issuedAt > 0) {
+        $lastSent = $issuedAt;
+    }
+
+    $userId = trim($userId);
+    if ($userId !== '') {
+        $res = supabase_request(
+            'GET',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+                . '?select=last_sent_at'
+                . '&user_id=eq.' . rawurlencode($userId)
+                . '&limit=1',
+            admin_login_headers()
+        );
+        if ($res['ok'] ?? false) {
+            $rows = json_decode((string) ($res['body'] ?? ''), true);
+            $dbTs = is_array($rows) && isset($rows[0])
+                ? admin_login_parse_sent_at(isset($rows[0]['last_sent_at']) ? (string) $rows[0]['last_sent_at'] : null)
+                : null;
+            if ($dbTs !== null && ($lastSent === null || $dbTs > $lastSent)) {
+                $lastSent = $dbTs;
+            }
+        }
+    }
+
+    if ($lastSent === null) {
+        return 0;
+    }
+    $elapsed = $now - $lastSent;
+    if ($elapsed < 0) {
+        return $cooldown;
+    }
+    if ($elapsed >= $cooldown) {
+        return 0;
+    }
+    return $cooldown - $elapsed;
 }
 
 function admin_login_generate_code(): string
@@ -242,6 +356,12 @@ function admin_login_issue_challenge(
     $userId = trim((string) ($user['id'] ?? ''));
     $email = trim((string) ($user['email'] ?? ''));
     $fullName = admin_login_resolve_full_name($user);
+    $normalizedRole = admin_login_normalize_staff_role($role);
+    if ($normalizedRole === null) {
+        $error = 'This account cannot use web login verification.';
+        return false;
+    }
+    $role = $normalizedRole;
 
     if ($userId === '' || $email === '') {
         $error = 'Missing account details. Please try again.';
@@ -316,18 +436,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($challenge === null) {
                 $error = 'Verification session expired. Please log in again.';
             } else {
-                admin_login_issue_challenge([
-                    'id' => $challenge['id'] ?? '',
-                    'first_name' => '',
-                    'middle_name' => '',
-                    'last_name' => $challenge['full_name'] ?? '',
-                    'suffix' => '',
-                    'email' => $challenge['email'] ?? '',
-                ], $error, $info);
-                $challenge = $_SESSION['admin_login_challenge'] ?? $challenge;
-                if ($error === null) {
-                    header('Location: /login?step=verify');
-                    exit;
+                $resendRole = admin_login_normalize_staff_role((string) ($challenge['role'] ?? ''))
+                    ?? admin_login_fetch_staff_role((string) ($challenge['id'] ?? ''));
+                if ($resendRole === null) {
+                    $error = 'Verification session expired. Please log in again.';
+                    unset($_SESSION['admin_login_challenge']);
+                    $challenge = null;
+                } else {
+                    $wait = admin_login_resend_seconds_remaining(
+                        (string) ($challenge['id'] ?? ''),
+                        $challenge
+                    );
+                    if ($wait > 0) {
+                        $error = 'Please wait ' . $wait . 's before resending the code.';
+                    } else {
+                        require_once __DIR__ . '/includes/api_rate_limit.php';
+                        $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+                        $rateKey = 'web_login_resend:' . (string) ($challenge['id'] ?? '') . ':' . $clientIp;
+                        if (!api_rate_limit_allow($rateKey, 6, 300)) {
+                            $error = 'Too many resend attempts. Try again in a few minutes.';
+                        } else {
+                            admin_login_issue_challenge([
+                                'id' => $challenge['id'] ?? '',
+                                'full_name' => $challenge['full_name'] ?? '',
+                                'email' => $challenge['email'] ?? '',
+                            ], $error, $info, $resendRole, (string) ($challenge['gate_reason'] ?? ''));
+                            $challenge = $_SESSION['admin_login_challenge'] ?? $challenge;
+                            if ($error === null) {
+                                header('Location: /login?step=verify');
+                                exit;
+                            }
+                        }
+                    }
                 }
             }
         } elseif ($authStep === 'verify_code') {
@@ -351,21 +491,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         } else {
                             admin_login_delete_code((string) ($challenge['id'] ?? ''));
                             $verifiedUserId = (string) ($challenge['id'] ?? '');
-                            admin_login_store_daily_verification($verifiedUserId);
-                            device_trust_upsert(
-                                $verifiedUserId,
-                                $webTrustKey,
-                                'web',
-                                'ip:' . device_trust_client_ip()
-                            );
-                            admin_login_establish_user_session(
-                                $verifiedUserId,
-                                (string) ($challenge['full_name'] ?? 'Admin'),
-                                (string) ($challenge['email'] ?? ''),
-                                (string) ($challenge['role'] ?? 'admin')
-                            );
-                            header('Location: /home');
-                            exit;
+                            $sessionRole = admin_login_fetch_staff_role($verifiedUserId)
+                                ?? admin_login_normalize_staff_role((string) ($challenge['role'] ?? ''));
+                            if ($sessionRole === null) {
+                                $error = 'Unable to verify account role. Please log in again.';
+                                unset($_SESSION['admin_login_challenge']);
+                                $challenge = null;
+                            } else {
+                                admin_login_store_daily_verification($verifiedUserId);
+                                device_trust_upsert(
+                                    $verifiedUserId,
+                                    $webTrustKey,
+                                    'web',
+                                    'ip:' . device_trust_client_ip()
+                                );
+                                admin_login_establish_user_session(
+                                    $verifiedUserId,
+                                    (string) ($challenge['full_name'] ?? ''),
+                                    (string) ($challenge['email'] ?? ''),
+                                    $sessionRole
+                                );
+                                header('Location: /home');
+                                exit;
+                            }
                         }
                     }
                 }
@@ -408,7 +556,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (!password_verify($password, $storedHash)) {
                             $error = 'Invalid email or password.';
                         } else {
-                            $role = isset($user['role']) ? (string) $user['role'] : 'student';
+                            $role = admin_login_normalize_staff_role((string) ($user['role'] ?? ''));
 
                             if ($role === 'teacher' || $role === 'admin') {
                                 $userId = trim((string) ($user['id'] ?? ''));
@@ -444,7 +592,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Login failed. Please try again.';
     }
 }
-$isVerificationMode = $challenge !== null && $isVerificationStep;
+$isVerificationMode = $challenge !== null && (
+    $isVerificationStep
+    || (
+        ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST'
+        && in_array(strtolower(trim((string) ($_POST['auth_step'] ?? ''))), ['resend_code', 'verify_code'], true)
+    )
+);
 $roleLabel = ($challenge && ($challenge['role'] ?? '') === 'teacher') ? 'teacher' : 'admin';
 $roleLabelCap = ucfirst($roleLabel);
 $gateReason = is_array($challenge) ? strtolower(trim((string) ($challenge['gate_reason'] ?? ''))) : '';
@@ -453,6 +607,13 @@ $gateReasonMessage = match ($gateReason) {
     'daily' => 'Daily security check — verification resets every day at 12:00 AM (Manila).',
     default => 'Enter the 6-digit code sent to your email to continue.',
 };
+$resendCooldownRemaining = 0;
+if ($isVerificationMode && is_array($challenge)) {
+    $resendCooldownRemaining = admin_login_resend_seconds_remaining(
+        (string) ($challenge['id'] ?? ''),
+        $challenge
+    );
+}
 ?>
 
 <!doctype html>
@@ -462,9 +623,10 @@ $gateReasonMessage = match ($gateReason) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CCS PulseConnect — Login</title>
+    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <link rel="stylesheet" href="/assets/css/tailwind.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/tailwind.css') ?>" />
-    <link rel="stylesheet" href="/assets/css/app.css" />
-    <link rel="stylesheet" href="/assets/css/auth.css" />
+    <link rel="stylesheet" href="/assets/css/app.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/app.css') ?>" />
+    <link rel="stylesheet" href="/assets/css/auth.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/auth.css') ?>" />
 </head>
 
 <body class="min-h-screen bg-zinc-950 text-zinc-100 auth-login-bg">
@@ -555,10 +717,18 @@ $gateReasonMessage = match ($gateReason) {
                         </button>
 
                         <div class="mt-4">
-                            <button type="submit" name="auth_step" value="resend_code"
-                                class="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-medium text-zinc-100 hover:bg-zinc-900 transition">
-                                Resend Code
+                            <button type="submit" name="auth_step" value="resend_code" formnovalidate
+                                id="btnResendCode"
+                                data-cooldown="<?= (int) $resendCooldownRemaining ?>"
+                                class="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-medium text-zinc-100 hover:bg-zinc-900 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-950"
+                                <?= $resendCooldownRemaining > 0 ? 'disabled' : '' ?>>
+                                <?= $resendCooldownRemaining > 0
+                                    ? 'Resend in ' . (int) $resendCooldownRemaining . 's'
+                                    : 'Resend Code' ?>
                             </button>
+                            <p id="resendCooldownHint" class="mt-2 text-center text-[11px] text-zinc-500 <?= $resendCooldownRemaining > 0 ? '' : 'hidden' ?>">
+                                Wait before requesting another code.
+                            </p>
                         </div>
                     <?php else: ?>
                         <input type="hidden" name="auth_step" value="credentials" />
@@ -572,9 +742,20 @@ $gateReasonMessage = match ($gateReason) {
                         <div class="h-4"></div>
 
                         <label class="block text-xs text-zinc-400 mb-1" for="password">Password</label>
-                        <input id="password" name="password" type="password" required
-                            class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
-                            placeholder="Your password" autocomplete="current-password" />
+                        <div class="auth-password-field">
+                            <input id="password" name="password" type="password" required
+                                class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 pr-11 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
+                                placeholder="Your password" autocomplete="current-password" />
+                            <button type="button" id="togglePassword" class="auth-password-toggle" aria-label="Show password" aria-pressed="false" title="Show password">
+                                <svg class="auth-eye-icon auth-eye-show" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                                <svg class="auth-eye-icon auth-eye-hide hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                                </svg>
+                            </button>
+                        </div>
 
                         <div class="auth-links mt-2 mb-1">
                             <span></span>
@@ -598,6 +779,29 @@ $gateReasonMessage = match ($gateReason) {
         </div>
     </div>
     <script>
+        (function () {
+            var btn = document.getElementById('btnResendCode');
+            var hint = document.getElementById('resendCooldownHint');
+            if (!btn) return;
+            var left = parseInt(btn.getAttribute('data-cooldown') || '0', 10);
+            if (!Number.isFinite(left) || left <= 0) return;
+
+            function tick() {
+                if (left <= 0) {
+                    btn.disabled = false;
+                    btn.textContent = 'Resend Code';
+                    if (hint) hint.classList.add('hidden');
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = 'Resend in ' + left + 's';
+                if (hint) hint.classList.remove('hidden');
+                left -= 1;
+                window.setTimeout(tick, 1000);
+            }
+            tick();
+        })();
+
         // Typewriter effect for the login description (PC/desktop).
         (function () {
             var el = document.getElementById('loginDescTyped');
@@ -649,6 +853,24 @@ $gateReasonMessage = match ($gateReason) {
             }, 520);
 
             start();
+        })();
+
+        (function () {
+            var input = document.getElementById('password');
+            var btn = document.getElementById('togglePassword');
+            if (!input || !btn) return;
+            var showIcon = btn.querySelector('.auth-eye-show');
+            var hideIcon = btn.querySelector('.auth-eye-hide');
+            btn.addEventListener('click', function () {
+                var showing = input.type === 'text';
+                input.type = showing ? 'password' : 'text';
+                var nowShowing = !showing;
+                btn.setAttribute('aria-pressed', nowShowing ? 'true' : 'false');
+                btn.setAttribute('aria-label', nowShowing ? 'Hide password' : 'Show password');
+                btn.setAttribute('title', nowShowing ? 'Hide password' : 'Show password');
+                if (showIcon) showIcon.classList.toggle('hidden', nowShowing);
+                if (hideIcon) hideIcon.classList.toggle('hidden', !nowShowing);
+            });
         })();
 
         let mouseTimeout;

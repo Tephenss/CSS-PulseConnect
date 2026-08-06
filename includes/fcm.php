@@ -220,9 +220,12 @@ function send_fcm_notification_detailed(array $tokens, string $title, string $bo
                 error_log('FCM HTTP Error ' . $httpCode . ' status=' . $fcmStatus . ' msg=' . $lastDetail);
 
                 // Drop dead tokens so future publishes are cleaner.
+                $deadHint = strtolower($fcmStatus . ' ' . $fcmMessage . ' ' . $lastDetail);
                 if (in_array(strtoupper($fcmStatus), ['UNREGISTERED', 'INVALID_ARGUMENT', 'NOT_FOUND'], true)
-                    || str_contains(strtolower($lastDetail), 'not a valid fcm')
-                    || str_contains(strtolower($lastDetail), 'requested entity was not found')
+                    || str_contains($deadHint, 'notregistered')
+                    || str_contains($deadHint, 'not a valid fcm')
+                    || str_contains($deadHint, 'requested entity was not found')
+                    || str_contains($deadHint, 'registration-token-not-registered')
                 ) {
                     fcm_delete_token_best_effort($deviceToken);
                 }
@@ -236,13 +239,15 @@ function send_fcm_notification_detailed(array $tokens, string $title, string $bo
         curl_multi_close($mh);
     }
 
+    // Partial success is success for the publisher — stale device tokens are common
+    // (reinstall / logout) and must not surface as "push failed" when others delivered.
     return [
-        'ok' => $sent > 0 && $failed === 0,
+        'ok' => $sent > 0,
         'sent' => $sent,
         'failed' => $failed,
         'http_status' => $lastHttp,
-        'error' => $failed > 0 ? ($lastError ?? 'fcm_send_failed') : null,
-        'detail' => $failed > 0 ? $lastDetail : null,
+        'error' => $sent === 0 && $failed > 0 ? ($lastError ?? 'fcm_send_failed') : ($failed > 0 ? 'partial_token_failures' : null),
+        'detail' => $sent === 0 && $failed > 0 ? $lastDetail : ($failed > 0 ? $lastDetail : null),
     ];
 }
 

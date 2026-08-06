@@ -19,6 +19,11 @@ $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
 $userId = (string) ($user['id'] ?? '');
 
+// Linked certs / saved templates are rendered inline, so a cached page would show
+// a stale Import/Link modal after editing a design.
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+
 $id = isset($_GET['id']) ? (string) $_GET['id'] : '';
 if ($id === '') {
     http_response_code(400);
@@ -313,7 +318,8 @@ render_header('Event Details', $user);
 <?php
     $backUrl = event_management_return_to(
         $role === 'student' ? 'admin' : $role,
-        isset($_GET['return_to']) ? (string) $_GET['return_to'] : ($role === 'student' ? '/events.php' : null)
+        // Event Details steps back to the Events list — never to Manage Events.
+        isset($_GET['return_to']) ? (string) $_GET['return_to'] : '/events'
     );
     $returnTo = $backUrl;
 ?>
@@ -321,7 +327,7 @@ render_header('Event Details', $user);
     <!-- Back Button & Header Row -->
     <div class="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-zinc-200 mb-6">
         <div class="flex items-center gap-3">
-            <?= render_event_back_button($backUrl, $role === 'teacher' ? 'Back to Manage Events' : 'Back') ?>
+            <?= render_event_back_button($backUrl, $role === 'student' ? 'Back' : 'Back to Events') ?>
             <h2 class="text-xl md:text-2xl font-bold text-zinc-900"><?= htmlspecialchars((string) ($event['title'] ?? '')) ?></h2>
             <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars($status) ?></span>
         </div>
@@ -1043,7 +1049,7 @@ render_header('Event Details', $user);
   ];
 ?>
 <div id="certAutoStatusModal" class="fixed inset-0 z-[154] hidden items-center justify-center p-3 sm:p-4 bg-zinc-900/60 backdrop-blur-sm">
-  <div class="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden">
+  <div class="cert-status-panel w-full max-w-4xl max-h-[90vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden">
     <div class="px-5 py-4 border-b border-zinc-200 flex items-start justify-between gap-3 shrink-0">
       <div class="min-w-0">
         <h3 class="text-lg font-bold text-zinc-900 tracking-tight">Certificate auto-send status</h3>
@@ -1062,28 +1068,31 @@ render_header('Event Details', $user);
       </span>
       <button type="button" id="btnRefreshCertAutoStatus" class="ml-auto rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-zinc-600 hover:bg-zinc-50">Refresh</button>
     </div>
-    <div class="flex-1 min-h-0 overflow-y-auto p-5 space-y-5">
-      <div>
-        <div class="flex items-center justify-between gap-2 mb-2">
+    <div class="cert-status-grid flex-1">
+      <section class="cert-status-col">
+        <header class="px-5 py-3 border-b border-zinc-100 bg-zinc-50 shrink-0">
           <h4 class="text-sm font-bold text-zinc-900">Received (auto-send success)</h4>
-        </div>
-        <div id="certStatusReceivedList" class="space-y-2 min-h-[2rem]">
+          <p class="text-[11px] text-zinc-500 mt-0.5">Seminar events show every seminar code (…05.01/…06.01).</p>
+        </header>
+        <div id="certStatusReceivedList" class="cert-status-scroll p-4 space-y-2">
           <div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>
         </div>
-      </div>
-      <div>
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <h4 class="text-sm font-bold text-zinc-900">Eval done — no certificate yet</h4>
-          <div class="flex items-center gap-2">
-            <button type="button" id="btnSelectAllMissingCerts" class="text-[11px] font-bold text-sky-700 hover:underline">Select all</button>
-            <button type="button" id="btnSendSelectedMissingCerts" class="rounded-lg bg-sky-600 text-white text-[11px] font-bold px-3 py-1.5 hover:bg-sky-700 disabled:opacity-50" disabled>Send selected</button>
+      </section>
+      <section class="cert-status-col">
+        <header class="px-5 py-3 border-b border-zinc-100 bg-zinc-50 shrink-0">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-sm font-bold text-zinc-900">Eval done — no certificate yet</h4>
+            <div class="flex items-center gap-2 shrink-0">
+              <button type="button" id="btnSelectAllMissingCerts" class="text-[11px] font-bold text-sky-700 hover:underline">Select all</button>
+              <button type="button" id="btnSendSelectedMissingCerts" class="rounded-lg bg-sky-600 text-white text-[11px] font-bold px-3 py-1.5 hover:bg-sky-700 disabled:opacity-50" disabled>Send selected</button>
+            </div>
           </div>
-        </div>
-        <p class="text-xs text-zinc-500 mb-2">Manual send uses the same linked template and auto-count code (…-01 → …-02).</p>
-        <div id="certStatusMissingList" class="space-y-2 min-h-[2rem]">
+          <p class="text-[11px] text-zinc-500 mt-0.5">Manual send uses the same linked template and auto-count code (…-01 → …-02).</p>
+        </header>
+        <div id="certStatusMissingList" class="cert-status-scroll p-4 space-y-2">
           <div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>
         </div>
-      </div>
+      </section>
     </div>
     <div id="certAutoStatusFooter" class="px-5 py-3 border-t border-zinc-200 bg-zinc-50 text-xs font-semibold text-zinc-500 shrink-0"></div>
   </div>
@@ -1195,12 +1204,15 @@ render_header('Event Details', $user);
     <div class="import-cert-layout flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)_270px] divide-y lg:divide-y-0 lg:divide-x divide-zinc-200">
 
       <!-- 1) Saved templates -->
-      <aside class="bg-zinc-50/80 p-4 overflow-y-auto min-h-0 max-h-[28vh] lg:max-h-none">
+      <aside class="bg-zinc-50/80 p-4 min-h-0 max-h-[28vh] lg:max-h-none lg:h-full flex flex-col">
         <div class="flex items-center justify-between gap-2 mb-3">
           <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500">Saved templates</div>
           <span class="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-zinc-200 text-[10px] font-black text-zinc-700"><?= count($importSidebarTemplates) ?></span>
         </div>
-        <div id="importCertTemplateList" class="space-y-2">
+        <p id="importTemplateLockHint" class="hidden mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
+          Every seminar already has a certificate. Tap the ✕ on a seminar first to change its template.
+        </p>
+        <div id="importCertTemplateList" class="space-y-2 flex-1 min-h-0 overflow-y-auto pr-1 overscroll-contain">
           <?php if (count($importSidebarTemplates) === 0): ?>
             <p class="text-xs text-zinc-500 leading-relaxed">No saved designs yet.</p>
             <a href="/certificates_library" class="inline-flex mt-1 text-xs font-bold text-orange-600 hover:text-orange-700">Open Cert Templates →</a>
@@ -1242,8 +1254,9 @@ render_header('Event Details', $user);
             $slotId = htmlspecialchars((string) $slot['session_id']);
             $slotKey = $slot['session_id'] !== '' ? $slot['session_id'] : '__event__';
             $slotKeyAttr = htmlspecialchars($slotKey);
+            $isMultiSlot = $importIsMulti && count($importSlots) > 1;
           ?>
-          <div class="import-cert-slot rounded-2xl border border-zinc-200 overflow-hidden" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>" data-original-title="<?= htmlspecialchars((string) $slot['title']) ?>" data-slot-label="<?= htmlspecialchars((string) $slot['label']) ?>">
+          <div class="import-cert-slot rounded-2xl border border-zinc-200 overflow-hidden" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>" data-original-title="<?= htmlspecialchars((string) $slot['title']) ?>" data-slot-label="<?= htmlspecialchars((string) $slot['label']) ?>" data-multi="<?= $isMultiSlot ? '1' : '0' ?>">
             <div class="px-4 py-3 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2">
               <div class="min-w-0">
                 <?php if ($importIsMulti): ?>
@@ -1259,45 +1272,55 @@ render_header('Event Details', $user);
                 <button type="button" class="import-slot-clear hidden inline-flex items-center justify-center w-9 h-9 rounded-xl border border-zinc-200 bg-white text-zinc-500 hover:text-red-600 hover:border-red-200 transition" title="Clear preview" aria-label="Clear preview">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
-                <label class="inline-flex items-center gap-1.5 cursor-pointer rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white px-3.5 py-2 text-xs font-bold shadow-sm shadow-orange-500/20 hover:opacity-95 transition">
+                <label class="import-slot-upload inline-flex items-center gap-1.5 cursor-pointer rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white px-3.5 py-2 text-xs font-bold shadow-sm shadow-orange-500/20 hover:opacity-95 transition">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                   Upload PPTX
                   <input type="file" class="import-slot-file hidden" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation">
                 </label>
               </div>
             </div>
-            <div class="relative <?= ($importIsMulti && count($importSlots) > 1) ? 'h-[180px] lg:h-[200px]' : 'h-[min(42vh,340px)] lg:h-[min(48vh,380px)]' ?> flex items-center justify-center bg-zinc-100">
-              <img src="" alt="" class="import-slot-preview-img hidden absolute inset-0 w-full h-full object-contain bg-white">
-              <div class="import-slot-preview-empty text-center px-6 py-8">
+            <div class="import-cert-preview-box">
+              <img src="" alt="" class="import-slot-preview-img hidden">
+              <div class="import-slot-preview-empty text-center px-6 py-8 relative z-[1]">
                 <div class="mx-auto mb-3 w-12 h-12 rounded-2xl bg-white border border-zinc-200 shadow-sm flex items-center justify-center text-zinc-400">
                   <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
                 </div>
                 <p class="text-sm font-semibold text-zinc-700">No certificate selected</p>
                 <p class="text-xs text-zinc-500 mt-1 max-w-xs mx-auto">Upload a PPTX or choose a template on the left.</p>
               </div>
+              <div class="import-slot-loading-overlay hidden absolute inset-0 z-10 flex-col items-center justify-center gap-2 bg-white/90">
+                <svg class="w-7 h-7 text-orange-500" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="animation:importSpin .7s linear infinite">
+                  <circle opacity=".25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                  <path opacity=".95" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+                </svg>
+                <p class="import-slot-loading-text text-xs font-bold text-zinc-600">Loading preview…</p>
+              </div>
             </div>
           </div>
         <?php endforeach; ?>
       </section>
 
-      <!-- 3) Scanned registrar codes (read-only) -->
-      <aside class="bg-zinc-50/50 p-4 overflow-y-auto min-h-0 flex flex-col gap-4">
-        <div>
-          <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500">Scanned codes</div>
+      <!-- 3) Scanned / linked registrar codes (read-only) -->
+      <aside class="import-codes-pane bg-zinc-50/50 p-4 gap-3">
+        <div class="shrink-0">
+          <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500"><?= $importIsMulti ? 'Linked codes' : 'Scanned codes' ?></div>
+          <?php if ($importIsMulti): ?>
+            <p id="importLinkedCodesSummary" class="mt-1 text-[11px] font-mono font-semibold text-zinc-600 break-all"></p>
+          <?php endif; ?>
         </div>
 
-        <div class="flex-1 min-h-0 space-y-4 overflow-y-auto">
+        <div class="import-codes-scroll space-y-3">
           <?php foreach ($importSlots as $slot): ?>
             <?php
               $slotId = htmlspecialchars((string) $slot['session_id']);
               $slotKey = $slot['session_id'] !== '' ? $slot['session_id'] : '__event__';
               $slotKeyAttr = htmlspecialchars($slotKey);
             ?>
-            <div class="import-code-slot space-y-2" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>">
+            <div class="import-code-slot space-y-1.5" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>">
               <?php if ($importIsMulti): ?>
                 <div class="text-[11px] font-bold text-zinc-700"><?= htmlspecialchars((string) $slot['label']) ?> — <?= htmlspecialchars((string) $slot['title']) ?></div>
               <?php endif; ?>
-              <div class="rounded-xl border border-zinc-200 bg-white min-h-[140px] max-h-[min(42vh,320px)] overflow-y-auto p-3">
+              <div class="import-slot-list-wrap rounded-xl border border-zinc-200 bg-white p-3">
                 <ul class="import-slot-list space-y-1.5 text-xs font-mono text-zinc-700">
                   <li class="import-slot-empty text-zinc-400 font-sans text-xs">No codes scanned yet.</li>
                 </ul>
@@ -1559,6 +1582,105 @@ window.IMPORT_LINKED_CERT = <?= json_encode($linkedImportJson, JSON_UNESCAPED_SL
 
 .assignment-dropzone-pop {
   animation: assignmentDropzonePop 380ms ease-out;
+}
+
+@keyframes importSpin { to { transform: rotate(360deg); } }
+
+/* Auto-send status: side-by-side columns that scroll on their own. Hand-written
+   because the compiled Tailwind build has no divide-x / arbitrary height utilities,
+   and no z-[154] — without this the sticky page header paints over the modal. */
+#certAutoStatusModal { z-index: 154; }
+
+.cert-status-panel { height: min(88vh, 700px); }
+
+.cert-status-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+.cert-status-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid #e4e4e7;
+}
+
+.cert-status-col:first-child { border-top: 0; }
+
+.cert-status-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+@media (min-width: 768px) {
+  .cert-status-grid { grid-template-columns: 1fr 1fr; }
+  .cert-status-col { border-top: 0; border-left: 1px solid #e4e4e7; }
+  .cert-status-col:first-child { border-left: 0; }
+}
+
+/* Import / Link modal: contain previews so they never bleed into the codes column,
+   and keep both seminar code lists independently scrollable. */
+#importCertModalPanel {
+  height: min(92vh, 820px);
+}
+#importCertModal .import-cert-preview-box {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4f4f5;
+}
+#importCertModal .import-cert-slot[data-multi="1"] .import-cert-preview-box {
+  height: 180px;
+}
+@media (min-width: 1024px) {
+  #importCertModal .import-cert-slot[data-multi="1"] .import-cert-preview-box {
+    height: 200px;
+  }
+}
+#importCertModal .import-cert-slot:not([data-multi="1"]) .import-cert-preview-box {
+  height: min(42vh, 340px);
+}
+@media (min-width: 1024px) {
+  #importCertModal .import-cert-slot:not([data-multi="1"]) .import-cert-preview-box {
+    height: min(48vh, 380px);
+  }
+}
+#importCertModal .import-slot-preview-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+#importCertModal .import-codes-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+#importCertModal .import-codes-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+#importCertModal .import-slot-list-wrap {
+  min-height: 96px;
+  max-height: min(28vh, 220px);
+  overflow-y: auto;
+}
+
+/* Locked saved-template card (clear a seminar with ✕ first). Own class because the
+   compiled Tailwind build has no opacity-40/grayscale utilities. */
+.import-locked-card {
+  opacity: 0.4;
+  filter: grayscale(100%);
+  pointer-events: none;
+  cursor: not-allowed;
 }
 </style>
 
@@ -2167,18 +2289,33 @@ function renderCertAutoStatus(data) {
       receivedEl.innerHTML = '<div class="text-sm text-zinc-400 font-semibold py-4 text-center">No certificates received yet.</div>';
     } else {
       receivedEl.innerHTML = received.map((row) => {
-        const code = escapeCertHtml(row.certificate_code || '');
+        const sessions = Array.isArray(row.sessions) ? row.sessions : [];
+        const codes = sessions
+          .map((s) => String(s?.certificate_code || '').trim())
+          .filter(Boolean);
+        if (codes.length === 0) {
+          const single = String(row.certificate_code || '').trim();
+          if (single) codes.push(single);
+        }
+        const code = escapeCertHtml(codes.join('/'));
+        const perSeminar = sessions
+          .map((s) => `${String(s?.session_title || 'Seminar')}: ${String(s?.certificate_code || '—')}`)
+          .join('\n');
         const name = escapeCertHtml(row.name || 'Student');
         const email = escapeCertHtml(row.email || '');
-        return `<div class="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
-            <div class="text-xs text-zinc-500 truncate">${email}</div>
+        const seminarLine = sessions.length > 1
+          ? `<div class="text-[10px] font-bold text-emerald-700 mt-0.5">${sessions.length} seminar codes</div>`
+          : '';
+        return `<div class="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5"${perSeminar ? ` title="${escapeCertHtml(perSeminar)}"` : ''}>
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
+              <div class="text-xs text-zinc-500 truncate">${email}</div>
+            </div>
+            <div class="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">Received</div>
           </div>
-          <div class="text-right shrink-0">
-            <div class="text-[10px] font-black uppercase tracking-wider text-emerald-700">Received</div>
-            <div class="text-xs font-semibold text-zinc-700 font-mono">${code || '—'}</div>
-          </div>
+          <div class="text-xs font-semibold text-zinc-700 font-mono mt-1.5 break-all">${code || '—'}</div>
+          ${seminarLine}
         </div>`;
       }).join('');
     }
@@ -2193,12 +2330,17 @@ function renderCertAutoStatus(data) {
         const name = escapeCertHtml(row.name || 'Student');
         const email = escapeCertHtml(row.email || '');
         const reason = escapeCertHtml(row.reason || 'Missing certificate');
-        return `<label class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2.5 flex items-start gap-3 cursor-pointer hover:border-amber-200">
+        const sessions = Array.isArray(row.sessions) ? row.sessions : [];
+        const seminarLine = sessions.length > 0
+          ? `<div class="text-[10px] font-bold text-amber-700 mt-0.5 truncate">${escapeCertHtml(sessions.map((s) => String(s?.session_title || 'Seminar')).join(' • '))}</div>`
+          : '';
+        return `<label class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2.5 flex items-start gap-2 cursor-pointer hover:border-amber-200">
           <input type="checkbox" class="cert-missing-check mt-1 rounded border-zinc-300 text-sky-600 focus:ring-sky-500" value="${id}">
           <div class="min-w-0 flex-1">
             <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
             <div class="text-xs text-zinc-500 truncate">${email}</div>
             <div class="text-[11px] text-amber-800 mt-0.5">${reason}</div>
+            ${seminarLine}
           </div>
           <button type="button" class="cert-missing-send-one shrink-0 rounded-lg bg-sky-600 text-white text-[11px] font-bold px-2.5 py-1.5 hover:bg-sky-700" data-student-id="${id}">Send</button>
         </label>`;
@@ -2597,7 +2739,7 @@ async function renderAndPersistLinkedPreview(templateId, opts = {}) {
   let state = opts.canvasState || null;
   if (!state) {
     try {
-      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(id) + '&_=' + Date.now());
+      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(id) + '&_=' + Date.now(), { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       if (data && data.ok) state = data.canvas_state || null;
     } catch (_) {
@@ -2696,12 +2838,28 @@ function paintScannedCodesList(slotKey, codes, emptyMsg) {
     .filter(Boolean));
   if (clean.length === 0) {
     list.innerHTML = `<li class="import-slot-empty text-zinc-400 font-sans text-xs">${escapeLinkedHtml(emptyMsg || 'No codes scanned yet. Upload a PPTX to scan.')}</li>`;
+    updateImportLinkedCodesSummary();
     return [];
   }
   list.innerHTML = clean.map((code) =>
     `<li class="flex items-center gap-2"><span class="inline-block w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span><span>${String(code).replace(/[<>&]/g, '')}</span></li>`
   ).join('');
+  updateImportLinkedCodesSummary();
   return clean;
+}
+
+/** Multi-seminar: show seed1/seed2 above the per-seminar lists. */
+function updateImportLinkedCodesSummary() {
+  const summary = document.getElementById('importLinkedCodesSummary');
+  if (!summary) return;
+  const slots = Array.from(document.querySelectorAll('.import-code-slot'));
+  const seeds = slots.map((slot) => {
+    if (slot.querySelector('.import-slot-empty, .import-slot-loading')) return '';
+    const li = slot.querySelector('.import-slot-list li span:last-child');
+    const text = (li?.textContent || '').trim();
+    return text;
+  }).filter(Boolean);
+  summary.textContent = seeds.length > 1 ? seeds.join('/') : (seeds[0] || '');
 }
 
 function upsertImportSidebarTemplate(tpl) {
@@ -2749,6 +2907,7 @@ function upsertImportSidebarTemplate(tpl) {
     const n = list.querySelectorAll('.import-cert-template').length;
     countEl.textContent = String(n);
   }
+  updateImportSlotLocks();
 }
 
 async function refreshLinkedCertPreview(templateId, titleFallback) {
@@ -2757,7 +2916,7 @@ async function refreshLinkedCertPreview(templateId, titleFallback) {
   let title = titleFallback || btn?.getAttribute('data-template-title') || 'Certificate';
   let thumb = btn?.getAttribute('data-template-thumb') || '';
   try {
-    const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now());
+    const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now(), { cache: 'no-store' });
     const data = await res.json();
     if (data.ok) {
       if (data.preview_data_url) thumb = data.preview_data_url;
@@ -2810,6 +2969,7 @@ function openImportCertModal() {
       : 'Pick a saved template or upload a PPTX.';
     importCertStatus.className = 'text-xs text-zinc-600 font-semibold text-center min-h-[1rem]';
   }
+  updateImportSlotLocks();
   // Rebuild sidebar thumbs from real canvas_state (stale JPEGs show wrong positions).
   void refreshSavedTemplateSidebarThumbs();
 }
@@ -2825,8 +2985,10 @@ importCertModal?.addEventListener('click', (e) => {
 });
 btnChangeLinkedCert?.addEventListener('click', () => {
   setImportModalMode('edit', { animate: true });
-  void refreshSavedTemplateSidebarThumbs();
-  void hydrateImportEditFromLinked();
+  // Linked slots first; the sidebar thumb rebuild is heavy and used to delay them.
+  void hydrateImportEditFromLinked().finally(() => {
+    void refreshSavedTemplateSidebarThumbs();
+  });
 });
 btnViewLinkedCert?.addEventListener('click', () => {
   if (!(importLinkedCert?.id || importLinkedCert?.items?.length)) return;
@@ -2835,17 +2997,25 @@ btnViewLinkedCert?.addEventListener('click', () => {
 updateImportCertButtonLabel();
 updateImportLinkedBanner();
 
+/** > 0 while a slot preview is loading; pauses background sidebar rendering. */
+let importPreviewPriority = 0;
+
 async function hydrateImportEditFromLinked() {
   const items = Array.isArray(importLinkedCert?.items) ? importLinkedCert.items : [];
   if (!items.length) return;
   const slots = Array.from(document.querySelectorAll('.import-cert-slot'));
+
+  // Paint what we already know (name + saved thumb) before any request, so the
+  // slots never sit on "No certificate selected" while previews are fetched.
+  const jobs = [];
   for (const item of items) {
     const sessionId = String(item.session_id || '');
     const key = sessionId || '__event__';
-    const slot = slots.find((s) => (s.getAttribute('data-slot-key') || '') === key) || slots[0];
-    if (!slot) continue;
+    // Never fall back to slots[0] — that painted every seminar onto Seminar 1
+    // and hid Seminar 2's preview/codes when session ids failed to match.
+    const slot = slots.find((s) => (s.getAttribute('data-slot-key') || '') === key);
     const templateId = String(item.id || '');
-    if (!templateId) continue;
+    if (!slot || !templateId) continue;
     importSlotTemplates[key] = templateId;
     importSelectedTemplateId = templateId;
     importPendingFiles[key] = null;
@@ -2855,30 +3025,59 @@ async function hydrateImportEditFromLinked() {
     importScannedCodes[key] = [];
     highlightImportTemplateById(templateId);
 
-    let canvasState = null;
-    try {
-      const previewRes = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now())
-        .then((r) => r.json())
-        .catch(() => null);
-      if (previewRes && previewRes.ok) canvasState = previewRes.canvas_state || null;
-    } catch (_) {}
-
-    const fromTemplate = extractVisibleTemplateCodes(canvasState);
-    paintScannedCodesList(
-      key,
-      fromTemplate,
-      'No code on this template. Upload a PPTX to scan a seed.'
-    );
-
-    await showSyncedTemplatePreview(slot, templateId, item.title || 'Certificate', canvasState, null, {
-      sampleCode: fromTemplate[0] || '',
+    const title = item.title || 'Certificate';
+    setSlotPreview(slot, {
+      title,
+      templateName: title,
+      scope: 'Loading linked design…',
+      thumb: item.thumb || '',
     });
+    setSlotLoading(slot, 'Loading linked design…');
+    setScannedCodesLoading(key, 'Loading codes…');
+    jobs.push({ key, slot, templateId, title });
   }
+  if (!jobs.length) return;
+
+  if (importCertStatus) {
+    importCertStatus.textContent = 'Loading linked certificate…';
+    importCertStatus.className = 'text-xs text-zinc-600 font-semibold text-center min-h-[1rem]';
+  }
+
+  importPreviewPriority += 1;
+  try {
+    // Fetch every seminar canvas at once — one-by-one awaits doubled the wait per seminar.
+    const canvasStates = await Promise.all(jobs.map((job) => (
+      fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(job.templateId) + '&_=' + Date.now(), { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((res) => ((res && res.ok) ? (res.canvas_state || null) : null))
+        .catch(() => null)
+    )));
+
+    for (let i = 0; i < jobs.length; i++) {
+      const job = jobs[i];
+      const canvasState = canvasStates[i];
+      const fromTemplate = extractVisibleTemplateCodes(canvasState);
+      paintScannedCodesList(
+        job.key,
+        fromTemplate,
+        'No code on this template. Upload a PPTX to scan a seed.'
+      );
+      await showSyncedTemplatePreview(job.slot, job.templateId, job.title, canvasState, null, {
+        sampleCode: fromTemplate[0] || '',
+      });
+    }
+  } finally {
+    importPreviewPriority -= 1;
+    jobs.forEach((job) => setSlotLoading(job.slot, null));
+  }
+
   const firstKey = slots[0]?.getAttribute('data-slot-key') || '__event__';
   importActiveSlotKey = firstKey;
   highlightActiveSlot(firstKey);
+  updateImportSlotLocks();
+  updateImportLinkedCodesSummary();
   if (importCertStatus) {
-    importCertStatus.textContent = 'Linked design loaded. Codes shown are from that template — upload a PPTX to replace the seed.';
+    importCertStatus.textContent = 'Linked design loaded. Tap ✕ on a seminar to change its template or upload a new PPTX.';
     importCertStatus.className = 'text-xs text-emerald-700 font-semibold text-center min-h-[1rem]';
   }
 }
@@ -2958,6 +3157,55 @@ function setSlotPreview(slotEl, { title, scope, thumb, templateName }) {
       if (clearBtn) clearBtn.classList.add('hidden');
     }
   }
+
+  updateImportSlotLocks();
+}
+
+/**
+ * A filled seminar is locked: its Upload PPTX is off, and the saved-template list
+ * only unlocks once at least one seminar is cleared with the ✕.
+ */
+function updateImportSlotLocks() {
+  const slots = Array.from(document.querySelectorAll('.import-cert-slot'));
+  let anyEmpty = false;
+
+  slots.forEach((slot) => {
+    const filled = importSlotIsFilled(slot);
+    if (!filled) anyEmpty = true;
+
+    // Filled seminar: the Upload PPTX button is removed entirely, not just dimmed.
+    const upload = slot.querySelector('.import-slot-upload');
+    const fileInput = slot.querySelector('.import-slot-file');
+    if (fileInput) fileInput.disabled = filled;
+    if (upload) upload.classList.toggle('hidden', filled);
+    const clearBtn = slot.querySelector('.import-slot-clear');
+    if (clearBtn) clearBtn.classList.toggle('hidden', !filled);
+  });
+
+  const locked = slots.length > 0 && !anyEmpty;
+  document.querySelectorAll('#importCertTemplateList .import-cert-template').forEach((btn) => {
+    btn.disabled = locked;
+    btn.classList.toggle('import-locked-card', locked);
+    btn.title = locked ? 'Tap ✕ on a seminar first to change its template' : '';
+  });
+  const hint = document.getElementById('importTemplateLockHint');
+  if (hint) hint.classList.toggle('hidden', !locked);
+}
+
+/** Spinner over a seminar slot; pass null to hide it. */
+function setSlotLoading(slotEl, message) {
+  if (!slotEl) return;
+  const overlay = slotEl.querySelector('.import-slot-loading-overlay');
+  if (!overlay) return;
+  if (message) {
+    const text = overlay.querySelector('.import-slot-loading-text');
+    if (text) text.textContent = message;
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+  } else {
+    overlay.classList.add('hidden');
+    overlay.classList.remove('flex');
+  }
 }
 
 function clearImportSlot(slotEl) {
@@ -2972,6 +3220,7 @@ function clearImportSlot(slotEl) {
   importSlotLoadGen[key] = (importSlotLoadGen[key] || 0) + 1;
   const fileInput = slotEl.querySelector('.import-slot-file');
   if (fileInput) fileInput.value = '';
+  setSlotLoading(slotEl, null);
   const original = slotEl.getAttribute('data-original-title') || 'Certificate preview';
   setSlotPreview(slotEl, {
     title: original,
@@ -3035,6 +3284,7 @@ function setScannedCodesLoading(slotKey, message) {
     `</svg>` +
     `<span>${label}</span>` +
     `</li>`;
+  updateImportLinkedCodesSummary();
   if (!document.getElementById('importSpinStyle')) {
     const style = document.createElement('style');
     style.id = 'importSpinStyle';
@@ -3161,7 +3411,7 @@ async function renderCanvasStatePreview(canvasState, multiplier = 2) {
 async function persistTemplateThumbnail(templateId, dataUrl) {
   if (!templateId || !dataUrl || !dataUrl.startsWith('data:image/')) return;
   try {
-    const prev = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId));
+    const prev = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now(), { cache: 'no-store' });
     const prevData = await prev.json();
     const canvasState = prevData.canvas_state;
     if (!canvasState) return;
@@ -3196,10 +3446,14 @@ function updateSidebarTemplateThumb(templateId, dataUrl) {
 async function refreshSavedTemplateSidebarThumbs() {
   const buttons = Array.from(document.querySelectorAll('#importCertTemplateList .import-cert-template'));
   for (const btn of buttons) {
+    // Slot previews the teacher is waiting on get the network/CPU first.
+    while (importPreviewPriority > 0) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
     const id = String(btn.getAttribute('data-template-id') || '').trim();
     if (!id) continue;
     try {
-      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(id) + '&_=' + Date.now());
+      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(id) + '&_=' + Date.now(), { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       if (!data || !data.ok || !data.canvas_state) continue;
       const sharp = await Promise.race([
@@ -3208,8 +3462,8 @@ async function refreshSavedTemplateSidebarThumbs() {
       ]);
       if (!sharp) continue;
       updateSidebarTemplateThumb(id, sharp);
-      // Persist so Cert Library / next refresh also show the real layout.
-      void persistTemplateCanvasAndThumb(id, data.canvas_state, sharp);
+      // DOM-only refresh here. Persisting every library card on open rewrote
+      // templates whose seed is already linked and caused noisy 409s.
     } catch (_) {}
   }
 }
@@ -3229,12 +3483,19 @@ async function showSyncedTemplatePreview(slotEl, templateId, titleFallback, canv
   const layoutAlreadyApplied = layoutApplies && !!opts.layoutAlreadyApplied;
   const sampleCode = layoutApplies ? String(opts.sampleCode || '').trim() : String(opts.sampleCode || '').trim();
 
+  // Keep any thumb already on screen and cover it with a spinner — blanking to
+  // "No certificate selected" made every load look like nothing was linked.
+  const existingImg = slotEl.querySelector('.import-slot-preview-img');
+  const shownThumb = (existingImg && !existingImg.classList.contains('hidden'))
+    ? (existingImg.getAttribute('src') || '')
+    : '';
   setSlotPreview(slotEl, {
     title,
     scope: layoutApplies ? 'Rendering aligned preview…' : 'Loading preview…',
-    thumb: '',
+    thumb: shownThumb,
     templateName: title,
   });
+  setSlotLoading(slotEl, layoutApplies ? 'Rendering aligned preview…' : 'Loading preview…');
   let sharp = '';
   try {
     let stateForPreview = canvasState;
@@ -3268,7 +3529,7 @@ async function showSyncedTemplatePreview(slotEl, templateId, titleFallback, canv
   if (!stillCurrent()) return;
   if (!sharp) {
     try {
-      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now());
+      const res = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now(), { cache: 'no-store' });
       const data = await res.json();
       if (data.ok && data.canvas_state) {
         const codesFromState = extractCodesForSeminarSlot(data.canvas_state);
@@ -3297,6 +3558,7 @@ async function showSyncedTemplatePreview(slotEl, templateId, titleFallback, canv
     } catch (_) {}
   }
   if (!stillCurrent()) return;
+  setSlotLoading(slotEl, null);
   if (sharp) {
     setSlotPreview(slotEl, {
       title,
@@ -4044,7 +4306,7 @@ async function selectImportTemplate(btn) {
   let canvasState = null;
 
   try {
-    const previewRes = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now())
+    const previewRes = await fetch('/api/certificate_template_preview.php?template_id=' + encodeURIComponent(templateId) + '&_=' + Date.now(), { cache: 'no-store' })
       .then((r) => r.json())
       .catch(() => null);
     if (importSlotLoadGen[key] !== loadGen) return;
@@ -4129,8 +4391,8 @@ document.querySelectorAll('.import-cert-slot').forEach((slot) => {
     const label = slot.getAttribute('data-slot-label') || 'seminar';
     const title = slot.getAttribute('data-original-title') || '';
     if (importCertStatus) {
-      importCertStatus.textContent = importSlotTemplates[importActiveSlotKey]
-        ? `Selected ${label}${title ? ' — ' + title : ''}. Click a template to change it.`
+      importCertStatus.textContent = importSlotIsFilled(slot)
+        ? `Selected ${label}${title ? ' — ' + title : ''}. Tap ✕ to change its template or upload a PPTX.`
         : `Selected ${label}${title ? ' — ' + title : ''}. Now click a saved template.`;
       importCertStatus.className = 'text-xs text-orange-700 font-semibold text-center min-h-[1rem]';
     }
@@ -4230,6 +4492,9 @@ document.querySelectorAll('.import-cert-slot').forEach((slot) => {
       renderScannedCodes(key, []);
       importScannedLayouts[key] = null;
       importLayoutBoundTemplateId[key] = '';
+      // Drop the rejected PPTX so Save & link can't resubmit a duplicate code.
+      importPendingFiles[key] = null;
+      e.target.value = '';
       if (importCertStatus) {
         importCertStatus.textContent = err.message || 'Scan failed';
         importCertStatus.className = 'text-xs text-red-600 font-semibold text-center min-h-[1rem]';
@@ -4424,6 +4689,12 @@ async function submitImportCert() {
   });
   setImportModalMode('linked', { animate: true, force: true });
   if (statusEl) {
+    if (errors.length) {
+      // Partial save (e.g. one seminar reused a code) — never hide it behind the success text.
+      statusEl.textContent = `Some seminars were not saved: ${errors[0]}`;
+      statusEl.className = 'text-xs text-amber-700 font-semibold text-center min-h-[1rem]';
+      return;
+    }
     const seedHint = (() => {
       const first = items.map((it) => it.title).filter(Boolean)[0];
       return first ? ` “${first}”` : '';

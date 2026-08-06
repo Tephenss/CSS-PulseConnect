@@ -183,6 +183,13 @@ body {
     display: grid;
     grid-template-columns: 210px minmax(0, 1fr) 270px;
     grid-template-rows: minmax(0, 1fr);
-    divide-style: solid;
+  }
+  #importCertModal .import-cert-layout > * {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #importCertModal .import-cert-layout > section {
+    overflow-y: auto;
   }
 }
