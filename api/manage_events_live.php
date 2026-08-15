@@ -22,7 +22,7 @@ $userId = trim((string) ($user['id'] ?? ''));
 $role = trim((string) ($user['role'] ?? ''));
 $cacheGen = api_cache_generation('manage_events');
 $cacheKey = 'manage_events_live:g' . $cacheGen . ':' . $role . ':' . $userId . ':' . ($lite ? 'lite' : 'full');
-$ttl = $lite ? 30 : 25;
+$ttl = $lite ? 60 : 45;
 
 try {
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');

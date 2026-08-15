@@ -3,9 +3,23 @@ declare(strict_types=1);
 
 function json_response(array $data, int $status = 200): void
 {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_SLASHES);
+    $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+    if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+        $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+    }
+    $json = json_encode($data, $flags);
+    if (!is_string($json) || $json === '') {
+        $json = '{"ok":false,"error":"Server encoding error."}';
+        if ($status < 400) {
+            http_response_code(500);
+        }
+    }
+    echo $json;
     exit;
 }
 

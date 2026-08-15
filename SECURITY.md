@@ -27,9 +27,10 @@ MOBILE_PUSH_API_KEY=<long-random-string-at-least-32-chars>
    - [`052_drop_remaining_write_temps.sql`](supabase/migrations/052_drop_remaining_write_temps.sql) — after deploying Phase B (event create / assistants / proposals via BFF)
    - [`053_advisor_info_locked_deny_policies.sql`](supabase/migrations/053_advisor_info_locked_deny_policies.sql) — explicit deny policies on locked tables (clears Advisor INFO; does **not** reopen anon)
    - [`057_student_roster.sql`](supabase/migrations/057_student_roster.sql) — school CSV roster (`student_roster`); **service role only**; Create Account looks up via PHP BFF exact match
+   - [`059_student_class_schedules.sql`](supabase/migrations/059_student_class_schedules.sql) — parsed class schedules (`student_class_schedules`); **service role only**; PDF is parsed and discarded by PHP, never stored
 3. Confirm:
    - Table `mobile_sessions` exists.
-   - Anon can **no longer** `select *` from `users`, `password_reset_codes`, `email_verification_codes`, `trusted_devices`, student-doc tables, `fcm_tokens`, or **`student_roster`**.
+   - Anon can **no longer** `select *` from `users`, `password_reset_codes`, `email_verification_codes`, `trusted_devices`, student-doc tables, `fcm_tokens`, **`student_roster`**, or **`student_class_schedules`**.
    - Anon can **no longer** `insert/update/delete` on attendance, tickets, events, assistants, certs, proposals, evaluation answers/questions.
    - Advisor INFO “RLS Enabled No Policy” on those locked tables is cleared via `*_deny_clients` (`USING false`) — still fail-closed for anon.
 
@@ -100,7 +101,7 @@ Expected: empty / permission denied / RLS violation — **not** user rows.
 
 ### Firestore must NOT store
 
-users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, student names/photos, registrations, student docs, mobile sessions, notification PII, or **school student roster** rows.
+users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, student names/photos, registrations, student docs, mobile sessions, notification PII, school student roster rows, or **class schedules**.
 
 ### Student roster (CSV import)
 
@@ -108,6 +109,14 @@ users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, stu
 - Mobile Create Account uses `api/mobile_roster_lookup.php` (**exact** student number only; no list/search) then `api/mobile_register_user.php` claims the roster row.
 - Flutter must **never** `.select()` / `.insert()` `student_roster` with the anon key.
 - Student login prefers **student number + password**; email login remains for existing accounts when the identifier contains `@`.
+
+### Student class schedules (registration-form PDF)
+
+- Create Account (Flutter) and Student Settings upload the LU Form No. 1 PDF to PHP (`api/mobile_register_user.php`, `api/mobile_schedule_parse.php`, `api/mobile_schedule_upload.php`).
+- The app reads the signed-in student's stored subjects via session PHP (`api/mobile_schedule_get.php`). Never trust client `user_id`; never anon-select `student_class_schedules`.
+- PHP extracts course code / description / day+time / instructor, then **deletes the temp file**. The PDF is never written to Storage or `users`.
+- Rows live in locked table `student_class_schedules` (service role only). Flutter must **never** `.select()` / `.insert()` this table with the anon key.
+- Absence-form export (`api/event_absence_form_export.php`) is web session + **event creator only**.
 
 ### Concurrent / load hardening (no flow change)
 

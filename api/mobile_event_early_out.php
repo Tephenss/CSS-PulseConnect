@@ -53,6 +53,15 @@ $canAccess = $isAdmin || mobile_teacher_can_access_event($eventId, $userId, $hea
 if (!$canAccess) {
     json_response(['ok' => false, 'error' => 'Not allowed to manage early out for this event.', 'status' => 'forbidden'], 403);
 }
+$isWrite = $action === 'set' || $enabledRaw !== null;
+$canManageEarlyOut = $isAdmin || mobile_api_is_event_creator($eventId, $userId, $headers);
+if ($isWrite && !$canManageEarlyOut) {
+    json_response([
+        'ok' => false,
+        'error' => 'Only the event creator can enable Early Out.',
+        'status' => 'forbidden',
+    ], 403);
+}
 
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 

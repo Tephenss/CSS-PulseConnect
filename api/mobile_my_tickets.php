@@ -87,6 +87,7 @@ foreach ($rows as &$row) {
     }
     $eid = trim((string) ($event['id'] ?? $row['event_id'] ?? ''));
     $count = (int) ($sessionCountByEvent[$eid] ?? 0);
+    $rawSessions = $sessionsByEvent[$eid] ?? [];
     if ($count > 0) {
         $event['uses_sessions'] = true;
         $event['event_mode'] = 'seminar_based';
@@ -94,12 +95,30 @@ foreach ($rows as &$row) {
             $event['event_structure'] = $count > 1 ? 'two_seminars' : 'one_seminar';
         }
         $event['session_count'] = $count;
+        $slimSessions = [];
+        if (is_array($rawSessions)) {
+            foreach ($rawSessions as $session) {
+                if (!is_array($session)) {
+                    continue;
+                }
+                $slimSessions[] = [
+                    'id' => (string) ($session['id'] ?? ''),
+                    'title' => (string) ($session['title'] ?? ''),
+                    'topic' => isset($session['topic']) ? (string) $session['topic'] : '',
+                    'location' => isset($session['location']) ? (string) $session['location'] : '',
+                    'start_at' => (string) ($session['start_at'] ?? ''),
+                    'end_at' => (string) ($session['end_at'] ?? ''),
+                ];
+            }
+        }
+        $event['sessions'] = $slimSessions;
     } else {
         if (!isset($event['event_mode']) || trim((string) $event['event_mode']) === '') {
             $event['event_mode'] = 'simple';
         }
         $event['uses_sessions'] = false;
         $event['session_count'] = 0;
+        $event['sessions'] = [];
     }
     $row['events'] = $event;
 }

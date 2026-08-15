@@ -264,22 +264,159 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
 render_header('Events', $user);
 ?>
 
+<!-- Include GSAP, ScrollTrigger, and Lenis CDN for 100% accurate Osmo Parallax Animation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script src="https://unpkg.com/lenis@1.1.14/dist/lenis.min.js"></script>
+
 <style>
+  /* Full-bleed against dashboard header + sidebar (no white/black frame gap). */
+  main.content-area {
+    padding: 0 !important;
+    background: transparent;
+  }
+
+  /* ── 100% Accurate Osmo Parallax Component CSS ── */
+  .parallax {
+    width: 100%;
+    position: relative;
+    background-color: #ffffff;
+    border-radius: 0;
+    overflow: hidden;
+    box-shadow: none;
+    margin: 0;
+    min-height: calc(100vh - 4rem);
+  }
+
+  .parallax__header {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 78vh;
+    min-height: 480px;
+    max-height: 820px;
+    overflow: hidden;
+  }
+
+  .parallax__visuals {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: hidden;
+  }
+
+  .parallax__black-line-overflow {
+    display: none;
+  }
+
+  .parallax__layers {
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  [data-parallax-layer="1"] {
+    z-index: 1;
+  }
+
+  [data-parallax-layer="2"] {
+    z-index: 2;
+  }
+
+  .parallax__layer-title,
+  [data-parallax-layer="3"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 3;
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  [data-parallax-layer="4"] {
+    z-index: 4;
+  }
+
+  .parallax__layer-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    position: absolute;
+    top: 0;
+    left: 0;
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  .parallax__title {
+    color: #ffffff;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: clamp(4.5rem, 14vw, 11rem);
+    font-weight: 900;
+    line-height: 0.85;
+    letter-spacing: -0.04em;
+    text-transform: uppercase;
+    margin: 0;
+    padding: 0;
+    text-align: center;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .parallax__fade {
+    width: 100%;
+    height: 25vh;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff);
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .parallax__content {
+    position: relative;
+    z-index: 6;
+    background-color: #ffffff;
+    padding: 2.5rem clamp(1.25rem, 3vw, 2.5rem) 4rem;
+    border-top: none;
+  }
+
+  /* Keep page footer matching the white events surface. */
+  #main-wrapper > footer {
+    border-top-color: #e4e4e7;
+    background: #ffffff;
+    color: #71717a;
+  }
+  #main-wrapper > footer span {
+    color: #71717a;
+  }
+
   /* 21st.dev 3D Card Effect Styling */
   .pc-3d-card-container {
     perspective: 1000px;
-    padding: 1rem 0;
+    padding: 0.5rem 0;
   }
 
   .pc-3d-card-body {
     transform-style: preserve-3d;
     will-change: transform;
+    background-color: #ffffff;
+    border: 1px solid #e4e4e7;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
     transition: box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
   .pc-3d-card-body:hover {
-    border-color: rgba(234, 88, 12, 0.35) !important;
-    box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.2), 0 15px 30px -10px rgba(234, 88, 12, 0.15) !important;
+    border-color: rgba(249, 115, 22, 0.55) !important;
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12), 0 8px 18px rgba(249, 115, 22, 0.18) !important;
   }
 
   .pc-3d-item {
@@ -288,255 +425,172 @@ render_header('Events', $user);
     will-change: transform, box-shadow, filter;
   }
 
-  /* 3D Floating Shadows when Card is Hovered */
   .pc-3d-card-body:hover .pc-3d-img-box {
-    box-shadow: 0 25px 45px -12px rgba(0, 0, 0, 0.45), 0 10px 20px -5px rgba(0, 0, 0, 0.2) !important;
+    box-shadow: 0 25px 45px -12px rgba(0, 0, 0, 0.65), 0 10px 20px -5px rgba(0, 0, 0, 0.4) !important;
   }
 
   .pc-3d-card-body:hover .pc-3d-img-box img {
-    transform: scale(1.04);
+    transform: scale(1.05);
   }
 
   .pc-3d-card-body:hover .pc-3d-title-box {
-    filter: drop-shadow(0 10px 8px rgba(0, 0, 0, 0.15));
-  }
-
-  .pc-3d-card-body:hover .pc-3d-meta-box {
-    filter: drop-shadow(0 6px 6px rgba(0, 0, 0, 0.12));
+    filter: drop-shadow(0 10px 8px rgba(0, 0, 0, 0.25));
   }
 
   .pc-3d-card-body:hover .pc-3d-btn {
-    box-shadow: 0 10px 20px -5px rgba(234, 88, 12, 0.45) !important;
-  }
-
-  .events-hero {
-    position: relative;
-    overflow: hidden;
-    border-radius: 1.25rem;
-    border: 1px solid rgba(120, 53, 15, 0.12);
-    background:
-      radial-gradient(ellipse 80% 70% at 90% 20%, rgba(249, 115, 22, 0.14), transparent 55%),
-      radial-gradient(ellipse 60% 50% at 10% 90%, rgba(127, 29, 29, 0.1), transparent 50%),
-      linear-gradient(145deg, #fffaf5 0%, #ffffff 45%, #faf7f4 100%);
-    padding: 1.5rem 1.5rem 1.35rem;
-    margin-bottom: 1.25rem;
-  }
-
-  .events-hero-copy {
-    position: relative;
-    z-index: 1;
-    max-width: 36rem;
-  }
-
-  .events-cube-wrap {
-    display: none;
-  }
-
-  @media (min-width: 900px) {
-    .events-hero {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 2rem;
-      padding: 1.75rem 2rem;
-      min-height: 220px;
-    }
-
-    .events-cube-wrap {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      width: 220px;
-      height: 220px;
-      perspective: 800px;
-    }
-  }
-
-  .events-cube-container {
-    width: 140px;
-    height: 140px;
-    perspective: 800px;
-    transition: transform 0.7s ease-out;
-  }
-
-  .events-cube-container:hover {
-    transform: scale(1.18);
-  }
-
-  .events-cube {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    transform-style: preserve-3d;
-    animation: eventsCubeSpin 10s infinite linear;
-  }
-
-  .events-cube-face {
-    --pulse-edge: linear-gradient(
-        115deg,
-        #7f1d1d,
-        #ea580c,
-        #fbbf24,
-        #ea580c,
-        #7f1d1d
-      )
-      1;
-    position: absolute;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 140px;
-    height: 140px;
-    padding: 0.5rem;
-    color: #fff7ed;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-align: center;
-    line-height: 1.25;
-    background: #1c0a0acc;
-    border: 2px solid;
-    border-image: var(--pulse-edge);
-    backface-visibility: hidden;
-  }
-
-  .events-cube-face span {
-    max-width: 100%;
-  }
-
-  .events-cube-front {
-    transform: translateZ(70px);
-  }
-
-  .events-cube-back {
-    transform: rotateY(180deg) translateZ(70px);
-  }
-
-  .events-cube-right {
-    transform: rotateY(90deg) translateZ(70px);
-  }
-
-  .events-cube-left {
-    transform: rotateY(-90deg) translateZ(70px);
-  }
-
-  .events-cube-top {
-    transform: rotateX(90deg) translateZ(70px);
-  }
-
-  .events-cube-bottom {
-    transform: rotateX(-90deg) translateZ(70px);
-  }
-
-  @keyframes eventsCubeSpin {
-    0% {
-      transform: rotateX(0) rotateY(0) rotateZ(0);
-    }
-
-    100% {
-      transform: rotateX(360deg) rotateY(360deg) rotateZ(360deg);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .events-cube {
-      animation: none;
-      transform: rotateX(-18deg) rotateY(32deg);
-    }
-
-    .events-cube-container:hover {
-      transform: none;
-    }
+    box-shadow: 0 10px 20px -5px rgba(234, 88, 12, 0.55) !important;
   }
 </style>
 
-<div class="events-hero">
-  <div class="events-hero-copy">
-    <p class="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-orange-700/80">PulseConnect · CCS</p>
-    <h2 class="text-2xl font-bold text-zinc-900 mb-2 tracking-tight">Explore Events</h2>
-    <p class="text-zinc-600 text-sm leading-relaxed max-w-lg">Browse published campus events and review finished ones
-      without sending them straight to archive.</p>
-  </div>
-  <div class="events-cube-wrap" aria-hidden="true">
-    <div class="events-cube-container">
-      <div class="events-cube">
-        <div class="events-cube-face events-cube-front"><span>PulseConnect</span></div>
-        <div class="events-cube-face events-cube-back"><span>Stay Linked</span></div>
-        <div class="events-cube-face events-cube-right"><span>CCS Events</span></div>
-        <div class="events-cube-face events-cube-left"><span>Register</span></div>
-        <div class="events-cube-face events-cube-top"><span>Attend</span></div>
-        <div class="events-cube-face events-cube-bottom"><span>Engage</span></div>
+<!-- ── PARALLAX SCROLLING COMPONENT (Exact Osmo Supply Template) ── -->
+<div class="parallax" id="parallaxRef">
+  <section class="parallax__header">
+    <div class="parallax__visuals">
+      <div class="parallax__black-line-overflow"></div>
+      <div data-parallax-layers class="parallax__layers">
+        
+        <!-- Layer 1: Sky & Distant Mountain Background -->
+        <img src="https://cdn.prod.website-files.com/671752cd4027f01b1b8f1c7f/6717795be09b462b2e8ebf71_osmo-parallax-layer-3.webp" 
+             loading="eager" width="800" data-parallax-layer="1" alt="" 
+             class="parallax__layer-img" />
+        
+        <!-- Layer 2: Midground Mountain Ridge -->
+        <img src="https://cdn.prod.website-files.com/671752cd4027f01b1b8f1c7f/6717795b4d5ac529e7d3a562_osmo-parallax-layer-2.webp" 
+             loading="eager" width="800" data-parallax-layer="2" alt="" 
+             class="parallax__layer-img" />
+        
+        <!-- Layer 3: Title (Slides down behind Layer 4) -->
+        <div data-parallax-layer="3" class="parallax__layer-title">
+          <h2 class="parallax__title">Events</h2>
+        </div>
+        
+        <!-- Layer 4: Foreground Rock & Person Standing (Sits in front of Title) -->
+        <img src="assets\2fa12b03-f80c-4e75-a35f-a78808cf99f1.png" 
+             loading="eager" width="800" data-parallax-layer="4" alt="" 
+             class="parallax__layer-img" />
       </div>
+      
+      <div class="parallax__fade"></div>
     </div>
-  </div>
-</div>
+  </section>
 
-<div class="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm w-fit">
-  <button type="button" id="tabPublished"
-    class="event-tab-btn rounded-xl bg-orange-600 px-4 py-2 text-sm font-bold text-white shadow-sm">
-    Published
-    <span class="ml-1.5 rounded-full bg-white/20 px-2 py-0.5 text-[11px]"><?= count($publishedEvents) ?></span>
-  </button>
-  <button type="button" id="tabFinished"
-    class="event-tab-btn rounded-xl px-4 py-2 text-sm font-semibold text-zinc-600 hover:bg-zinc-100">
-    Finished
-    <span
-      class="ml-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600"><?= count($finishedEvents) ?></span>
-  </button>
-</div>
+  <!-- PARALLAX CONTENT SECTION (Events List Revealed on Scroll) -->
+  <section class="parallax__content">
+    
+    <!-- White High-Visibility Tab Switcher Bar -->
+    <div class="mb-8 flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg w-fit">
+      <button type="button" id="tabPublished"
+        class="event-tab-btn rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-bold text-white shadow-md transition-all duration-300 flex items-center gap-2">
+        Published
+        <span id="badgePublished" class="ml-1.5 rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-extrabold text-white"><?= count($publishedEvents) ?></span>
+      </button>
+      <button type="button" id="tabFinished"
+        class="event-tab-btn rounded-xl px-5 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-100 transition-all duration-300 flex items-center gap-2">
+        Finished
+        <span id="badgeFinished" class="ml-1.5 rounded-full bg-zinc-200 px-2.5 py-0.5 text-[11px] font-bold text-zinc-700"><?= count($finishedEvents) ?></span>
+      </button>
+    </div>
 
-<section id="publishedPanel">
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-    <?php if (count($publishedEvents) === 0): ?>
-      <div
-        class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-12 text-center">
-        <div
-          class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
-          <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm3.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75z" />
-          </svg>
-        </div>
-        <h3 class="text-lg font-medium text-zinc-800 mb-1">No published events found</h3>
-        <p class="text-sm text-zinc-600 max-w-md mx-auto">There are currently no upcoming or ongoing published events
-          available in this list.</p>
+    <!-- Published Panel -->
+    <section id="publishedPanel">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <?php if (count($publishedEvents) === 0): ?>
+          <div class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-12 text-center">
+            <div class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm3.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75z" />
+              </svg>
+            </div>
+            <h3 class="text-lg font-medium text-zinc-800 mb-1">No published events found</h3>
+            <p class="text-sm text-zinc-500 max-w-md mx-auto">There are currently no upcoming or ongoing published events available in this list.</p>
+          </div>
+        <?php endif; ?>
+
+        <?php foreach ($publishedEvents as $e): ?>
+          <?php $renderEventCard($e, false); ?>
+        <?php endforeach; ?>
       </div>
-    <?php endif; ?>
+    </section>
 
-    <?php foreach ($publishedEvents as $e): ?>
-      <?php $renderEventCard($e, false); ?>
-    <?php endforeach; ?>
-  </div>
-</section>
+    <!-- Finished Panel -->
+    <section id="finishedPanel" class="hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <?php if (count($finishedEvents) === 0): ?>
+          <div class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-12 text-center">
+            <div class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h3 class="text-lg font-medium text-zinc-800 mb-1">No finished events yet</h3>
+            <p class="text-sm text-zinc-500 max-w-md mx-auto">Completed events will stay here instead of being auto-archived right away.</p>
+          </div>
+        <?php endif; ?>
 
-<section id="finishedPanel" class="hidden">
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-    <?php if (count($finishedEvents) === 0): ?>
-      <div
-        class="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 p-12 text-center">
-        <div
-          class="w-16 h-16 rounded-full bg-white border border-zinc-200 flex items-center justify-center mx-auto mb-4 shadow-sm">
-          <svg class="w-8 h-8 text-zinc-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </div>
-        <h3 class="text-lg font-medium text-zinc-800 mb-1">No finished events yet</h3>
-        <p class="text-sm text-zinc-600 max-w-md mx-auto">Completed events will stay here instead of being auto-archived
-          right away.</p>
+        <?php foreach ($finishedEvents as $e): ?>
+          <?php $renderEventCard($e, true); ?>
+        <?php endforeach; ?>
       </div>
-    <?php endif; ?>
+    </section>
 
-    <?php foreach ($finishedEvents as $e): ?>
-      <?php $renderEventCard($e, true); ?>
-    <?php endforeach; ?>
-  </div>
-</section>
+  </section>
+</div>
 
 <script>
-  /* ── Tab switcher ── */
+  /* ── 100% Exact Osmo Parallax Animation & Lenis Integration ── */
+  document.addEventListener('DOMContentLoaded', () => {
+    if (typeof gsap !== 'undefined' && typeof ScrollTrigger !== 'undefined') {
+      gsap.registerPlugin(ScrollTrigger);
+
+      const triggerElement = document.querySelector('[data-parallax-layers]');
+
+      if (triggerElement) {
+        const tl = gsap.timeline({
+          scrollTrigger: {
+            trigger: triggerElement,
+            start: "0% 0%",
+            end: "100% 0%",
+            scrub: 0
+          }
+        });
+
+        const layers = [
+          { layer: "1", yPercent: 70 },
+          { layer: "2", yPercent: 55 },
+          { layer: "3", yPercent: 40 },
+          { layer: "4", yPercent: 10 }
+        ];
+
+        layers.forEach((layerObj, idx) => {
+          tl.to(
+            triggerElement.querySelectorAll(`[data-parallax-layer="${layerObj.layer}"]`),
+            {
+              yPercent: layerObj.yPercent,
+              ease: "none"
+            },
+            idx === 0 ? undefined : "<"
+          );
+        });
+      }
+    }
+
+    if (typeof Lenis !== 'undefined') {
+      const lenis = new Lenis({
+        duration: 1.2,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+        smoothWheel: true,
+      });
+      lenis.on('scroll', ScrollTrigger.update);
+      gsap.ticker.add((time) => { lenis.raf(time * 1000); });
+      gsap.ticker.lagSmoothing(0);
+    }
+  });
+
+  /* ── High Visibility Tab Switcher ── */
   const publishedBtn   = document.getElementById('tabPublished');
   const finishedBtn    = document.getElementById('tabFinished');
+  const badgePublished = document.getElementById('badgePublished');
+  const badgeFinished  = document.getElementById('badgeFinished');
   const publishedPanel = document.getElementById('publishedPanel');
   const finishedPanel  = document.getElementById('finishedPanel');
 
@@ -547,15 +601,27 @@ render_header('Events', $user);
 
     publishedBtn.classList.toggle('bg-orange-600',   showPublished);
     publishedBtn.classList.toggle('text-white',       showPublished);
-    publishedBtn.classList.toggle('shadow-sm',        showPublished);
-    publishedBtn.classList.toggle('text-zinc-600',   !showPublished);
+    publishedBtn.classList.toggle('shadow-md',        showPublished);
+    publishedBtn.classList.toggle('text-zinc-700',    !showPublished);
     publishedBtn.classList.toggle('hover:bg-zinc-100',!showPublished);
+
+    if (badgePublished) {
+      badgePublished.className = showPublished
+        ? 'ml-1.5 rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-extrabold text-white'
+        : 'ml-1.5 rounded-full bg-zinc-200 px-2.5 py-0.5 text-[11px] font-bold text-zinc-700';
+    }
 
     finishedBtn.classList.toggle('bg-orange-600',   !showPublished);
     finishedBtn.classList.toggle('text-white',       !showPublished);
-    finishedBtn.classList.toggle('shadow-sm',        !showPublished);
-    finishedBtn.classList.toggle('text-zinc-600',    showPublished);
+    finishedBtn.classList.toggle('shadow-md',        !showPublished);
+    finishedBtn.classList.toggle('text-zinc-700',    showPublished);
     finishedBtn.classList.toggle('hover:bg-zinc-100', showPublished);
+
+    if (badgeFinished) {
+      badgeFinished.className = !showPublished
+        ? 'ml-1.5 rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-extrabold text-white'
+        : 'ml-1.5 rounded-full bg-zinc-200 px-2.5 py-0.5 text-[11px] font-bold text-zinc-700';
+    }
   }
 
   publishedBtn?.addEventListener('click', () => setEventTab('published'));
@@ -574,13 +640,11 @@ render_header('Events', $user);
       let currentY = 0;
 
       function updateAnimation() {
-        // Lerp for 60fps/120fps butter smooth rotational tracking
         currentX += (targetX - currentX) * 0.1;
         currentY += (targetY - currentY) * 0.1;
 
         cardBody.style.transform = `rotateY(${currentX.toFixed(2)}deg) rotateX(${currentY.toFixed(2)}deg)`;
 
-        // Continue animation loop while hovered or while still resetting back to 0
         if (isHovered || Math.abs(targetX - currentX) > 0.01 || Math.abs(targetY - currentY) > 0.01) {
           rafId = requestAnimationFrame(updateAnimation);
         } else {
@@ -629,3 +693,4 @@ render_header('Events', $user);
 </script>
 
 <?php render_footer();
+

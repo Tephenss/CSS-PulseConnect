@@ -370,3 +370,138 @@ if (!function_exists('student_roster_public_preview')) {
         ];
     }
 }
+
+if (!function_exists('student_roster_year_ordinal_label')) {
+    function student_roster_year_ordinal_label(string $yearKey): string
+    {
+        return match (trim($yearKey)) {
+            '1' => '1st Year',
+            '2' => '2nd Year',
+            '3' => '3rd Year',
+            '4' => '4th Year',
+            default => '',
+        };
+    }
+}
+
+if (!function_exists('student_roster_year_key_from_section')) {
+    function student_roster_year_key_from_section(string $sectionName): string
+    {
+        $raw = trim($sectionName);
+        if ($raw === '' || strcasecmp($raw, 'N/A') === 0 || strcasecmp($raw, 'IRREGULAR') === 0) {
+            return '';
+        }
+        if (preg_match('/-([1-4])[A-Z]$/i', $raw, $m)) {
+            return (string) $m[1];
+        }
+        if (preg_match('/\birreg(?:ular)?[\s\-]*([1-4])/i', $raw, $m)) {
+            return (string) $m[1];
+        }
+        if (preg_match('/\b([1-4])[A-Z]\b/i', $raw, $m)) {
+            return (string) $m[1];
+        }
+        if (preg_match('/\b([1-4])(?:st|nd|rd|th)?(?:\s*year)?\b/i', $raw, $m)) {
+            return (string) $m[1];
+        }
+        return '';
+    }
+}
+
+if (!function_exists('student_roster_fetch_year_maps')) {
+    /**
+     * @param list<string> $userIds
+     * @param list<string> $studentNos
+     * @return array{by_user_id: array<string,string>, by_student_no: array<string,string>}
+     */
+    function student_roster_fetch_year_maps(array $userIds, array $studentNos, array $headers): array
+    {
+        $userIds = array_values(array_unique(array_filter(array_map(
+            static fn ($id): string => trim((string) $id),
+            $userIds
+        ), static fn (string $id): bool => $id !== '')));
+        $studentNos = array_values(array_unique(array_filter(array_map(
+            static fn ($no): string => trim((string) $no),
+            $studentNos
+        ), static fn (string $no): bool => $no !== '')));
+
+        $byUserId = [];
+        $byStudentNo = [];
+        $apply = static function (array $row) use (&$byUserId, &$byStudentNo): void {
+            $year = (int) ($row['year_level'] ?? 0);
+            if ($year < 1 || $year > 4) {
+                return;
+            }
+            $key = (string) $year;
+            $uid = trim((string) ($row['user_id'] ?? ''));
+            $no = trim((string) ($row['student_no'] ?? ''));
+            if ($uid !== '') {
+                $byUserId[$uid] = $key;
+            }
+            if ($no !== '') {
+                $byStudentNo[$no] = $key;
+            }
+        };
+
+        if ($userIds !== []) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+                . '?select=user_id,student_no,year_level'
+                . '&user_id=in.(' . implode(',', array_map('rawurlencode', $userIds)) . ')';
+            $res = supabase_request('GET', $url, $headers);
+            if ($res['ok']) {
+                $rows = json_decode((string) ($res['body'] ?? ''), true);
+                if (is_array($rows)) {
+                    foreach ($rows as $row) {
+                        if (is_array($row)) {
+                            $apply($row);
+                        }
+                    }
+                }
+            }
+        }
+        if ($studentNos !== []) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+                . '?select=user_id,student_no,year_level'
+                . '&student_no=in.(' . implode(',', array_map('rawurlencode', $studentNos)) . ')';
+            $res = supabase_request('GET', $url, $headers);
+            if ($res['ok']) {
+                $rows = json_decode((string) ($res['body'] ?? ''), true);
+                if (is_array($rows)) {
+                    foreach ($rows as $row) {
+                        if (is_array($row)) {
+                            $apply($row);
+                        }
+                    }
+                }
+            }
+        }
+
+        return [
+            'by_user_id' => $byUserId,
+            'by_student_no' => $byStudentNo,
+        ];
+    }
+}
+
+if (!function_exists('student_roster_resolve_year_key')) {
+    /**
+     * @param array{by_user_id?: array<string,string>, by_student_no?: array<string,string>} $maps
+     */
+    function student_roster_resolve_year_key(
+        string $userId,
+        string $studentNo,
+        string $sectionName,
+        array $maps
+    ): string {
+        $userId = trim($userId);
+        $studentNo = trim($studentNo);
+        $byUser = is_array($maps['by_user_id'] ?? null) ? $maps['by_user_id'] : [];
+        $byNo = is_array($maps['by_student_no'] ?? null) ? $maps['by_student_no'] : [];
+        if ($userId !== '' && isset($byUser[$userId]) && preg_match('/^[1-4]$/', (string) $byUser[$userId])) {
+            return (string) $byUser[$userId];
+        }
+        if ($studentNo !== '' && isset($byNo[$studentNo]) && preg_match('/^[1-4]$/', (string) $byNo[$studentNo])) {
+            return (string) $byNo[$studentNo];
+        }
+        return student_roster_year_key_from_section($sectionName);
+    }
+}

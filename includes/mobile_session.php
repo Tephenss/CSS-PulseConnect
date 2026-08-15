@@ -221,8 +221,10 @@ function mobile_api_require_user(array $data = []): array
     }
 
     // Client-supplied user_id must match session (prevents IDOR).
-    $claimed = trim((string) ($data['user_id'] ?? $data['student_id'] ?? ''));
-    if ($claimed !== '' && !hash_equals($userId, $claimed)) {
+    // Do NOT treat student_id as identity here — teachers send student_id as
+    // the assignee (assistant_assign). Check student_id only for student role.
+    $claimedUserId = trim((string) ($data['user_id'] ?? ''));
+    if ($claimedUserId !== '' && !hash_equals($userId, $claimedUserId)) {
         json_response(['ok' => false, 'error' => 'user_id does not match mobile session.'], 403);
     }
 
@@ -239,6 +241,16 @@ function mobile_api_require_user(array $data = []): array
     $user = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
     if ($user === null) {
         json_response(['ok' => false, 'error' => 'User not found for session.'], 401);
+    }
+
+    $role = strtolower(trim((string) ($user['role'] ?? '')));
+    $claimedStudentId = trim((string) ($data['student_id'] ?? ''));
+    if (
+        $role === 'student'
+        && $claimedStudentId !== ''
+        && !hash_equals($userId, $claimedStudentId)
+    ) {
+        json_response(['ok' => false, 'error' => 'user_id does not match mobile session.'], 403);
     }
 
     $user['_session_token'] = $token;

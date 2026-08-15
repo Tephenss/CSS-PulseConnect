@@ -56,6 +56,27 @@ if (!function_exists('parse_iso_datetime')) {
     }
 }
 
+/**
+ * Valid time-in is required before any time-out / check-out.
+ * Marked absent or never timed in must fail closed (anti-cheat).
+ */
+if (!function_exists('attendance_has_valid_time_in')) {
+    function attendance_has_valid_time_in(?array $row): bool
+    {
+        if (!is_array($row)) {
+            return false;
+        }
+        $status = strtolower(trim((string) ($row['status'] ?? '')));
+        if ($status === 'absent') {
+            return false;
+        }
+        if (trim((string) ($row['check_in_at'] ?? '')) !== '') {
+            return true;
+        }
+        return in_array($status, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true);
+    }
+}
+
 function attendance_early_out_expires_at(?DateTimeImmutable $enabledAt): ?DateTimeImmutable
 {
     if (!$enabledAt instanceof DateTimeImmutable) {

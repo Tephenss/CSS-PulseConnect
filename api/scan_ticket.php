@@ -93,6 +93,7 @@ if ($role === 'teacher' && !teacher_can_scan_event((string) ($user['id'] ?? ''),
 
 $scanContext = resolve_event_scan_context($event, $now, $headers);
 $scanStatus = (string) ($scanContext['status'] ?? 'closed');
+$scanMode = strtolower(trim((string) ($scanContext['scan_mode'] ?? 'check_in')));
 if ($scanStatus !== 'open') {
     $statusMessage = match ($scanStatus) {
         'waiting' => 'Scanning has not opened yet for this schedule.',
@@ -111,7 +112,7 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
         json_response(['ok' => false, 'error' => 'Seminar lookup failed'], 500);
     }
 
-    $sessionAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,check_in_at,last_scanned_at'
+    $sessionAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,last_scanned_at'
         . '&session_id=eq.' . rawurlencode($sessionId)
         . '&ticket_id=eq.' . rawurlencode($ticketId)
         . '&limit=1';
@@ -121,6 +122,12 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
     }
     $sessionAttendanceRows = json_decode((string) $sessionAttendanceRes['body'], true);
     $existingSessionAttendance = is_array($sessionAttendanceRows) && isset($sessionAttendanceRows[0]) ? $sessionAttendanceRows[0] : null;
+    $sessionHasTimeIn = function_exists('attendance_has_valid_time_in')
+        ? attendance_has_valid_time_in(is_array($existingSessionAttendance) ? $existingSessionAttendance : null)
+        : (is_array($existingSessionAttendance) && trim((string) ($existingSessionAttendance['check_in_at'] ?? '')) !== '');
+    if ($scanMode === 'check_out' && !$sessionHasTimeIn) {
+        json_response(['ok' => false, 'error' => 'Cannot time out — this student has no time-in (marked absent).'], 409);
+    }
     if (is_array($existingSessionAttendance) && !empty($existingSessionAttendance['id'])) {
         json_response(['ok' => false, 'error' => 'This ticket is already recorded for the active seminar'], 409);
     }
@@ -186,6 +193,12 @@ if (!is_array($att) || empty($att['id'])) {
 }
 
 $attId = (string) $att['id'];
+$hasValidTimeIn = function_exists('attendance_has_valid_time_in')
+    ? attendance_has_valid_time_in($att)
+    : (trim((string) ($att['check_in_at'] ?? '')) !== '' && strtolower(trim((string) ($att['status'] ?? ''))) !== 'absent');
+if ($scanMode === 'check_out' && !$hasValidTimeIn) {
+    json_response(['ok' => false, 'error' => 'Cannot time out — this student has no time-in (marked absent).'], 409);
+}
 
 // Cooldown for repeated scans
 $lastScannedAt = isset($att['last_scanned_at']) ? (string) $att['last_scanned_at'] : '';

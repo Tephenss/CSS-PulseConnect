@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
+require_once __DIR__ . '/../includes/media_assets.php';
 
 function proposal_document_public_url(string $path): string
 {
@@ -115,6 +116,10 @@ $fileBytes = file_get_contents($tmpName);
 if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded file.'], 400);
 }
+
+$optimized = media_optimize_if_image($fileBytes, $mimeType);
+$fileBytes = (string) ($optimized['bytes'] ?? $fileBytes);
+$mimeType = (string) ($optimized['mime'] ?? $mimeType);
 
 $storedFileName = proposal_document_extension($mimeType);
 $objectPath = $eventId . '/' . $teacherId . '/' . $requirementId . '-' . time() . '.' . $storedFileName;

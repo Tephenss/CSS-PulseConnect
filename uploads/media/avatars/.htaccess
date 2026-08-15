@@ -1,0 +1,9 @@
+# Deny direct HTTP access to private avatars.
+# Serve only via api/media_serve.php (HMAC signed).
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Deny from all
+</IfModule>
+Options -Indexes

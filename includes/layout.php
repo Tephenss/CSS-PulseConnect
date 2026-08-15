@@ -7,7 +7,6 @@ require_once __DIR__ . '/favicon.php';
 function render_header(string $title, ?array $user): void
 {
     $role = $user && isset($user['role']) ? (string) $user['role'] : null;
-    $pendingAppCount = 0;
     $csrf = csrf_ensure_token();
     $fullName = htmlspecialchars((string) ($user['full_name'] ?? 'User'));
     $initials = '';
@@ -50,7 +49,7 @@ function render_header(string $title, ?array $user): void
     echo '<div id="sidebar-overlay" class="fixed inset-0 bg-black/40 z-40 opacity-0 pointer-events-none lg:hidden" onclick="closeMobileSidebar()"></div>';
 
     // ── SIDEBAR ──
-    echo '<aside id="sidebar" class="sidebar-shell fixed top-0 left-0 h-screen flex flex-col z-50 overflow-hidden">';
+    echo '<aside id="sidebar" data-lenis-prevent class="sidebar-shell fixed top-0 left-0 h-screen flex flex-col z-50 overflow-hidden">';
 
     // Logo area
     echo '<div class="sidebar-header px-2 pt-8 pb-6 flex flex-col items-center justify-center flex-shrink-0 min-w-0 transition-all">';
@@ -71,7 +70,7 @@ function render_header(string $title, ?array $user): void
     echo '</div>';
 
     // Navigation
-    echo '<nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 content-area">';
+    echo '<nav id="sidebar-nav" class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 pb-4 content-area">';
 
     // ── Main nav ──
     echo '<div class="sidebar-section">Main</div>';
@@ -113,22 +112,16 @@ function render_header(string $title, ?array $user): void
         echo '<span id="manage-events-badge" class="manage-events-sidebar-badge ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-orange-500 text-white border border-orange-300 shadow-sm hidden">0</span>';
         echo '</a>';
 
-        if ($role === 'admin') {
-            echo '<a href="/manage_applications" data-tooltip="Manage Application" class="sidebar-link ' . (str_contains($title, 'Manage Application') ? 'active' : '') . '">';
-            echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m3.75 9v6m3-3H9m-3.75 6.75h13.5A2.25 2.25 0 0021 18.75V8.25A2.25 2.25 0 0018.75 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21z"/></svg>';
-            echo '<span class="sidebar-label">Manage Application</span>';
-            $badge = $pendingAppCount > 99 ? '99+' : (string) $pendingAppCount;
-            $badgeHiddenClass = $pendingAppCount > 0 ? '' : ' hidden';
-            echo '<span id="manage-applications-badge" class="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-amber-500 text-white border border-amber-300 shadow-sm' . $badgeHiddenClass . '">' . htmlspecialchars($badge) . '</span>';
-            echo '</a>';
-        }
-
         $calHref = $role === 'admin' ? '/admin_calendar' : '/teacher_calendar';
         echo '<a href="' . $calHref . '" data-tooltip="Calendar" class="sidebar-link ' . (str_contains($title, 'Calendar') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
         echo '<span class="sidebar-label">Calendar</span></a>';
 
         if ($role === 'teacher') {
+            echo '<a href="/teacher_sections" data-tooltip="Blocks" class="sidebar-link ' . ((str_contains($title, 'Block') || str_contains($title, 'Section')) ? 'active' : '') . '">';
+            echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>';
+            echo '<span class="sidebar-label">Blocks</span></a>';
+
             echo '<a href="/certificates_library" data-tooltip="Cert Templates" class="sidebar-link ' . (str_contains($title, 'Certificates') || str_contains($title, 'Cert') ? 'active' : '') . '">';
             echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>';
             echo '<span class="sidebar-label">Cert Templates</span></a>';
@@ -721,7 +714,7 @@ function render_header(string $title, ?array $user): void
                 window.setTimeout(flushPendingPreviews, 500);
             }
             fetchNotifications(false);
-            setInterval(function () { fetchNotifications(false); }, 45000);
+            setInterval(function () { fetchNotifications(false); }, 90000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     syncNotificationsOnFocus();
@@ -739,7 +732,14 @@ function render_header(string $title, ?array $user): void
         </script>';
     }
 
-    echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';window.PULSE_USER_ID=' . json_encode((string) ($user['id'] ?? '')) . ';</script>';
+    $emailMasked = '';
+    $sessionEmail = strtolower(trim((string) ($user['email'] ?? '')));
+    if ($sessionEmail !== '' && str_contains($sessionEmail, '@')) {
+        [$localPart, $domainPart] = explode('@', $sessionEmail, 2);
+        $keep = min(2, max(1, (int) floor(mb_strlen($localPart) / 3)));
+        $emailMasked = mb_substr($localPart, 0, $keep) . '***@' . $domainPart;
+    }
+    echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';window.PULSE_USER_ID=' . json_encode((string) ($user['id'] ?? '')) . ';window.PULSE_USER_EMAIL_MASKED=' . json_encode($emailMasked) . ';</script>';
     echo '<main class="flex-1 p-5 lg:p-8 content-area">';
 }
 
@@ -989,7 +989,7 @@ function render_footer(): void
             refreshManageEventsBadge(false);
             manageEventsBadgePolling = window.setInterval(function () {
                 refreshManageEventsBadge(false);
-            }, 45000);
+            }, 90000);
             document.addEventListener("visibilitychange", function () {
                 if (document.visibilityState === "visible") {
                     refreshManageEventsBadge(true);
@@ -1086,12 +1086,136 @@ function render_footer(): void
             });
         }
 
-        // ── Password Modal Logic ──
+        // ── Password Modal Logic (OTP first, then new + confirm) ──
+        var pwStep = 0;
+        var pwChangeToken = "";
+        var pwCooldown = 0;
+        var pwCooldownTimer = null;
+        var pwEmailMasked = String(window.PULSE_USER_EMAIL_MASKED || "");
+
+        function pwSetLoading(isLoading) {
+            var btn = document.getElementById("pref-btn");
+            var btnLbl = document.getElementById("pref-btn-lbl");
+            var btnLoad = document.getElementById("pref-btn-load");
+            if (!btn || !btnLbl || !btnLoad) return;
+            btn.disabled = !!isLoading;
+            btnLbl.classList.toggle("hidden", !!isLoading);
+            btnLoad.classList.toggle("hidden", !isLoading);
+        }
+
+        function pwShowMsg(kind, text) {
+            var err = document.getElementById("pref-err");
+            var suc = document.getElementById("pref-suc");
+            if (!err || !suc) return;
+            err.classList.add("hidden");
+            suc.classList.add("hidden");
+            if (!text) return;
+            if (kind === "ok") {
+                suc.textContent = text;
+                suc.classList.remove("hidden");
+            } else {
+                err.textContent = text;
+                err.classList.remove("hidden");
+            }
+        }
+
+        function pwUpdateDesc() {
+            var desc = document.getElementById("pref-desc");
+            if (!desc) return;
+            if (pwStep === 0) {
+                desc.textContent = pwEmailMasked
+                    ? ("Tap Send to receive a 6-digit code at " + pwEmailMasked + ".")
+                    : "Tap Send to receive a 6-digit code on your email.";
+            } else if (pwStep === 1) {
+                desc.textContent = pwEmailMasked
+                    ? ("Enter the 6-digit code sent to " + pwEmailMasked + ".")
+                    : "Enter the 6-digit code sent to your email.";
+            } else {
+                desc.textContent = "Enter and confirm your new password.";
+            }
+        }
+
+        function pwRenderSteps() {
+            var sendStep = document.getElementById("pref-step-send");
+            var otpStep = document.getElementById("pref-step-otp");
+            var passStep = document.getElementById("pref-step-pass");
+            var btnLbl = document.getElementById("pref-btn-lbl");
+            if (sendStep) sendStep.classList.toggle("hidden", pwStep !== 0);
+            if (otpStep) otpStep.classList.toggle("hidden", pwStep !== 1);
+            if (passStep) passStep.classList.toggle("hidden", pwStep !== 2);
+            if (btnLbl) {
+                btnLbl.textContent = pwStep === 0 ? "Send Code" : (pwStep === 1 ? "Verify Code" : "Update Password");
+            }
+            pwUpdateDesc();
+        }
+
+        function pwStartCooldown(seconds) {
+            pwCooldown = Math.max(0, parseInt(seconds, 10) || 0);
+            var resendBtn = document.getElementById("pref-resend");
+            if (pwCooldownTimer) {
+                window.clearInterval(pwCooldownTimer);
+                pwCooldownTimer = null;
+            }
+            function tick() {
+                if (!resendBtn) return;
+                if (pwCooldown <= 0) {
+                    resendBtn.disabled = false;
+                    resendBtn.textContent = "Resend Code";
+                    return;
+                }
+                resendBtn.disabled = true;
+                resendBtn.textContent = "Resend available in " + pwCooldown + "s";
+            }
+            tick();
+            if (pwCooldown <= 0) return;
+            pwCooldownTimer = window.setInterval(function () {
+                pwCooldown -= 1;
+                if (pwCooldown <= 0) {
+                    window.clearInterval(pwCooldownTimer);
+                    pwCooldownTimer = null;
+                }
+                tick();
+            }, 1000);
+        }
+
+        function pwResetModalState() {
+            pwStep = 0;
+            pwChangeToken = "";
+            pwCooldown = 0;
+            if (pwCooldownTimer) {
+                window.clearInterval(pwCooldownTimer);
+                pwCooldownTimer = null;
+            }
+            var form = document.getElementById("pform");
+            if (form) form.reset();
+            pwShowMsg("", "");
+            pwRenderSteps();
+            var resendBtn = document.getElementById("pref-resend");
+            if (resendBtn) {
+                resendBtn.disabled = false;
+                resendBtn.textContent = "Resend Code";
+            }
+        }
+
+        async function pwApi(payload) {
+            var r = await fetch("/api/change_password.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(Object.assign({
+                    csrf_token: window.CSRF_TOKEN || ""
+                }, payload))
+            });
+            var data = {};
+            try { data = await r.json(); } catch (e) { data = {}; }
+            return { ok: r.ok && (data.ok === true || data.success === true), data: data, status: r.status };
+        }
+
         window.openPasswordModal = function() {
             var m = document.getElementById("pword-modal");
             document.body.classList.add("overflow-hidden");
             m.classList.remove("hidden");
             m.classList.add("flex");
+            pwResetModalState();
         };
 
         window.closePasswordModal = function() {
@@ -1099,72 +1223,123 @@ function render_footer(): void
             document.body.classList.remove("overflow-hidden");
             m.classList.add("hidden");
             m.classList.remove("flex");
-            document.getElementById("pform").reset();
-            document.getElementById("pref-err").classList.add("hidden");
-            document.getElementById("pref-suc").classList.add("hidden");
+            pwResetModalState();
         };
-        
-        window.confirmPasswordChange = async function() {
-            let cp = document.getElementById("p-curr").value;
-            let np = document.getElementById("p-new").value;
-            let cnp = document.getElementById("p-cnew").value;
-            let err = document.getElementById("pref-err");
-            let suc = document.getElementById("pref-suc");
-            var btn = document.getElementById("pref-btn");
-            var btnLbl = document.getElementById("pref-btn-lbl");
-            var btnLoad = document.getElementById("pref-btn-load");
-            
-            err.classList.add("hidden");
-            suc.classList.add("hidden");
-            
-            if(!cp || !np || !cnp) {
-                err.textContent = "All fields are required.";
-                err.classList.remove("hidden");
-                return;
-            }
-            if(np !== cnp) {
-                err.textContent = "New passwords do not match.";
-                err.classList.remove("hidden");
-                return;
-            }
-            if(np.length < 8) {
-                err.textContent = "Password must be at least 8 characters.";
-                err.classList.remove("hidden");
-                return;
-            }
 
-            btn.disabled = true;
-            btnLbl.classList.add("hidden");
-            btnLoad.classList.remove("hidden");
-
+        window.resendPasswordOtp = async function() {
+            if (pwStep !== 1 || pwCooldown > 0) return;
+            pwShowMsg("", "");
+            pwSetLoading(true);
             try {
-                let r = await fetch("/api/change_password.php", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        csrf_token: window.CSRF_TOKEN || "",
-                        current_password: cp,
-                        new_password: np
-                    })
-                });
-                
-                let data = await r.json();
-                
-                if(!r.ok || data.error) {
-                    err.textContent = data.error || "Update failed.";
-                    err.classList.remove("hidden");
-                } else if(data.success) {
-                    suc.textContent = "Password updated successfully!";
-                    suc.classList.remove("hidden");
-                    setTimeout(() => closePasswordModal(), 2000);
+                var res = await pwApi({ action: "send_otp" });
+                if (!res.ok) {
+                    pwShowMsg("err", (res.data && res.data.error) || "Unable to send verification code.");
+                    return;
                 }
-            } catch(e) {
-                err.textContent = "Network error. Please try again.";
-                err.classList.remove("hidden");
+                if (res.data && res.data.email_masked) pwEmailMasked = String(res.data.email_masked);
+                pwStartCooldown(res.data && res.data.cooldown_seconds ? res.data.cooldown_seconds : 60);
+                pwUpdateDesc();
+                pwShowMsg("ok", "Verification code sent. Check your email.");
+            } catch (e) {
+                pwShowMsg("err", "Network error. Please try again.");
             } finally {
-                btn.disabled = false;
-                btnLbl.classList.remove("hidden");
-                btnLoad.classList.add("hidden");
+                pwSetLoading(false);
+            }
+        };
+
+        window.confirmPasswordChange = async function() {
+            pwShowMsg("", "");
+            if (pwStep === 0) {
+                pwSetLoading(true);
+                try {
+                    var sendRes = await pwApi({ action: "send_otp" });
+                    if (!sendRes.ok) {
+                        pwShowMsg("err", (sendRes.data && sendRes.data.error) || "Unable to send verification code.");
+                        return;
+                    }
+                    if (sendRes.data && sendRes.data.email_masked) pwEmailMasked = String(sendRes.data.email_masked);
+                    pwStep = 1;
+                    pwRenderSteps();
+                    pwStartCooldown(sendRes.data && sendRes.data.cooldown_seconds ? sendRes.data.cooldown_seconds : 60);
+                    if (!sendRes.data || sendRes.data.skipped !== true) {
+                        pwShowMsg("ok", "Verification code sent. Check your email.");
+                    }
+                } catch (e) {
+                    pwShowMsg("err", "Network error. Please try again.");
+                } finally {
+                    pwSetLoading(false);
+                }
+                return;
+            }
+
+            if (pwStep === 1) {
+                var code = (document.getElementById("p-otp") || {}).value || "";
+                code = String(code).trim();
+                if (!/^\d{6}$/.test(code)) {
+                    pwShowMsg("err", "Please enter the 6-digit code.");
+                    return;
+                }
+                pwSetLoading(true);
+                try {
+                    var verifyRes = await pwApi({ action: "verify_otp", code: code });
+                    if (!verifyRes.ok) {
+                        pwShowMsg("err", (verifyRes.data && verifyRes.data.error) || "Invalid verification code.");
+                        return;
+                    }
+                    pwChangeToken = String((verifyRes.data && verifyRes.data.change_token) || "");
+                    if (!pwChangeToken) {
+                        pwShowMsg("err", "Invalid verification session. Please request a new code.");
+                        return;
+                    }
+                    pwStep = 2;
+                    pwRenderSteps();
+                    pwShowMsg("ok", "Code verified. Set your new password.");
+                } catch (e) {
+                    pwShowMsg("err", "Network error. Please try again.");
+                } finally {
+                    pwSetLoading(false);
+                }
+                return;
+            }
+
+            var np = (document.getElementById("p-new") || {}).value || "";
+            var cnp = (document.getElementById("p-cnew") || {}).value || "";
+            if (!np || !cnp) {
+                pwShowMsg("err", "All fields are required.");
+                return;
+            }
+            if (np !== cnp) {
+                pwShowMsg("err", "New passwords do not match.");
+                return;
+            }
+            if (np.length < 8) {
+                pwShowMsg("err", "Password must be at least 8 characters.");
+                return;
+            }
+            if (!pwChangeToken) {
+                pwShowMsg("err", "Please verify the code first.");
+                pwStep = 0;
+                pwRenderSteps();
+                return;
+            }
+
+            pwSetLoading(true);
+            try {
+                var updateRes = await pwApi({
+                    action: "update",
+                    change_token: pwChangeToken,
+                    new_password: np
+                });
+                if (!updateRes.ok) {
+                    pwShowMsg("err", (updateRes.data && updateRes.data.error) || "Update failed.");
+                    return;
+                }
+                pwShowMsg("ok", "Password updated successfully!");
+                setTimeout(function () { closePasswordModal(); }, 2000);
+            } catch (e) {
+                pwShowMsg("err", "Network error. Please try again.");
+            } finally {
+                pwSetLoading(false);
             }
         };
 
@@ -1183,26 +1358,34 @@ function render_footer(): void
           <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg> 
           Change Password
         </h3>
-        <p class="text-xs text-zinc-500 mb-5">Securely update your account credentials.</p>
+        <p id="pref-desc" class="text-xs text-zinc-500 mb-5">Tap Send to receive a 6-digit code on your email.</p>
         
         <div id="pref-err" class="mb-4 hidden rounded-lg bg-red-50 p-3 text-xs font-medium text-red-600 ring-1 ring-inset ring-red-500/20"></div>
         <div id="pref-suc" class="mb-4 hidden rounded-lg bg-green-50 p-3 text-xs font-medium text-green-600 ring-1 ring-inset ring-green-600/20"></div>
 
         <form id="pform" class="space-y-4" onsubmit="event.preventDefault(); window.confirmPasswordChange();">
-            <div>
-                <label class="block text-xs font-semibold text-zinc-700 mb-1">Current Password</label>
-                <input type="password" id="p-curr" required class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+            <div id="pref-step-send"></div>
+            <div id="pref-step-otp" class="hidden space-y-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirmation Code</label>
+                    <input type="text" id="p-otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30 tracking-[0.3em]">
+                </div>
+                <div class="flex justify-end">
+                    <button type="button" id="pref-resend" onclick="window.resendPasswordOtp()" class="text-xs font-semibold text-indigo-600 hover:text-indigo-500 disabled:text-zinc-400">Resend Code</button>
+                </div>
             </div>
-            <div>
-                <label class="block text-xs font-semibold text-zinc-700 mb-1">New Password</label>
-                <input type="password" id="p-new" required class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+            <div id="pref-step-pass" class="hidden space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-700 mb-1">New Password</label>
+                    <input type="password" id="p-new" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirm New Password</label>
+                    <input type="password" id="p-cnew" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+                </div>
             </div>
-            <div>
-                <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirm New Password</label>
-                <input type="password" id="p-cnew" required class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
-            </div>
-            <button id="pref-btn" type="submit" class="mt-2 flex w-full justify-center items-center rounded-xl bg-indigo-600 px-3 py-3 text-sm font-semibold text-white shadow-md hover:bg-indigo-500 hover:shadow-lg transition">
-                <span id="pref-btn-lbl">Update Password</span>
+            <button id="pref-btn" type="submit" class="mt-2 flex w-full justify-center items-center rounded-xl bg-indigo-600 px-3 py-3 text-sm font-semibold text-white shadow-md hover:bg-indigo-500 hover:shadow-lg transition disabled:opacity-60">
+                <span id="pref-btn-lbl">Send Code</span>
                 <span id="pref-btn-load" class="hidden"><svg class="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></span>
             </button>
         </form>

@@ -14,18 +14,21 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/student_roster.php';
+require_once __DIR__ . '/../includes/registration_form_parse.php';
+require_once __DIR__ . '/../includes/student_class_schedules.php';
 
-$data = mobile_api_require_post_json();
-mobile_api_validate_key($data);
+mobile_api_install_json_error_trap();
+$fields = mobile_api_require_post_fields();
+mobile_api_validate_key($fields);
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
 if (!api_rate_limit_allow('mobile_register_user:' . $clientIp, 8, 600)) {
     json_response(['ok' => false, 'error' => 'Too many registration attempts. Please wait.'], 429);
 }
 
-$email = strtolower(trim((string) ($data['email'] ?? '')));
-$password = (string) ($data['password'] ?? '');
-$idNumber = student_roster_normalize_no((string) ($data['student_id'] ?? $data['student_no'] ?? $data['id_number'] ?? ''));
+$email = strtolower(trim((string) ($fields['email'] ?? '')));
+$password = (string) ($fields['password'] ?? '');
+$idNumber = student_roster_normalize_no((string) ($fields['student_id'] ?? $fields['student_no'] ?? $fields['id_number'] ?? ''));
 
 if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
@@ -35,6 +38,22 @@ if (mb_strlen($password) < 8) {
 }
 if ($idNumber === '') {
     json_response(['ok' => false, 'error' => 'Student number is required.'], 400);
+}
+
+$upload = registration_form_accept_upload();
+if (!$upload['ok']) {
+    json_response(['ok' => false, 'error' => $upload['error'] !== '' ? $upload['error'] : 'Upload your LU registration form PDF to continue.'], 400);
+}
+$pdfBinary = (string) file_get_contents($upload['path']);
+registration_form_discard($upload['path']);
+$parsedSchedule = registration_form_parse_pdf_bytes($pdfBinary);
+unset($pdfBinary);
+if (!($parsedSchedule['ok'] ?? false)) {
+    json_response(['ok' => false, 'error' => (string) ($parsedSchedule['error'] ?? 'Could not read that PDF.')], 400);
+}
+$scheduleSubjects = $parsedSchedule['subjects'] ?? [];
+if (!is_array($scheduleSubjects) || $scheduleSubjects === []) {
+    json_response(['ok' => false, 'error' => 'Could not read subjects from that PDF.'], 400);
 }
 
 $roster = student_roster_fetch_by_no($idNumber);
@@ -167,4 +186,17 @@ if ($newUserId !== '' && $rosterId !== '') {
     }
 }
 
-json_response(['ok' => true, 'user' => $user], 200);
+if ($newUserId !== '' && !student_class_schedules_replace($newUserId, $idNumber, $scheduleSubjects)) {
+    supabase_request(
+        'DELETE',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS . '?id=eq.' . rawurlencode($newUserId),
+        $headers
+    );
+    json_response(['ok' => false, 'error' => 'Account was created but class schedule could not be saved. Please try again.'], 500);
+}
+
+json_response([
+    'ok' => true,
+    'user' => $user,
+    'subjects' => student_class_schedules_public_rows($scheduleSubjects),
+], 200);

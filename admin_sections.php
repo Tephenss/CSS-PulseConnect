@@ -58,6 +58,72 @@ if (isset($courseSeen['OTHER'])) {
     $courseTabs[] = 'OTHER';
 }
 
+$yearLabels = [
+    '1' => '1st Year',
+    '2' => '2nd Year',
+    '3' => '3rd Year',
+    '4' => '4th Year',
+    'OTHER' => 'Other Blocks',
+];
+$groupedSections = [];
+$sectionDisplayById = [];
+foreach ($sections as $sectionRow) {
+    $sid = (string) ($sectionRow['id'] ?? '');
+    $rawName = trim((string) ($sectionRow['name'] ?? ''));
+    $programLabel = $extractProgram($rawName);
+    $yearKey = 'OTHER';
+    $sectionName = $rawName;
+    $blockCode = $rawName;
+
+    // Standard format: "<PROGRAM> <YEAR><BLOCK>" (e.g. BSIT SD 1A).
+    if (preg_match('/^(BSIT SD|BSIT BA|BSCS|BSIT)\s*([1-4])\s*([A-Z])$/i', $rawName, $m)) {
+        $programLabel = strtoupper(trim((string) $m[1]));
+        if ($programLabel === 'BSIT') {
+            $programLabel = 'BSIT SD';
+        }
+        $yearKey = (string) $m[2];
+        $blockCode = $yearKey . strtoupper((string) $m[3]);
+        $sectionName = $programLabel . ' ' . $blockCode;
+    } elseif (str_contains($rawName, '-')) {
+        // Legacy format: "<YEAR LABEL>-<SECTION NAME>".
+        [$legacyYear, $legacyName] = array_pad(explode('-', $rawName, 2), 2, '');
+        $sectionName = trim($legacyName);
+        $programLabel = $extractProgram($sectionName);
+        if (preg_match('/([1-4])(?:st|nd|rd|th)?\s*year/i', trim($legacyYear), $yearMatch)) {
+            $yearKey = (string) $yearMatch[1];
+        }
+        if (preg_match('/\b([1-4])\s*([A-Z])$/i', $sectionName, $blockMatch)) {
+            $yearKey = (string) $blockMatch[1];
+            $blockCode = $yearKey . strtoupper((string) $blockMatch[2]);
+        } else {
+            $blockCode = $sectionName;
+        }
+    } elseif (preg_match('/\b([1-4])\s*([A-Z])$/i', $rawName, $blockMatch)) {
+        $yearKey = (string) $blockMatch[1];
+        $blockCode = $yearKey . strtoupper((string) $blockMatch[2]);
+    }
+
+    $groupedSections[$programLabel][$yearKey][] = [
+        'id' => $sid,
+        'raw_name' => $rawName,
+        'section_name' => $sectionName,
+        'block_code' => $blockCode,
+    ];
+    $sectionDisplayById[$sid] = [
+        'year_key' => $yearKey,
+        'block_code' => $blockCode,
+    ];
+}
+foreach ($groupedSections as &$programYears) {
+    foreach ($programYears as &$yearSections) {
+        usort($yearSections, static fn(array $a, array $b): int =>
+            strnatcasecmp((string) $a['block_code'], (string) $b['block_code'])
+        );
+    }
+    unset($yearSections);
+}
+unset($programYears);
+
 render_header('Manage Blocks', $user);
 ?>
 
@@ -103,8 +169,8 @@ render_header('Manage Blocks', $user);
   </nav>
 </div>
 
-<!-- Sections Grid Layout -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 mb-10">
+<!-- Sections are reorganized into year rows by the script below. -->
+<div id="sectionsByYear" class="mb-10">
   <?php foreach ($sections as $s): ?>
     <?php 
       $sid = (string) ($s['id'] ?? ''); 
@@ -138,7 +204,18 @@ render_header('Manage Blocks', $user);
           }
       }
     ?>
-    <div class="relative group section-card" data-course="<?= htmlspecialchars($programLabel) ?>">
+    <?php
+      $displayMeta = $sectionDisplayById[$sid] ?? [
+          'year_key' => 'OTHER',
+          'block_code' => $sectionName,
+      ];
+    ?>
+    <div
+      class="relative group section-card"
+      data-course="<?= htmlspecialchars($programLabel) ?>"
+      data-year="<?= htmlspecialchars((string) $displayMeta['year_key']) ?>"
+      data-block="<?= htmlspecialchars((string) $displayMeta['block_code']) ?>"
+    >
       <a href="admin_section_students.php?id=<?= urlencode($sid) ?>&name=<?= urlencode($sectionName) ?>" class="block bg-white rounded-2xl shadow-sm border border-zinc-200 p-5 hover:-translate-y-1 hover:shadow-md hover:border-orange-500/40 transition-all duration-300 flex flex-col h-full">
       
       <!-- Top Row: Actions only -->
@@ -155,7 +232,7 @@ render_header('Manage Blocks', $user);
       
       <!-- Section Content -->
       <div class="mt-auto">
-        <h3 class="text-xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars($sectionName) ?></h3>
+        <h3 class="text-xl font-bold text-zinc-900 leading-tight"><?= htmlspecialchars((string) $displayMeta['block_code']) ?></h3>
         <p class="text-xs font-semibold tracking-wide text-zinc-500 mt-1 uppercase">Class Block</p>
       </div>
 
@@ -270,11 +347,95 @@ render_header('Manage Blocks', $user);
   const modalTitle = document.getElementById('modalTitle');
   const sectionCards = Array.from(document.querySelectorAll('.section-card'));
   const courseTabButtons = Array.from(document.querySelectorAll('.course-tab'));
+  const sectionsByYear = document.getElementById('sectionsByYear');
+  const yearLabels = {
+    '1': '1st Year',
+    '2': '2nd Year',
+    '3': '3rd Year',
+    '4': '4th Year',
+    'OTHER': 'Other Blocks',
+  };
+  const yearOrder = ['1', '2', '3', '4', 'OTHER'];
+
+  // Build one labeled, single-line block row for every year in each program.
+  if (sectionsByYear && sectionCards.length > 0) {
+    sectionsByYear.innerHTML = '';
+
+    courseTabButtons.forEach((tab) => {
+      const course = (tab.dataset.courseTab || '').toUpperCase();
+      const panel = document.createElement('section');
+      panel.className = 'course-panel space-y-8 hidden';
+      panel.dataset.coursePanel = course;
+
+      const courseCards = sectionCards.filter(
+        (card) => (card.dataset.course || '').toUpperCase() === course,
+      );
+
+      yearOrder.forEach((year) => {
+        const cards = courseCards
+          .filter((card) => (card.dataset.year || 'OTHER').toUpperCase() === year)
+          .sort((a, b) =>
+            (a.dataset.block || '').localeCompare(
+              b.dataset.block || '',
+              undefined,
+              { numeric: true, sensitivity: 'base' },
+            ),
+          );
+        if (cards.length === 0) return;
+
+        const group = document.createElement('div');
+        group.className = 'year-group';
+
+        const heading = document.createElement('div');
+        heading.className = 'mb-3 flex items-center gap-3';
+
+        const title = document.createElement('h3');
+        title.className = 'text-sm font-extrabold uppercase tracking-wider text-zinc-800';
+        title.textContent = yearLabels[year] || yearLabels.OTHER;
+
+        const divider = document.createElement('div');
+        divider.className = 'h-px flex-1 bg-zinc-200';
+
+        const count = document.createElement('span');
+        count.className = 'rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-orange-600';
+        count.textContent = `${cards.length} block${cards.length === 1 ? '' : 's'}`;
+
+        heading.append(title, divider, count);
+
+        const scroller = document.createElement('div');
+        scroller.className = 'overflow-x-auto overscroll-x-contain pb-2';
+
+        const row = document.createElement('div');
+        row.className = 'grid gap-4';
+        row.style.gridTemplateColumns = `repeat(${cards.length}, minmax(145px, 1fr))`;
+        row.style.minWidth = 'max-content';
+
+        cards.forEach((card) => {
+          card.classList.add('min-w-[145px]');
+          row.appendChild(card);
+        });
+        scroller.appendChild(row);
+        group.append(heading, scroller);
+        panel.appendChild(group);
+      });
+
+      if (courseCards.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'rounded-3xl border border-dashed border-zinc-300 bg-white py-14 text-center';
+        empty.innerHTML =
+          '<p class="text-lg font-bold text-zinc-800">No blocks in this program</p>' +
+          '<p class="mt-1 text-sm text-zinc-500">Click “Add Block” to create one.</p>';
+        panel.appendChild(empty);
+      }
+
+      sectionsByYear.appendChild(panel);
+    });
+  }
 
   function applyCourseFilter(selectedCourse) {
-    sectionCards.forEach((card) => {
-      const cardCourse = (card.dataset.course || '').toUpperCase();
-      card.classList.toggle('hidden', cardCourse !== selectedCourse);
+    document.querySelectorAll('.course-panel').forEach((panel) => {
+      const panelCourse = (panel.dataset.coursePanel || '').toUpperCase();
+      panel.classList.toggle('hidden', panelCourse !== selectedCourse);
     });
     courseTabButtons.forEach((btn) => {
       const isActive = (btn.dataset.courseTab || '').toUpperCase() === selectedCourse;

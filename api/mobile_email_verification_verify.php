@@ -8,6 +8,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/device_trust.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -15,6 +16,9 @@ mobile_api_validate_key($data);
 $email = strtolower(trim((string) ($data['email'] ?? '')));
 $code = trim((string) ($data['code'] ?? ''));
 $userIdClaim = trim((string) ($data['user_id'] ?? ''));
+$deviceKey = strtolower(trim((string) ($data['device_key'] ?? '')));
+$platform = trim((string) ($data['platform'] ?? 'android'));
+$deviceLabel = trim((string) ($data['device_label'] ?? ''));
 
 // Prefer session when present (daily re-verify); allow user_id for first-time signup verify.
 $sessionToken = mobile_session_extract_token($data);
@@ -122,8 +126,34 @@ $user = is_array($userRows) && isset($userRows[0]) && is_array($userRows[0])
     ? mobile_user_strip_secrets($userRows[0])
     : null;
 
+// After a successful OTP, trust this phone install so signup → login does not
+// demand a second code on the same device.
+$trustedDevice = false;
+if ($deviceKey !== '') {
+    $isIpKey = str_starts_with($deviceKey, 'ip:');
+    $isInstallKey = str_starts_with($deviceKey, 'install:');
+    if ($isIpKey || $isInstallKey) {
+        $validInstall = true;
+        if ($isInstallKey) {
+            $installId = substr($deviceKey, strlen('install:'));
+            $validInstall = $installId !== '' && (bool) preg_match('/^[a-f0-9-]{16,80}$/', $installId);
+        }
+        if ($validInstall) {
+            $upsert = device_trust_upsert(
+                $userId,
+                $deviceKey,
+                $platform !== '' ? $platform : 'android',
+                $deviceLabel !== '' ? $deviceLabel : $deviceKey
+            );
+            $trustedDevice = (($upsert['ok'] ?? false) === true)
+                || (($upsert['missing_table'] ?? false) === true);
+        }
+    }
+}
+
 json_response([
     'ok' => true,
     'message' => 'Email verified.',
     'user' => $user,
+    'device_trusted' => $trustedDevice,
 ], 200);

@@ -718,8 +718,9 @@ function send_mobile_email_verification_code_email(
     }
 
     $safeName = trim($fullName) !== '' ? trim($fullName) : 'CCS PulseConnect User';
-    // Include code in subject so Gmail thread subjects match the body code.
-    $subject = 'CCS PulseConnect Email Verification ' . $code;
+    // Keep the OTP out of the subject — Gmail notifications show subject + body
+    // snippet, so putting the code in both made it appear twice.
+    $subject = 'CCS PulseConnect Email Verification';
     $textMessage = "Hello {$safeName},\n\n"
         . "Your verification code is: {$code}\n\n"
         . "This code expires in 5 minutes.\n"

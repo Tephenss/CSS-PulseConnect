@@ -15,6 +15,7 @@ require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/registration_access.php';
 require_once __DIR__ . '/includes/api_cache.php';
 require_once __DIR__ . '/includes/storage_signed.php';
+require_once __DIR__ . '/includes/student_roster.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'admin');
@@ -94,6 +95,15 @@ if ($role === 'teacher' && $participantTab === 'absence_reasons') {
 $backHref = event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null);
 $hasStudentRequirements = event_has_student_requirements($eventId, $headers);
 $isEventCreator = $role === 'admin' || ((string) ($event['created_by'] ?? '') === $userId);
+$isAbsenceFormCreator = ((string) ($event['created_by'] ?? '') === $userId);
+$absenceExportHtml = '';
+if ($isAbsenceFormCreator) {
+    $absenceExportHtml = '<button type="button" id="btnExportAbsenceForm" data-event-id="'
+        . htmlspecialchars($eventId)
+        . '" class="rounded-xl border border-sky-200 bg-sky-600 text-white px-4 py-2 text-sm font-semibold hover:bg-sky-700 transition shadow-sm flex items-center gap-2 group disabled:opacity-60 disabled:cursor-wait">'
+        . '<svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m.75 12l3 3m0 0l3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>'
+        . '<span data-label>Export Absence Form</span></button>';
+}
 $isPaidEvent = !event_is_free_registration_event($event);
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
@@ -141,6 +151,44 @@ $attendanceCountsAsPresent = static function (?array $row): bool {
     return in_array($status, ['present', 'scanned', 'late', 'early'], true);
 };
 
+$attendanceHasCheckOut = static function (?array $row): bool {
+    if (!is_array($row)) {
+        return false;
+    }
+    return trim((string) ($row['check_out_at'] ?? '')) !== '';
+};
+
+$inferFollowUpCase = static function (?array $reason, string $fallback = 'absent'): string {
+    $text = strtolower(trim((string) ($reason['reason_text'] ?? '')));
+    if (str_starts_with($text, '[no time-out]')) {
+        return 'missed_timeout';
+    }
+    if (str_starts_with($text, '[no time-in]')) {
+        return 'absent';
+    }
+    return $fallback === 'missed_timeout' ? 'missed_timeout' : 'absent';
+};
+
+$followUpCaseLabel = static function (string $case): string {
+    return $case === 'missed_timeout' ? 'No time-out' : 'No time-in';
+};
+
+$formatParticipantName = static function (array $profile): string {
+    $nameParts = [];
+    foreach (['first_name', 'middle_name', 'last_name'] as $key) {
+        $value = trim((string) ($profile[$key] ?? ''));
+        if ($value !== '') {
+            $nameParts[] = $value;
+        }
+    }
+    $name = implode(' ', $nameParts);
+    $suffix = trim((string) ($profile['suffix'] ?? ''));
+    if ($suffix !== '') {
+        $name .= ', ' . $suffix;
+    }
+    return $name !== '' ? $name : 'Unnamed Participant';
+};
+
 $absenceReasonRows = [];
 $absenceReasonTableAvailable = true;
 $absenceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons'
@@ -164,6 +212,24 @@ if ($usesSessions) {
     $pRes = supabase_request('GET', $pUrl, $headers);
     $participants = $pRes['ok'] ? json_decode((string) $pRes['body'], true) : [];
     $participants = is_array($participants) ? $participants : [];
+
+    $sessionUserIds = [];
+    $sessionStudentNos = [];
+    foreach ($participants as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $uid = trim((string) ($row['student_id'] ?? ''));
+        if ($uid !== '') {
+            $sessionUserIds[] = $uid;
+        }
+        $u = isset($row['users']) && is_array($row['users']) ? $row['users'] : [];
+        $no = trim((string) ($u['student_id'] ?? ''));
+        if ($no !== '') {
+            $sessionStudentNos[] = $no;
+        }
+    }
+    $sessionYearMaps = student_roster_fetch_year_maps($sessionUserIds, $sessionStudentNos, $headers);
 
     $attendanceMap = [];
     $ticketToRegistration = [];
@@ -243,9 +309,15 @@ if ($usesSessions) {
 
             // Primary storage for seminar attendance.
             $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-                . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at'
+                . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,check_out_at,last_scanned_at'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
+            if (!($attendanceRes['ok'] ?? false)) {
+                $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                    . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,last_scanned_at'
+                    . '&session_id=in.(' . $sessionFilter . ')';
+                $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
+            }
             $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
             $primaryAttendanceCount = 0;
             if (is_array($attendanceRows)) {
@@ -260,9 +332,15 @@ if ($usesSessions) {
             // Fallback storage used by older seminar migrations — skip when primary already has rows.
             if ($primaryAttendanceCount === 0) {
                 $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-                    . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
+                    . '?select=id,session_id,ticket_id,status,check_in_at,check_out_at,last_scanned_at'
                     . '&session_id=in.(' . $sessionFilter . ')';
                 $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
+                if (!($legacyAttendanceRes['ok'] ?? false)) {
+                    $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+                        . '?select=id,session_id,ticket_id,status,check_in_at,last_scanned_at'
+                        . '&session_id=in.(' . $sessionFilter . ')';
+                    $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
+                }
                 $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
                 if (is_array($legacyAttendanceRows)) {
                     foreach ($legacyAttendanceRows as $row) {
@@ -308,11 +386,20 @@ if ($usesSessions) {
         }
         $windowMinutes = max(1, (int) ($session['scan_window_minutes'] ?? 30));
         $closesAt = $startAt->modify('+' . $windowMinutes . ' minutes');
+        $endAt = $toLocalDt(trim((string) ($session['end_at'] ?? '')));
+        $earlyOutAt = $toLocalDt(trim((string) ($session['early_out_enabled_at'] ?? '')));
+        $timeoutClosesAt = $earlyOutAt instanceof DateTimeImmutable
+            ? $earlyOutAt->modify('+1 hour')
+            : ($endAt instanceof DateTimeImmutable ? $endAt->modify('+1 hour') : null);
         $sessionWindowMeta[$sessionId] = [
             'start_at' => $startAt,
             'closes_at' => $closesAt,
+            'end_at' => $endAt,
+            'timeout_closes_at' => $timeoutClosesAt,
             'window_minutes' => $windowMinutes,
             'closed' => $nowUtc > $closesAt->setTimezone(new DateTimeZone('UTC')),
+            'timeout_closed' => $timeoutClosesAt instanceof DateTimeImmutable
+                && $nowUtc > $timeoutClosesAt->setTimezone(new DateTimeZone('UTC')),
         ];
     }
 
@@ -476,6 +563,8 @@ if ($usesSessions) {
     }
 
     $absentRows = [];
+    $seenSeminarFollowUps = [];
+    $seminarParticipantByStudent = [];
     foreach ($participants as $participant) {
         if (!is_array($participant)) {
             continue;
@@ -485,19 +574,9 @@ if ($usesSessions) {
         if ($registrationId === '' || $studentId === '') {
             continue;
         }
+        $seminarParticipantByStudent[$studentId] = $participant;
         $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
-        $nameParts = [];
-        foreach (['first_name', 'middle_name', 'last_name'] as $key) {
-            $value = trim((string) ($profile[$key] ?? ''));
-            if ($value !== '') {
-                $nameParts[] = $value;
-            }
-        }
-        $name = implode(' ', $nameParts);
-        $suffix = trim((string) ($profile['suffix'] ?? ''));
-        if ($suffix !== '') {
-            $name .= ', ' . $suffix;
-        }
+        $name = $formatParticipantName($profile);
         $section = isset($profile['sections']) && is_array($profile['sections'])
             ? (string) ($profile['sections']['name'] ?? '')
             : '';
@@ -510,12 +589,14 @@ if ($usesSessions) {
                 continue;
             }
             $meta = $sessionWindowMeta[$sessionId];
-            if (empty($meta['closed'])) {
-                continue;
-            }
             $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
             if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
                 $hasAnyPresent = true;
+            }
+            if (empty($meta['closed'])) {
+                continue;
+            }
+            if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
                 continue;
             }
             $missedClosedSessions[] = [
@@ -524,13 +605,7 @@ if ($usesSessions) {
             ];
         }
 
-        if (count($missedClosedSessions) === 0) {
-            continue;
-        }
-
-        // If participant has no present attendance across seminars, treat as one
-        // whole-event absence row (non-redundant).
-        if (!$hasAnyPresent) {
+        if (count($missedClosedSessions) > 0 && !$hasAnyPresent) {
             $firstStart = null;
             $lastClose = null;
             foreach ($missedClosedSessions as $entry) {
@@ -544,49 +619,149 @@ if ($usesSessions) {
                     $lastClose = $closesAt;
                 }
             }
-            if (!$firstStart || !$lastClose) {
-                continue;
+            if ($firstStart && $lastClose) {
+                $reason = $reasonByStudentEvent[$studentId] ?? null;
+                $case = $inferFollowUpCase(is_array($reason) ? $reason : null, 'absent');
+                $seenSeminarFollowUps[$studentId . '::event'] = true;
+                $absentRows[] = [
+                    'student_id' => $studentId,
+                    'registration_id' => $registrationId,
+                    'participant_name' => $name,
+                    'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+                    'section' => $section !== '' ? $section : 'N/A',
+                    'session_name' => 'Whole event',
+                    'session_start_at' => $firstStart,
+                    'session_closes_at' => $lastClose,
+                    'session_window_minutes' => 30,
+                    'case' => $case,
+                    'reason' => is_array($reason) ? $reason : null,
+                ];
             }
-
-            $reason = $reasonByStudentEvent[$studentId] ?? null;
-            $absentRows[] = [
-                'student_id' => $studentId,
-                'registration_id' => $registrationId,
-                'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
-                'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
-                'section' => $section !== '' ? $section : 'N/A',
-                'session_name' => 'Whole event',
-                'session_start_at' => $firstStart,
-                'session_closes_at' => $lastClose,
-                'session_window_minutes' => 30,
-                'reason' => is_array($reason) ? $reason : null,
-            ];
-            continue;
+        } elseif (count($missedClosedSessions) > 0) {
+            foreach ($missedClosedSessions as $entry) {
+                $session = $entry['session'];
+                $meta = $entry['meta'];
+                $sessionId = (string) ($session['id'] ?? '');
+                if ($sessionId === '') {
+                    continue;
+                }
+                $reason = $reasonByStudentSession[$studentId][$sessionId] ?? null;
+                $case = $inferFollowUpCase(is_array($reason) ? $reason : null, 'absent');
+                $seenSeminarFollowUps[$studentId . '::session::' . $sessionId] = true;
+                $absentRows[] = [
+                    'student_id' => $studentId,
+                    'registration_id' => $registrationId,
+                    'participant_name' => $name,
+                    'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+                    'section' => $section !== '' ? $section : 'N/A',
+                    'session_name' => build_session_display_name($session),
+                    'session_start_at' => $meta['start_at'],
+                    'session_closes_at' => $meta['closes_at'],
+                    'session_window_minutes' => (int) ($meta['window_minutes'] ?? 30),
+                    'case' => $case,
+                    'reason' => is_array($reason) ? $reason : null,
+                ];
+            }
         }
 
-        // If participant attended at least one seminar, keep session-specific rows
-        // only for the seminars they missed.
-        foreach ($missedClosedSessions as $entry) {
-            $session = $entry['session'];
-            $meta = $entry['meta'];
+        foreach ($sessions as $session) {
             $sessionId = (string) ($session['id'] ?? '');
-            if ($sessionId === '') {
+            if ($sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
+                continue;
+            }
+            $meta = $sessionWindowMeta[$sessionId];
+            if (empty($meta['timeout_closed'])) {
+                continue;
+            }
+            $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
+            if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
+                continue;
+            }
+            if ($attendanceHasCheckOut(is_array($attendance) ? $attendance : null)) {
+                continue;
+            }
+            $followKey = $studentId . '::session::' . $sessionId;
+            if (!empty($seenSeminarFollowUps[$followKey])) {
                 continue;
             }
             $reason = $reasonByStudentSession[$studentId][$sessionId] ?? null;
+            $timeoutOpen = isset($meta['end_at']) && $meta['end_at'] instanceof DateTimeImmutable
+                ? $meta['end_at']
+                : ($meta['closes_at'] ?? $meta['start_at']);
+            $timeoutClose = $meta['timeout_closes_at'] ?? $timeoutOpen;
+            $seenSeminarFollowUps[$followKey] = true;
             $absentRows[] = [
                 'student_id' => $studentId,
                 'registration_id' => $registrationId,
-                'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
+                'participant_name' => $name,
                 'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
                 'section' => $section !== '' ? $section : 'N/A',
                 'session_name' => build_session_display_name($session),
-                'session_start_at' => $meta['start_at'],
-                'session_closes_at' => $meta['closes_at'],
-                'session_window_minutes' => (int) ($meta['window_minutes'] ?? 30),
+                'session_start_at' => $timeoutOpen,
+                'session_closes_at' => $timeoutClose,
+                'session_window_minutes' => 60,
+                'case' => 'missed_timeout',
                 'reason' => is_array($reason) ? $reason : null,
             ];
         }
+    }
+
+    foreach ($absenceReasonRows as $reason) {
+        if (!is_array($reason)) {
+            continue;
+        }
+        $studentId = (string) ($reason['student_id'] ?? '');
+        if ($studentId === '') {
+            continue;
+        }
+        $sessionId = trim((string) ($reason['session_id'] ?? ''));
+        $followKey = $sessionId === ''
+            ? ($studentId . '::event')
+            : ($studentId . '::session::' . $sessionId);
+        if (!empty($seenSeminarFollowUps[$followKey])) {
+            continue;
+        }
+        $participant = $seminarParticipantByStudent[$studentId] ?? [];
+        $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+        $section = isset($profile['sections']) && is_array($profile['sections'])
+            ? (string) ($profile['sections']['name'] ?? '')
+            : '';
+        $sessionName = 'Whole event';
+        $windowStart = $toLocalDt((string) ($reason['submitted_at'] ?? ''));
+        $windowClose = $windowStart;
+        if ($sessionId !== '') {
+            foreach ($sessions as $session) {
+                if ((string) ($session['id'] ?? '') === $sessionId) {
+                    $sessionName = build_session_display_name($session);
+                    $meta = $sessionWindowMeta[$sessionId] ?? null;
+                    if (is_array($meta)) {
+                        $windowStart = $meta['start_at'] ?? $windowStart;
+                        $windowClose = $meta['closes_at'] ?? $windowClose;
+                    }
+                    break;
+                }
+            }
+        }
+        if (!$windowStart instanceof DateTimeImmutable) {
+            $windowStart = new DateTimeImmutable('now', $appTz);
+        }
+        if (!$windowClose instanceof DateTimeImmutable) {
+            $windowClose = $windowStart;
+        }
+        $seenSeminarFollowUps[$followKey] = true;
+        $absentRows[] = [
+            'student_id' => $studentId,
+            'registration_id' => (string) ($participant['id'] ?? ''),
+            'participant_name' => $formatParticipantName($profile),
+            'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+            'section' => $section !== '' ? $section : 'N/A',
+            'session_name' => $sessionName,
+            'session_start_at' => $windowStart,
+            'session_closes_at' => $windowClose,
+            'session_window_minutes' => 30,
+            'case' => $inferFollowUpCase($reason, $sessionId === '' ? 'absent' : 'absent'),
+            'reason' => $reason,
+        ];
     }
 
     render_header('Participants', $user);
@@ -596,6 +771,7 @@ if ($usesSessions) {
         'back_href' => $backHref,
         'title' => (string) ($event['title'] ?? ''),
         'subtitle' => 'Seminar attendance is tracked per session.',
+        'actions_html' => $absenceExportHtml,
     ]);
     render_event_tabs([
         'event_id' => $eventId,
@@ -643,7 +819,17 @@ if ($usesSessions) {
                   $registrationId = (string) ($participant['id'] ?? '');
                   $studentId = (string) ($participant['student_id'] ?? '');
                   $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
-                  $section = isset($profile['sections']) && is_array($profile['sections']) ? (string) ($profile['sections']['name'] ?? '') : '';
+                  $section = isset($profile['sections']) && is_array($profile['sections']) ? trim((string) ($profile['sections']['name'] ?? '')) : '';
+                  $yearKey = student_roster_resolve_year_key(
+                      $studentId,
+                      trim((string) ($profile['student_id'] ?? '')),
+                      $section,
+                      $sessionYearMaps
+                  );
+                  $yearLabel = student_roster_year_ordinal_label($yearKey);
+                  if ($yearLabel !== '' && ($section === '' || preg_match('/irreg/i', $section) || !preg_match('/[1-4]/', $section))) {
+                      $section = $section !== '' ? ($section . ' • ' . $yearLabel) : $yearLabel;
+                  }
                   $nameParts = [];
                   foreach (['first_name', 'middle_name', 'last_name'] as $key) {
                       $value = trim((string) ($profile[$key] ?? ''));
@@ -705,6 +891,7 @@ if ($usesSessions) {
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Case</th>
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Missed Seminar</th>
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Scan Window</th>
                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Reason</th>
@@ -714,8 +901,8 @@ if ($usesSessions) {
             <tbody class="divide-y divide-zinc-100">
               <?php if (count($absentRows) === 0): ?>
                 <tr>
-                  <td colspan="7" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
-                    No unresolved absences for closed seminar scan windows.
+                  <td colspan="8" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+                    No unresolved absences or submitted reasons found.
                   </td>
                 </tr>
               <?php endif; ?>
@@ -752,6 +939,18 @@ if ($usesSessions) {
                   <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></td>
                   <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['student_number']) ?></td>
                   <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['section']) ?></td>
+                  <?php
+                    $rowCase = (string) ($row['case'] ?? 'absent');
+                    $rowCaseLabel = $followUpCaseLabel($rowCase);
+                    $rowCaseBadge = $rowCase === 'missed_timeout'
+                        ? 'bg-orange-50 text-orange-800 border-orange-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200';
+                  ?>
+                  <td class="px-4 py-4 text-sm text-zinc-700">
+                    <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $rowCaseBadge ?>">
+                      <?= htmlspecialchars($rowCaseLabel) ?>
+                    </span>
+                  </td>
                   <td class="px-4 py-4 text-sm text-zinc-700"><?= htmlspecialchars((string) $row['session_name']) ?></td>
                   <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($windowLabel) ?></td>
                   <td class="px-4 py-4 text-sm text-zinc-700">
@@ -852,6 +1051,52 @@ if ($usesSessions) {
           }
         });
       });
+
+      (() => {
+        const btn = document.getElementById('btnExportAbsenceForm');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+          const eventId = String(btn.dataset.eventId || '').trim();
+          if (!eventId) return;
+          const label = btn.querySelector('[data-label]');
+          const prev = label ? label.textContent : 'Export Absence Form';
+          btn.disabled = true;
+          if (label) label.textContent = 'Exporting…';
+          try {
+            const res = await fetch(
+              '/api/event_absence_form_export.php?event_id=' + encodeURIComponent(eventId) + '&ajax=1',
+              { credentials: 'same-origin', headers: { Accept: 'application/json' } }
+            );
+            const ct = String(res.headers.get('Content-Type') || '').toLowerCase();
+            if (ct.includes('application/json')) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error((data && data.error) || 'Export failed');
+            }
+            if (!res.ok) {
+              const text = await res.text();
+              throw new Error(text || 'Export failed');
+            }
+            const blob = await res.blob();
+            let filename = 'Approved_Absence_Form.docx';
+            const cd = String(res.headers.get('Content-Disposition') || '');
+            const m = /filename="([^"]+)"/i.exec(cd);
+            if (m && m[1]) filename = m[1];
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            alert(e.message || 'Export failed');
+          } finally {
+            btn.disabled = false;
+            if (label) label.textContent = prev;
+          }
+        });
+      })();
     </script>
     <?php
     render_footer();
@@ -902,6 +1147,24 @@ if ($pRes['ok']) {
     $participants = is_array($decoded) ? $decoded : [];
 }
 
+$participantUserIds = [];
+$participantStudentNos = [];
+foreach ($participants as $row) {
+    if (!is_array($row)) {
+        continue;
+    }
+    $uid = trim((string) ($row['student_id'] ?? ''));
+    if ($uid !== '') {
+        $participantUserIds[] = $uid;
+    }
+    $u = isset($row['users']) && is_array($row['users']) ? $row['users'] : [];
+    $no = trim((string) ($u['student_id'] ?? ''));
+    if ($no !== '') {
+        $participantStudentNos[] = $no;
+    }
+}
+$participantYearMaps = student_roster_fetch_year_maps($participantUserIds, $participantStudentNos, $headers);
+
 // Build buckets by day
 $buckets = [];
 $buckets['all'] = $participants;
@@ -946,36 +1209,13 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
         $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
         $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Section';
         
-        $yearLvl = 'N/A';
-        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
-            $yearLvl = $m[1];
-        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
-            $yearLvl = $m[1];
-        }
-
-        if(!isset($sectionsMap[$secName])) {
-            $sectionsMap[$secName] = ['year' => $yearLvl, 'participants' => []];
-        }
-        $sectionsMap[$secName]['participants'][] = $r;
-    }
-    ksort($sectionsMap);
-
-    header('Content-Type: application/vnd.ms-excel; charset=utf-8');
-    header('Content-Disposition: attachment; filename="Event_Participants_' . preg_replace('/[^A-Za-z0-9_\-]/', '_', (string)($event['title'] ?? '')) . '.xls"');
-    
-    // Group participants by Section
-    $sectionsMap = [];
-    foreach ($participants as $r) {
-        $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
-        $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
-        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Section';
-        
-        $yearLvl = 'N/A';
-        if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
-            $yearLvl = $m[1];
-        } else if (preg_match('/([1-4])/', trim($secName), $m)) {
-            $yearLvl = $m[1];
-        }
+        $yearKey = student_roster_resolve_year_key(
+            trim((string) ($r['student_id'] ?? '')),
+            trim((string) ($u['student_id'] ?? '')),
+            $secName,
+            $participantYearMaps
+        );
+        $yearLvl = $yearKey !== '' ? $yearKey : 'N/A';
 
         if(!isset($sectionsMap[$secName])) {
             $sectionsMap[$secName] = ['year' => $yearLvl, 'participants' => []];
@@ -1296,52 +1536,112 @@ if ($absenceReasonTableAvailable) {
     }
 }
 
-$simpleEventAbsentRows = [];
-if ($eventWindowClosed) {
-    foreach ($participants as $participant) {
-        if (!is_array($participant)) {
-            continue;
+$simpleEventTimeoutClose = null;
+$simpleEventEarlyOutRaw = trim((string) ($event['early_out_enabled_at'] ?? ''));
+if ($simpleEventEarlyOutRaw !== '') {
+    try {
+        $simpleEventTimeoutClose = (new DateTimeImmutable($simpleEventEarlyOutRaw))
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->modify('+1 hour');
+    } catch (Throwable $e) {
+        $simpleEventTimeoutClose = null;
+    }
+}
+if (!$simpleEventTimeoutClose instanceof DateTimeImmutable) {
+    $simpleEventEndRaw = trim((string) ($event['end_at'] ?? ''));
+    if ($simpleEventEndRaw !== '') {
+        try {
+            $simpleEventTimeoutClose = (new DateTimeImmutable($simpleEventEndRaw))
+                ->setTimezone(new DateTimeZone('UTC'))
+                ->modify('+1 hour');
+        } catch (Throwable $e) {
+            $simpleEventTimeoutClose = null;
         }
-        $studentId = (string) ($participant['student_id'] ?? '');
-        if ($studentId === '') {
-            continue;
-        }
-        $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
-        $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
-        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
-        $attendance = null;
-        if (isset($ticket['attendance']) && is_array($ticket['attendance'])) {
-            $atts = $ticket['attendance'];
-            $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : null;
-        }
-        if ($attendanceCountsAsPresent($attendance)) {
-            continue;
-        }
+    }
+}
+$simpleEventTimeoutClosed = $simpleEventTimeoutClose instanceof DateTimeImmutable
+    && $nowUtc > $simpleEventTimeoutClose;
 
-        $nameParts = [];
-        foreach (['first_name', 'middle_name', 'last_name'] as $key) {
-            $value = trim((string) ($profile[$key] ?? ''));
-            if ($value !== '') {
-                $nameParts[] = $value;
-            }
-        }
-        $name = implode(' ', $nameParts);
-        $suffix = trim((string) ($profile['suffix'] ?? ''));
-        if ($suffix !== '') {
-            $name .= ', ' . $suffix;
-        }
-        $section = isset($profile['sections']) && is_array($profile['sections'])
-            ? (string) ($profile['sections']['name'] ?? '')
-            : '';
-        $simpleEventAbsentRows[] = [
-            'student_id' => $studentId,
-            'participant_name' => $name !== '' ? $name : 'Unnamed Participant',
-            'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
-            'section' => $section !== '' ? $section : 'N/A',
-            'reason' => isset($reasonByStudentEvent[$studentId]) && is_array($reasonByStudentEvent[$studentId])
-                ? $reasonByStudentEvent[$studentId]
-                : null,
+$simpleEventAbsentRows = [];
+$seenSimpleFollowUps = [];
+$simpleParticipantByStudent = [];
+foreach ($participants as $participant) {
+    if (!is_array($participant)) {
+        continue;
+    }
+    $studentId = (string) ($participant['student_id'] ?? '');
+    if ($studentId === '') {
+        continue;
+    }
+    $simpleParticipantByStudent[$studentId] = $participant;
+    $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+    $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
+    $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+    $attendance = null;
+    if (isset($ticket['attendance']) && is_array($ticket['attendance'])) {
+        $atts = $ticket['attendance'];
+        $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : null;
+    }
+    $isPresent = $attendanceCountsAsPresent($attendance);
+    $hasCheckOut = $attendanceHasCheckOut($attendance);
+    $reason = isset($reasonByStudentEvent[$studentId]) && is_array($reasonByStudentEvent[$studentId])
+        ? $reasonByStudentEvent[$studentId]
+        : null;
+    $section = isset($profile['sections']) && is_array($profile['sections'])
+        ? (string) ($profile['sections']['name'] ?? '')
+        : '';
+    $rowBase = [
+        'student_id' => $studentId,
+        'participant_name' => $formatParticipantName($profile),
+        'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+        'section' => $section !== '' ? $section : 'N/A',
+        'reason' => $reason,
+    ];
+
+    if ($eventWindowClosed && !$isPresent) {
+        $seenSimpleFollowUps[$studentId] = true;
+        $simpleEventAbsentRows[] = $rowBase + [
+            'case' => $inferFollowUpCase($reason, 'absent'),
         ];
+        continue;
+    }
+
+    if ($simpleEventTimeoutClosed && $isPresent && !$hasCheckOut) {
+        $seenSimpleFollowUps[$studentId] = true;
+        $simpleEventAbsentRows[] = $rowBase + [
+            'case' => 'missed_timeout',
+        ];
+    }
+}
+
+foreach ($reasonByStudentEvent as $studentId => $reason) {
+    if (!is_array($reason) || isset($seenSimpleFollowUps[$studentId])) {
+        continue;
+    }
+    $participant = $simpleParticipantByStudent[$studentId] ?? [];
+    $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+    $section = isset($profile['sections']) && is_array($profile['sections'])
+        ? (string) ($profile['sections']['name'] ?? '')
+        : '';
+    $seenSimpleFollowUps[$studentId] = true;
+    $simpleEventAbsentRows[] = [
+        'student_id' => $studentId,
+        'participant_name' => $formatParticipantName($profile),
+        'student_number' => (string) ($profile['student_id'] ?? 'N/A'),
+        'section' => $section !== '' ? $section : 'N/A',
+        'case' => $inferFollowUpCase($reason, 'absent'),
+        'reason' => $reason,
+    ];
+}
+
+$simpleEventReasonCount = count($reasonByStudentEvent);
+$simpleEventAbsentCount = 0;
+$simpleEventTimeoutCount = 0;
+foreach ($simpleEventAbsentRows as $followUpRow) {
+    if (($followUpRow['case'] ?? '') === 'missed_timeout') {
+        $simpleEventTimeoutCount++;
+    } else {
+        $simpleEventAbsentCount++;
     }
 }
 
@@ -1357,7 +1657,7 @@ render_event_page_header([
     'back_href' => $backHref,
     'title' => (string) ($event['title'] ?? 'Event'),
     'subtitle' => 'Participant directory and real-time attendance tracking.',
-    'actions_html' => $exportExcelHtml,
+    'actions_html' => $absenceExportHtml . $exportExcelHtml,
 ]);
 
 render_event_tabs([
@@ -1723,12 +2023,27 @@ render_event_tabs([
       $attendanceTimeLine = $checkInShort . ' / ' . $checkOutShort;
 
       $sec     = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
-      $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'N/A';
-      $yearLvl = 'N/A';
-      if (preg_match('/-([1-4])[A-Z]$/i', trim($secName), $m)) {
-          $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
-      } else if (preg_match('/([1-4])/', trim($secName), $m)) {
-          $yearLvl = $m[1] . (match($m[1]){'1'=>'st','2'=>'nd','3'=>'rd','4'=>'th',default=>''}) . ' Year';
+      $secName = is_array($sec) && isset($sec['name']) ? trim((string) $sec['name']) : '';
+      if ($secName === '') {
+          $secName = 'N/A';
+      }
+      $yearKey = student_roster_resolve_year_key(
+          trim((string) ($r['student_id'] ?? '')),
+          trim((string) ($u['student_id'] ?? '')),
+          $secName,
+          $participantYearMaps
+      );
+      $yearLvl = student_roster_year_ordinal_label($yearKey);
+      if ($yearLvl === '') {
+          $yearLvl = 'N/A';
+      }
+      $sectionSubtitle = $secName;
+      $sectionHasYearDigit = preg_match('/[1-4]/', $secName) === 1
+          && !preg_match('/irreg/i', $secName);
+      if ($yearLvl !== 'N/A' && !$sectionHasYearDigit) {
+          $sectionSubtitle = (strcasecmp($secName, 'N/A') === 0)
+              ? $yearLvl
+              : ($secName . ' • ' . $yearLvl);
       }
 
       $attStatusNorm = strtolower(trim((string)$attStatus));
@@ -1748,7 +2063,7 @@ render_event_tabs([
       $avatarUrl = storage_resolve_avatar_url((string) ($u['photo_url'] ?? ''));
       $studentId = (string) ($u['student_id'] ?? 'N/A');
       $email     = (string) ($u['email'] ?? '');
-      $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName);
+      $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName . ' ' . $yearLvl);
     ?>
     <div class="pc-card participant-card"
          data-search="<?= htmlspecialchars($searchStr) ?>">
@@ -1773,7 +2088,7 @@ render_event_tabs([
         <!-- Always visible name, student number, and section/course -->
         <div class="bottom-header">
           <span class="pname" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name ?: 'Unnamed') ?></span>
-          <span class="psubtitle">#<?= htmlspecialchars($studentId) ?> • <?= htmlspecialchars($secName) ?></span>
+          <span class="psubtitle">#<?= htmlspecialchars($studentId) ?> • <?= htmlspecialchars($sectionSubtitle) ?></span>
         </div>
 
         <!-- Extra details revealed on hover -->
@@ -1829,15 +2144,16 @@ render_event_tabs([
         No start time
       <?php endif; ?>
     </div>
-    <div class="mt-2 text-xs text-zinc-500">Absent is counted only after the scan window closes.</div>
+    <div class="mt-2 text-xs text-zinc-500">No time-in after scan close. No time-out after end + 1 hour.</div>
   </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4">
-    <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Absent Participants</div>
+    <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Follow-ups</div>
     <div class="mt-2 text-2xl font-black text-amber-700"><?= count($simpleEventAbsentRows) ?></div>
+    <div class="mt-2 text-xs text-zinc-500"><?= (int) $simpleEventAbsentCount ?> no time-in · <?= (int) $simpleEventTimeoutCount ?> no time-out</div>
   </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4">
     <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Reasons Submitted</div>
-    <div class="mt-2 text-2xl font-black text-emerald-700"><?= count(array_filter($simpleEventAbsentRows, static fn(array $row): bool => is_array($row['reason'] ?? null))) ?></div>
+    <div class="mt-2 text-2xl font-black text-emerald-700"><?= (int) $simpleEventReasonCount ?></div>
   </div>
 </div>
 
@@ -1848,21 +2164,20 @@ render_event_tabs([
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Case</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Reason</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Submitted</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-zinc-100">
-      <?php if (!$eventWindowClosed): ?>
+      <?php if (count($simpleEventAbsentRows) === 0): ?>
         <tr>
-          <td colspan="5" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
-            Event scan window is still open or not started yet. Absences will appear after it closes.
-          </td>
-        </tr>
-      <?php elseif (count($simpleEventAbsentRows) === 0): ?>
-        <tr>
-          <td colspan="5" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
-            No unresolved absences found.
+          <td colspan="6" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+            <?php if (!$eventWindowClosed && !$simpleEventTimeoutClosed): ?>
+              Event scan / time-out windows are still open. Follow-ups will appear after they close.
+            <?php else: ?>
+              No unresolved absences or submitted reasons found.
+            <?php endif; ?>
           </td>
         </tr>
       <?php endif; ?>
@@ -1898,6 +2213,18 @@ render_event_tabs([
           <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars((string) $row['participant_name']) ?></td>
           <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['student_number']) ?></td>
           <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) $row['section']) ?></td>
+          <?php
+            $rowCase = (string) ($row['case'] ?? 'absent');
+            $rowCaseLabel = $followUpCaseLabel($rowCase);
+            $rowCaseBadge = $rowCase === 'missed_timeout'
+                ? 'bg-orange-50 text-orange-800 border-orange-200'
+                : 'bg-amber-50 text-amber-800 border-amber-200';
+          ?>
+          <td class="px-4 py-4 text-sm text-zinc-700">
+            <span class="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider <?= $rowCaseBadge ?>">
+              <?= htmlspecialchars($rowCaseLabel) ?>
+            </span>
+          </td>
           <td class="px-4 py-4 text-sm text-zinc-700">
             <?php if ($hasReason): ?>
               <div class="space-y-2">
@@ -2074,6 +2401,52 @@ render_event_tabs([
   } else {
     setTimeout(run, 1200);
   }
+})();
+
+(() => {
+  const btn = document.getElementById('btnExportAbsenceForm');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const eventId = String(btn.dataset.eventId || '').trim();
+    if (!eventId) return;
+    const label = btn.querySelector('[data-label]');
+    const prev = label ? label.textContent : 'Export Absence Form';
+    btn.disabled = true;
+    if (label) label.textContent = 'Exporting…';
+    try {
+      const res = await fetch(
+        '/api/event_absence_form_export.php?event_id=' + encodeURIComponent(eventId) + '&ajax=1',
+        { credentials: 'same-origin', headers: { Accept: 'application/json' } }
+      );
+      const ct = String(res.headers.get('Content-Type') || '').toLowerCase();
+      if (ct.includes('application/json')) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data && data.error) || 'Export failed');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Export failed');
+      }
+      const blob = await res.blob();
+      let filename = 'Approved_Absence_Form.docx';
+      const cd = String(res.headers.get('Content-Disposition') || '');
+      const m = /filename="([^"]+)"/i.exec(cd);
+      if (m && m[1]) filename = m[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e.message || 'Export failed');
+    } finally {
+      btn.disabled = false;
+      if (label) label.textContent = prev;
+    }
+  });
 })();
 </script>
 

@@ -29,6 +29,13 @@ body.role-teacher {
 .sidebar-shell {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
+  overscroll-behavior: contain;
+}
+
+#sidebar-nav {
+  min-height: 0;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
 }
 
 @keyframes floatLogo {
@@ -463,4 +470,48 @@ a:hover .hide-anatomy,
   .notif-preview {
     width: min(18rem, calc(100vw - 2rem)) !important;
   }
+}
+
+/* Event Feedback summary (evaluation_admin) — avoid Tailwind arbitrary classes */
+.feedback-scroll-list {
+  max-height: 9rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 0.25rem;
+}
+.feedback-scroll-list::-webkit-scrollbar {
+  width: 6px;
+}
+.feedback-scroll-list::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+.feedback-section-head {
+  background: #7f1d1d;
+}
+.feedback-bar-fill {
+  background: #7f1d1d;
+  border-radius: 2px 2px 0 0;
+  width: 70%;
+  max-width: 52px;
+}
+.feedback-year-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  width: 100%;
+  min-width: 10rem;
+}
+.feedback-year-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.feedback-year-legend-dot {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 999px;
+  flex-shrink: 0;
 }

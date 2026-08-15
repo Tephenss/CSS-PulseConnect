@@ -526,6 +526,7 @@ $publishPush = [
     'tokens' => 0,
     'inbox' => false,
     'fcm_ok' => false,
+    'fcm_skipped' => false,
     'fcm_sent' => 0,
     'fcm_failed' => 0,
     'partial' => false,
@@ -608,6 +609,7 @@ if (is_array($mergedEvent)
                 $publishPush['tokens'] = (int) ($dispatch['tokens'] ?? 0);
                 $publishPush['inbox'] = !empty($dispatch['inbox']);
                 $publishPush['fcm_ok'] = !empty($dispatch['fcm_ok']);
+                $publishPush['fcm_skipped'] = !empty($dispatch['fcm_skipped']);
                 $publishPush['fcm_sent'] = (int) ($dispatch['fcm_sent'] ?? 0);
                 $publishPush['fcm_failed'] = (int) ($dispatch['fcm_failed'] ?? 0);
                 $publishPush['partial'] = !empty($dispatch['partial']);

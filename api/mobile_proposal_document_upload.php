@@ -13,6 +13,7 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/media_assets.php';
 
 mobile_api_handle_preflight();
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -106,6 +107,10 @@ $fileBytes = file_get_contents($tmpName);
 if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded file.'], 400);
 }
+
+$optimized = media_optimize_if_image($fileBytes, $mimeType);
+$fileBytes = (string) ($optimized['bytes'] ?? $fileBytes);
+$mimeType = (string) ($optimized['mime'] ?? $mimeType);
 
 $ext = match ($mimeType) {
     'image/png' => 'png',

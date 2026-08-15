@@ -285,6 +285,7 @@ $statusColor = match($status) {
 };
 
 $isEventCreatorTeacher = $role === 'teacher' && (string) ($event['created_by'] ?? '') === $userId;
+$canManageEarlyOut = $role === 'admin' || $isEventCreatorTeacher;
 $canManageCertificates = $isEventCreatorTeacher;
 $hasStudentRequirements = event_has_student_requirements($id, $headers);
 // Document Review uses the dedicated page tab — no overlay modal from Event Details.
@@ -361,15 +362,6 @@ render_header('Event Details', $user);
         </div>
         <?php elseif ($canManageCertificates): ?>
         <div class="flex items-center gap-2 flex-wrap justify-end">
-            <?php if ($eventFinishedForCertificates): ?>
-            <button
-                id="btnSendCert"
-                data-event-finished="1"
-                class="rounded-xl border font-bold px-4 py-2 text-[13px] transition shadow-sm relative overflow-hidden border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-            >
-                <span class="relative z-10">Send Certificate</span>
-            </button>
-            <?php endif; ?>
             <button type="button" id="btnCertAutoStatus" class="rounded-xl border border-sky-300 bg-sky-50 text-sky-800 font-bold px-4 py-2 text-[13px] hover:bg-sky-100 transition shadow-sm" title="See who received auto certificates and manually send to missing students">
                 Cert status
             </button>
@@ -552,6 +544,7 @@ render_header('Event Details', $user);
                     </button>
                 </div>
             </div>
+            <?php if ($canManageEarlyOut): ?>
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
                 <div class="flex items-center justify-between gap-3">
                     <div>
@@ -576,6 +569,7 @@ render_header('Event Details', $user);
                     </button>
                 </div>
             </div>
+            <?php endif; ?>
             <?php endif; ?>
 
             <!-- Cards from manual -->
@@ -2244,7 +2238,6 @@ async function triggerRegistrationAccessUpdate(allowRegistration) {
 // ------------------------------------------------------------------
 // BROADCAST CERTIFICATES LOGIC (Page 32 Simulation)
 // ------------------------------------------------------------------
-const btnSendCert = document.getElementById('btnSendCert');
 const btnImportCert = document.getElementById('btnImportCert');
 const btnCertAutoStatus = document.getElementById('btnCertAutoStatus');
 const certAutoStatusModal = document.getElementById('certAutoStatusModal');
@@ -5190,10 +5183,7 @@ async function sendCertificates(templateId) {
     const buildLoadingHtml = (label, iconColorClass = 'text-emerald-700') =>
         `<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 ${iconColorClass}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>${label}</span>`;
 
-    const originalText = btnSendCert.innerHTML;
     const originalConfirmTemplateText = btnConfirmTemplateCert ? btnConfirmTemplateCert.innerHTML : '';
-    btnSendCert.innerHTML = buildLoadingHtml('Sending...');
-    btnSendCert.disabled = true;
     if (btnConfirmTemplateCert) {
         btnConfirmTemplateCert.innerHTML = buildLoadingHtml('Sending...', 'text-white');
         btnConfirmTemplateCert.disabled = true;
@@ -5247,8 +5237,6 @@ async function sendCertificates(templateId) {
     } catch (err) {
         alert('Error generating certificates: ' + err.message);
     } finally {
-        btnSendCert.innerHTML = originalText;
-        btnSendCert.disabled = btnSendCert.dataset.eventFinished !== '1';
         if (btnConfirmTemplateCert) {
             btnConfirmTemplateCert.innerHTML = originalConfirmTemplateText;
             btnConfirmTemplateCert.disabled = false;
@@ -5280,46 +5268,7 @@ templateSendCards.forEach((card) => {
     });
 });
 
-if (btnSendCert) {
-    btnSendCert.addEventListener('click', async () => {
-        if (btnSendCert.dataset.eventFinished !== '1') {
-            alert('Certificates can only be sent after the event has finished.');
-            return;
-        }
-
-        const originalText = btnSendCert.innerHTML;
-        btnSendCert.innerHTML = '<span class="relative z-10 flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 text-emerald-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Checking...</span>';
-        btnSendCert.disabled = true;
-
-        try {
-            const res = await fetch('/api/certificates_generate.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ event_id: '<?= htmlspecialchars($id) ?>', preview_only: true, csrf_token: window.CSRF_TOKEN })
-            });
-            const data = await res.json();
-            if (!data.ok) {
-                throw new Error(data.error || 'Failed to preview certificates');
-            }
-
-            btnSendCert.innerHTML = originalText;
-            btnSendCert.disabled = false;
-
-            if ((data.eligible_count || 0) === 0) {
-                alert(data.pending_count > 0
-                    ? 'No certificates can be sent yet because the present participants still have incomplete evaluation.'
-                    : 'No eligible participants found for certificate sending.');
-                return;
-            }
-
-            showTemplateSelectionPreview(data);
-        } catch (err) {
-            alert('Error generating certificates: ' + err.message);
-            btnSendCert.innerHTML = originalText;
-            btnSendCert.disabled = btnSendCert.dataset.eventFinished !== '1';
-        }
-    });
-
+{
     const closeCertModal = () => {
         certModal.classList.add('opacity-0');
         certContent.classList.remove('scale-100');
@@ -5531,7 +5480,7 @@ if (mainAiBtn && mainDesc && mainAiStatus) {
                 setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
                 if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
             } else {
-                mainAiStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
+                mainAiStatus.textContent = data.error || 'AI formatting unavailable. You can keep the original text.';
             }
         } catch (e) {
             mainAiStatus.textContent = 'Network error.';
@@ -5655,7 +5604,7 @@ if (mainAiBtn && mainDesc && mainAiStatus) {
           if (activeTab === 'improved') previewText.value = improvedTranscript;
         } else {
           improvedTranscript = '';
-          if (activeTab === 'improved') previewText.value = '⚠️ Error formatting text:\n' + data.error;
+          if (activeTab === 'improved') previewText.value = '⚠️ AI formatting unavailable.\n\n' + (data.error || 'Use the Raw Text tab to insert your transcript.');
         }
       } catch (err) {
         improvedTranscript = '';

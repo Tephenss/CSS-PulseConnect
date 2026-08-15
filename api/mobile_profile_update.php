@@ -6,6 +6,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
+require_once __DIR__ . '/../includes/storage_signed.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -19,7 +20,12 @@ if (array_key_exists('section_id', $data)) {
 }
 if (array_key_exists('photo_url', $data)) {
     $photo = trim((string) ($data['photo_url'] ?? ''));
-    $patch['photo_url'] = $photo !== '' ? $photo : null;
+    if ($photo === '') {
+        $patch['photo_url'] = null;
+    } else {
+        $normalized = storage_normalize_avatar_photo_value($photo);
+        $patch['photo_url'] = $normalized !== '' ? $normalized : $photo;
+    }
 }
 
 if ($patch === []) {

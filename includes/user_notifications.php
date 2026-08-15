@@ -172,12 +172,14 @@ function dispatch_user_notifications_detailed(array $userIds, string $title, str
 
     $tokenCount = count($tokens);
     if ($tokenCount === 0) {
-        error_log('dispatch_user_notifications: no FCM tokens for ' . count($userIds) . ' users');
+        // Inbox was already saved. No mobile tokens is normal for web-only users.
+        error_log('dispatch_user_notifications: no FCM tokens for ' . count($userIds) . ' users (inbox still saved)');
         return [
             'targets' => count($userIds),
             'tokens' => 0,
             'inbox' => true,
             'fcm_ok' => false,
+            'fcm_skipped' => true,
             'error' => 'no_fcm_tokens',
             'detail' => null,
             'http_status' => null,

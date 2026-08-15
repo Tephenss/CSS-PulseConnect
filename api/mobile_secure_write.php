@@ -12,6 +12,9 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/proposal_requirements.php';
+require_once __DIR__ . '/../includes/student_requirements.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -140,8 +143,15 @@ switch ($action) {
             'Prefer: return=minimal',
         ];
         // Production unique is on user_id (fcm_tokens_user_id_key), not token.
-        // Delete by user_id then insert — avoids 42P10 (on_conflict=token) and
-        // 23505 when the same user refreshes with a new device token.
+        // 1) Drop this device token from any previous account (daily OTP gate
+        //    can leave yesterday's mapping on the same phone).
+        // 2) Drop this user's other tokens, then insert — avoids 42P10
+        //    (on_conflict=token) and 23505 when the same user refreshes.
+        supabase_request(
+            'DELETE',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?token=eq.' . rawurlencode($token),
+            $headers
+        );
         supabase_request(
             'DELETE',
             rtrim(SUPABASE_URL, '/') . '/rest/v1/fcm_tokens?user_id=eq.' . rawurlencode($userId),
@@ -196,6 +206,42 @@ switch ($action) {
         }
         $method = strtoupper(trim((string) ($data['method'] ?? 'POST')));
         $filter = trim((string) ($data['filter'] ?? ''));
+        $outgoingCheckOut = trim((string) ($payload['check_out_at'] ?? ''));
+        $outgoingCheckIn = trim((string) ($payload['check_in_at'] ?? ''));
+        $outgoingStatus = strtolower(trim((string) ($payload['status'] ?? '')));
+        $isCheckOutOnly = $outgoingCheckOut !== ''
+            && $outgoingCheckIn === ''
+            && !in_array($outgoingStatus, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true);
+        if ($isCheckOutOnly) {
+            $windowsPath = __DIR__ . '/../includes/event_attendance_windows.php';
+            if (is_file($windowsPath)) {
+                require_once $windowsPath;
+            }
+            $existingRow = null;
+            if ($method === 'PATCH' && $filter !== '' && preg_match('/^[a-z0-9_.=,&%-]+$/i', $filter)) {
+                $lookupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+                    . '?' . $filter
+                    . '&select=id,status,check_in_at,check_out_at'
+                    . '&limit=1';
+                $lookupRes = supabase_request('GET', $lookupUrl, $readHeaders);
+                $lookupRows = json_decode((string) ($lookupRes['body'] ?? ''), true);
+                $existingRow = is_array($lookupRows) && isset($lookupRows[0]) && is_array($lookupRows[0])
+                    ? $lookupRows[0]
+                    : null;
+            }
+            $hasTimeIn = function_exists('attendance_has_valid_time_in')
+                ? attendance_has_valid_time_in($existingRow)
+                : (is_array($existingRow)
+                    && strtolower(trim((string) ($existingRow['status'] ?? ''))) !== 'absent'
+                    && trim((string) ($existingRow['check_in_at'] ?? '')) !== '');
+            if (!$hasTimeIn) {
+                json_response([
+                    'ok' => false,
+                    'error' => 'Cannot time out — this student has no time-in (marked absent).',
+                    'status' => 'absent_no_time_in',
+                ], 409);
+            }
+        }
         if ($method === 'PATCH') {
             if ($filter === '' || !preg_match('/^[a-z0-9_.=,&%-]+$/i', $filter)) {
                 json_response(['ok' => false, 'error' => 'Invalid filter.'], 400);
@@ -510,11 +556,32 @@ switch ($action) {
         }
         $eventId = trim((string) ($payload['event_id'] ?? ''));
         $studentId = trim((string) ($payload['student_id'] ?? $userId));
+        if ($eventId === '') {
+            json_response(['ok' => false, 'error' => 'event_id required.'], 400);
+        }
         $isStaff = mobile_secure_is_event_staff($eventId, $userId, $readHeaders);
         if (!$isStaff && $studentId !== $userId) {
             json_response(['ok' => false, 'error' => 'Not allowed.'], 403);
         }
-        $payload['student_id'] = $studentId;
+        $reasonText = trim((string) ($payload['reason_text'] ?? ''));
+        if ($reasonText === '') {
+            json_response(['ok' => false, 'error' => 'reason_text required.'], 400);
+        }
+        $sessionId = trim((string) ($payload['session_id'] ?? ''));
+        $cleanPayload = [
+            'student_id' => $studentId,
+            'event_id' => $eventId,
+            'reason_text' => $reasonText,
+            'review_status' => 'pending',
+            'submitted_at' => trim((string) ($payload['submitted_at'] ?? gmdate('c'))),
+            'admin_note' => null,
+            'reviewed_at' => null,
+            'reviewed_by' => null,
+        ];
+        if ($sessionId !== '') {
+            $cleanPayload['session_id'] = $sessionId;
+        }
+
         $method = strtoupper(trim((string) ($data['method'] ?? 'POST')));
         $filter = trim((string) ($data['filter'] ?? ''));
         if ($method === 'PATCH' && $filter !== '') {
@@ -522,16 +589,29 @@ switch ($action) {
                 json_response(['ok' => false, 'error' => 'Invalid filter.'], 400);
             }
             $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons?' . $filter;
-            $res = supabase_request('PATCH', $url, $reprHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
+            $res = supabase_request('PATCH', $url, $reprHeaders, json_encode($cleanPayload, JSON_UNESCAPED_SLASHES));
         } else {
             $res = supabase_request(
                 'POST',
                 rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons',
                 $reprHeaders,
-                json_encode($payload, JSON_UNESCAPED_SLASHES)
+                json_encode($cleanPayload, JSON_UNESCAPED_SLASHES)
             );
         }
-        json_response(['ok' => (bool) $res['ok']], $res['ok'] ? 200 : 500);
+        if (!($res['ok'] ?? false)) {
+            $errBody = strtolower((string) ($res['body'] ?? ''));
+            $errMsg = 'Failed to save your reason.';
+            if (str_contains($errBody, 'attendance_absence_reasons')) {
+                $errMsg = 'Absence reason storage is not available yet.';
+            } elseif (str_contains($errBody, 'duplicate') || str_contains($errBody, 'unique')) {
+                $errMsg = 'A reason was already submitted for this event.';
+            }
+            json_response([
+                'ok' => false,
+                'error' => $errMsg,
+            ], 500);
+        }
+        json_response(['ok' => true], 200);
         break;
     }
 
@@ -739,6 +819,24 @@ switch ($action) {
             $sessions = [];
         }
 
+        $proposalRequirements = is_array($payload['proposal_requirements'] ?? null)
+            ? $payload['proposal_requirements']
+            : [];
+        $studentRequirements = is_array($payload['student_requirements'] ?? null)
+            ? $payload['student_requirements']
+            : [];
+        unset(
+            $payload['proposal_requirements'],
+            $payload['student_requirements'],
+            $payload['cover_image_url'],
+            $payload['proposal_stage'],
+            $payload['id']
+        );
+
+        if ($role === 'teacher' && $proposalRequirements === []) {
+            json_response(['ok' => false, 'error' => 'Add the required proposal documents before submitting.'], 400);
+        }
+
         // Force identity + pending approval — same as Flutter createEvent.
         $payload['created_by'] = $userId;
         $payload['status'] = 'pending';
@@ -753,7 +851,80 @@ switch ($action) {
         // Never INSERT uses_sessions — column absent on prod (42703 Postgres ERROR storm).
         unset($payload['uses_sessions']);
 
-        $optionalColumns = ['event_mode', 'event_structure', 'event_span'];
+        $startAtRaw = trim((string) ($payload['start_at'] ?? ''));
+        try {
+            $startAtDt = $startAtRaw !== '' ? new DateTimeImmutable($startAtRaw) : null;
+        } catch (Throwable $e) {
+            $startAtDt = null;
+        }
+        if ($startAtDt === null) {
+            json_response(['ok' => false, 'error' => 'Start date/time is required.'], 400);
+        }
+
+        if ($role === 'teacher') {
+            $isFreeEvent = true;
+            if (array_key_exists('is_free_event', $payload)) {
+                $isFreeEvent = normalize_registration_bool($payload['is_free_event']);
+            }
+            $eventFee = null;
+            if (!$isFreeEvent) {
+                $eventFee = normalize_event_fee($payload['event_fee'] ?? null);
+                if ($eventFee === null || $eventFee <= 0) {
+                    json_response(['ok' => false, 'error' => 'Paid events require a settlement amount for students.'], 400);
+                }
+            }
+            $registrationLimit = null;
+            if (array_key_exists('registration_limit', $payload) && $payload['registration_limit'] !== null && $payload['registration_limit'] !== '') {
+                $registrationLimit = normalize_registration_limit($payload['registration_limit']);
+                if ($registrationLimit === null) {
+                    json_response(['ok' => false, 'error' => 'Student limit must be between 1 and 9999.'], 400);
+                }
+            }
+            $registrationCloseWeeks = null;
+            if (array_key_exists('registration_close_weeks', $payload) && $payload['registration_close_weeks'] !== null && $payload['registration_close_weeks'] !== '') {
+                $registrationCloseWeeks = normalize_registration_close_weeks($payload['registration_close_weeks']);
+                $maxCloseWeeks = max_registration_close_weeks_for_start($startAtDt);
+                if ($maxCloseWeeks < 1) {
+                    $registrationCloseWeeks = null;
+                } elseif ($registrationCloseWeeks === null || $registrationCloseWeeks < 1 || $registrationCloseWeeks > $maxCloseWeeks) {
+                    json_response([
+                        'ok' => false,
+                        'error' => 'Registration close limit must be between 1 and '
+                            . $maxCloseWeeks . ' week' . ($maxCloseWeeks === 1 ? '' : 's')
+                            . ' before this event start.',
+                    ], 400);
+                }
+            }
+            $payload['is_free_event'] = $isFreeEvent;
+            $payload['event_fee'] = $eventFee;
+            if ($registrationLimit !== null) {
+                $payload['registration_limit'] = $registrationLimit;
+            } else {
+                unset($payload['registration_limit']);
+            }
+            if ($registrationCloseWeeks !== null) {
+                $payload['registration_close_weeks'] = $registrationCloseWeeks;
+            } else {
+                unset($payload['registration_close_weeks']);
+            }
+        } else {
+            unset(
+                $payload['is_free_event'],
+                $payload['event_fee'],
+                $payload['registration_limit'],
+                $payload['registration_close_weeks']
+            );
+        }
+
+        $optionalColumns = [
+            'event_mode',
+            'event_structure',
+            'event_span',
+            'is_free_event',
+            'event_fee',
+            'registration_limit',
+            'registration_close_weeks',
+        ];
         $working = $payload;
         $created = null;
         for ($attempt = 0; $attempt < 8; $attempt++) {
@@ -841,6 +1012,38 @@ switch ($action) {
                     supabase_request('DELETE', rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId), $readHeaders);
                     json_response(['ok' => false, 'error' => 'Failed to create event sessions.'], 500);
                 }
+            }
+        }
+
+        if ($role === 'teacher') {
+            $proposalSave = save_proposal_requirements(
+                $eventId,
+                $proposalRequirements,
+                $userId,
+                $readHeaders,
+                [
+                    'skip_event_stage_update' => true,
+                    'include_requirements' => true,
+                ]
+            );
+            if (!($proposalSave['ok'] ?? false)) {
+                supabase_request('DELETE', rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId), $readHeaders);
+                json_response(['ok' => false, 'error' => (string) ($proposalSave['error'] ?? 'Failed to save proposal requirements.')], 500);
+            }
+            $created['proposal_requirements'] = $proposalSave['requirements'] ?? [];
+
+            if ($studentRequirements !== []) {
+                $studentSave = save_student_requirements(
+                    $eventId,
+                    $studentRequirements,
+                    $userId,
+                    $readHeaders
+                );
+                if (!($studentSave['ok'] ?? false)) {
+                    supabase_request('DELETE', rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId), $readHeaders);
+                    json_response(['ok' => false, 'error' => (string) ($studentSave['error'] ?? 'Failed to save student requirements.')], 500);
+                }
+                $created['student_requirements'] = $studentSave['requirements'] ?? [];
             }
         }
 

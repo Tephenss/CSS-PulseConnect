@@ -96,7 +96,7 @@ function storage_create_signed_url(string $bucket, string $objectPath, int $expi
 
 /**
  * Resolve a user photo_url (public URL, storage path, or signed URL) to a
- * short-lived signed URL for the private avatars bucket.
+ * short-lived signed URL for the private avatars bucket / Hostinger media.
  */
 function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSeconds = 3600): string
 {
@@ -105,8 +105,21 @@ function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSecond
         return '';
     }
 
+    if (!function_exists('media_is_local_avatar_path')) {
+        require_once __DIR__ . '/media_assets.php';
+    }
+
+    if (media_is_local_avatar_path($raw)) {
+        $local = media_avatar_signed_url($raw, $expiresInSeconds);
+        if ($local !== '') {
+            return $local;
+        }
+    }
+
     if ((str_starts_with($raw, 'http://') || str_starts_with($raw, 'https://'))
-        && !str_contains($raw, '/storage/v1/object/')) {
+        && !str_contains($raw, '/storage/v1/object/')
+        && !str_contains($raw, '/api/media_serve.php')
+        && !str_contains($raw, '/uploads/media/avatars/')) {
         return $raw;
     }
 
@@ -125,6 +138,121 @@ function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSecond
         return '';
     }
 
+    // Prefer Hostinger copy if present for legacy profiles/{id}.* paths.
+    if (preg_match('#^profiles/([0-9a-fA-F-]{36})\.#', $path, $m)) {
+        $localPath = 'media/avatars/profiles/' . strtolower((string) $m[1]) . '.jpg';
+        $localUrl = media_avatar_signed_url($localPath, $expiresInSeconds);
+        if ($localUrl !== '') {
+            return $localUrl;
+        }
+    }
+
     $signed = storage_create_signed_url('avatars', $path, $expiresInSeconds);
     return $signed ?? '';
+}
+
+/**
+ * Find the logged-in user's avatar object in the private avatars bucket.
+ * Upload convention: profiles/{userId}.{jpg|jpeg|png|webp}
+ */
+function storage_find_user_avatar_path(string $userId): string
+{
+    $userId = strtolower(trim($userId));
+    if ($userId === '' || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $userId)) {
+        return '';
+    }
+    if (!defined('SUPABASE_URL') || !defined('SUPABASE_KEY')) {
+        return '';
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/storage/v1/object/list/avatars';
+    $headers = [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $payload = json_encode([
+        'prefix' => 'profiles/',
+        'search' => $userId,
+        'limit' => 20,
+    ], JSON_UNESCAPED_SLASHES);
+    $res = supabase_request('POST', $url, $headers, $payload);
+    if (!($res['ok'] ?? false)) {
+        return '';
+    }
+
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (!is_array($rows)) {
+        return '';
+    }
+
+    $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $name = trim((string) ($row['name'] ?? ''));
+        if ($name === '' || str_ends_with($name, '/')) {
+            continue;
+        }
+
+        $normalized = ltrim(str_replace('\\', '/', $name), '/');
+        if (str_starts_with($normalized, 'avatars/')) {
+            $normalized = substr($normalized, strlen('avatars/'));
+        }
+        $base = basename($normalized);
+        $dot = strrpos($base, '.');
+        if ($dot === false) {
+            continue;
+        }
+        $stem = strtolower(substr($base, 0, $dot));
+        $ext = strtolower(substr($base, $dot + 1));
+        if ($stem !== $userId || !in_array($ext, $allowed, true)) {
+            continue;
+        }
+
+        if (str_contains($normalized, '/')) {
+            return $normalized;
+        }
+        return 'profiles/' . $base;
+    }
+
+    return '';
+}
+
+/**
+ * Persist avatars as a storage object path (not an expiring signed/public URL).
+ */
+function storage_normalize_avatar_photo_value(string $photoUrlOrPath): string
+{
+    $raw = trim($photoUrlOrPath);
+    if ($raw === '') {
+        return '';
+    }
+
+    if (!function_exists('media_normalize_local_avatar_path')) {
+        require_once __DIR__ . '/media_assets.php';
+    }
+    $local = media_normalize_local_avatar_path($raw);
+    if ($local !== '') {
+        return $local;
+    }
+
+    $path = storage_object_path_from_url($raw, 'avatars');
+    if ($path === '') {
+        $normalized = ltrim(str_replace('\\', '/', $raw), '/');
+        if (str_starts_with($normalized, 'avatars/')) {
+            $normalized = substr($normalized, strlen('avatars/'));
+        }
+        if ($normalized !== '' && !str_contains($normalized, '://')) {
+            $path = $normalized;
+        }
+    }
+
+    if ($path === '' || str_contains($path, '..')) {
+        return '';
+    }
+
+    return $path;
 }

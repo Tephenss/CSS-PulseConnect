@@ -227,7 +227,13 @@ $respond = static function (
 };
 
 $isPresent = static function (array $row): bool {
+    if (function_exists('attendance_has_valid_time_in')) {
+        return attendance_has_valid_time_in($row);
+    }
     $statusStr = strtolower(trim((string) ($row['status'] ?? '')));
+    if ($statusStr === 'absent') {
+        return false;
+    }
     if (in_array($statusStr, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true)) {
         return true;
     }
@@ -404,6 +410,36 @@ if ($usesSessions) {
     }
 
     if ($inStatus !== 'open' || $sessionId === '') {
+        // Time-out open but this student never timed in / is absent.
+        if ($inStatus !== 'waiting') {
+            foreach ($sessions as $session) {
+                if (!is_array($session)) {
+                    continue;
+                }
+                $sid = (string) ($session['id'] ?? '');
+                if ($sid === '') {
+                    continue;
+                }
+                $existing = $bySession[$sid] ?? null;
+                if (is_array($existing) && $isPresent($existing)) {
+                    continue;
+                }
+                $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
+                $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $now);
+                if (($outWin['open'] ?? false) !== true) {
+                    continue;
+                }
+                $sessName = trim((string) (build_session_display_name($session) ?: ($session['title'] ?? 'Seminar')));
+                if ($sessName === '') {
+                    $sessName = 'Seminar';
+                }
+                $respond(false, 'absent_no_time_in', 'Cannot time out — you have no time-in (marked absent) for ' . $sessName . '.', 409, [
+                    'session_id' => $sid,
+                    'action' => 'check_out',
+                ]);
+            }
+        }
+
         // Prefer check-in waiting/closed messaging when that is the active problem.
         // Only fall through to "too early to time out" when they already timed in
         // and there is no upcoming seminar time-in to wait for.
@@ -592,6 +628,14 @@ if ($alreadyIn) {
         null
     );
     $respond(true, 'checked_out', 'Checked out successfully!' . mobile_attendance_queued_suffix($writeOutcome), 200, ['action' => 'check_out']);
+}
+
+$endAtForOut = parse_iso_datetime((string) ($event['end_at'] ?? ''));
+$outWinForAbsent = attendance_check_out_window($endAtForOut, $event['early_out_enabled_at'] ?? null, $now);
+if (($outWinForAbsent['open'] ?? false) === true) {
+    $respond(false, 'absent_no_time_in', 'Cannot time out — you have no time-in (marked absent).', 409, [
+        'action' => 'check_out',
+    ]);
 }
 
 $startAt = parse_iso_datetime((string) ($event['start_at'] ?? ''));

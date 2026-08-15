@@ -15,6 +15,7 @@ $user = require_role(['admin']);
 $sectionId = $_GET['id'] ?? '';
 $sectionId = str_replace(' ', '-', trim($sectionId)); // Defensive fix against spaces replacing hyphens
 $sectionName = $_GET['name'] ?? 'Block Student List';
+$isIrregularSection = strcasecmp(trim($sectionName), 'IRREGULAR') === 0;
 
 if ($sectionId === '') {
     header('Location: admin_sections.php');
@@ -184,15 +185,23 @@ usort($directory, static function (array $a, array $b): int {
 render_header('Block: ' . htmlspecialchars($sectionName), $user);
 ?>
 
-<div class="mb-6 flex items-center justify-between">
+<div class="mb-6 flex items-center justify-between gap-3 flex-wrap">
   <div>
     <h2 class="text-xl font-bold text-zinc-900 mb-1"><?= htmlspecialchars($sectionName) ?> Students</h2>
     <p class="text-sm text-zinc-500">Total Enrolled: <?= count($directory) ?></p>
   </div>
-  <a href="admin_sections.php" class="text-sm font-semibold text-zinc-600 hover:text-zinc-900 px-3 py-2 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors border border-zinc-200 inline-flex items-center gap-2">
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
-    Back
-  </a>
+  <div class="flex items-center gap-2">
+    <?php if (!$isIrregularSection): ?>
+      <button type="button" id="btnViewBlockSched" class="text-sm font-semibold text-sky-800 hover:text-sky-950 px-3 py-2 bg-sky-50 hover:bg-sky-100 rounded-lg transition-colors border border-sky-200 inline-flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+        View Sched
+      </button>
+    <?php endif; ?>
+    <a href="admin_sections.php" class="text-sm font-semibold text-zinc-600 hover:text-zinc-900 px-3 py-2 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors border border-zinc-200 inline-flex items-center gap-2">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+      Back
+    </a>
+  </div>
 </div>
 
 <div class="mb-5 relative w-full sm:w-96">
@@ -246,7 +255,18 @@ render_header('Block: ' . htmlspecialchars($sectionName), $user);
                   <?php endif; ?>
                 </td>
                 <td class="px-6 py-4 text-right">
-                  <button
+                  <div class="inline-flex items-center gap-2">
+                    <?php if ($isIrregularSection && $isRegistered): ?>
+                      <button
+                        type="button"
+                        class="btnViewStudentSched inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 transition-colors"
+                        data-student-id="<?= htmlspecialchars($studentUserId) ?>"
+                        data-student-name="<?= htmlspecialchars($studentFullName !== '' ? $studentFullName : 'this student') ?>"
+                      >
+                        View Sched
+                      </button>
+                    <?php endif; ?>
+                    <button
                     type="button"
                     class="btnResetOne inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
                     data-student-id="<?= htmlspecialchars($studentUserId) ?>"
@@ -256,6 +276,7 @@ render_header('Block: ' . htmlspecialchars($sectionName), $user);
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7"/></svg>
                     Reset Student
                   </button>
+                  </div>
                 </td>
               </tr>
             <?php endforeach; ?>
@@ -276,6 +297,64 @@ render_header('Block: ' . htmlspecialchars($sectionName), $user);
       </table>
     </div>
 </div>
+
+<div id="schedModal" class="hidden fixed inset-0 z-50 p-4 sm:p-6">
+  <div id="schedModalBackdrop" class="absolute inset-0 bg-zinc-900/50"></div>
+  <div class="sched-modal-card relative z-10 w-full bg-white rounded-2xl border border-zinc-200 shadow-2xl">
+    <div class="sched-modal-header px-5 py-4 border-b border-zinc-200 flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h3 id="schedModalTitle" class="text-base font-bold text-zinc-900 truncate">Class schedule</h3>
+        <p id="schedModalSub" class="text-xs text-zinc-500 mt-0.5"></p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button type="button" id="schedModalStatusBtn" class="hidden text-sm font-semibold px-3 py-1.5 rounded-lg border transition-colors">Status</button>
+        <button type="button" id="schedModalClose" class="text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg text-sm font-semibold px-3 py-1.5 transition-colors">Close</button>
+      </div>
+    </div>
+    <div id="schedModalBody" class="sched-modal-body px-5 py-4 text-sm text-zinc-700"></div>
+  </div>
+</div>
+
+<div id="schedStatusModal" class="hidden fixed inset-0 z-50 p-4 sm:p-6">
+  <div id="schedStatusBackdrop" class="absolute inset-0 bg-zinc-900/50"></div>
+  <div class="sched-modal-card relative z-10 w-full bg-white rounded-2xl border border-zinc-200 shadow-2xl">
+    <div class="sched-modal-header px-5 py-4 border-b border-zinc-200 flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h3 id="schedStatusTitle" class="text-base font-bold text-zinc-900 truncate">Schedule status</h3>
+        <p id="schedStatusSub" class="text-xs text-zinc-500 mt-0.5"></p>
+      </div>
+      <button type="button" id="schedStatusClose" class="shrink-0 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg text-sm font-semibold px-3 py-1.5 transition-colors">Close</button>
+    </div>
+    <div id="schedStatusBody" class="sched-modal-body px-5 py-4 text-sm text-zinc-700"></div>
+  </div>
+</div>
+<style>
+  #schedModal:not(.hidden),
+  #schedStatusModal:not(.hidden) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+  }
+  #schedStatusModal {
+    z-index: 60;
+  }
+  .sched-modal-card {
+    max-width: 48rem;
+    max-height: min(90vh, 800px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sched-modal-header {
+    flex-shrink: 0;
+  }
+  .sched-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+</style>
 
 <script>
 document.getElementById('searchInput').addEventListener('input', function(e) {
@@ -350,6 +429,202 @@ document.querySelectorAll('.btnResetOne').forEach(btn => {
             btn.disabled = false;
             btn.innerHTML = originalHtml;
         }
+    });
+});
+
+const schedModal = document.getElementById('schedModal');
+const schedModalTitle = document.getElementById('schedModalTitle');
+const schedModalSub = document.getElementById('schedModalSub');
+const schedModalBody = document.getElementById('schedModalBody');
+const schedModalStatusBtn = document.getElementById('schedModalStatusBtn');
+const schedStatusModal = document.getElementById('schedStatusModal');
+const schedStatusTitle = document.getElementById('schedStatusTitle');
+const schedStatusSub = document.getElementById('schedStatusSub');
+const schedStatusBody = document.getElementById('schedStatusBody');
+const sectionId = <?= json_encode($sectionId) ?>;
+const sectionName = <?= json_encode($sectionName) ?>;
+let lastBlockSchedData = null;
+
+function closeSchedModal() {
+    if (schedModal) schedModal.classList.add('hidden');
+    closeSchedStatusModal();
+    lastBlockSchedData = null;
+    if (schedModalStatusBtn) schedModalStatusBtn.classList.add('hidden');
+}
+function closeSchedStatusModal() {
+    if (schedStatusModal) schedStatusModal.classList.add('hidden');
+}
+document.getElementById('schedModalClose')?.addEventListener('click', closeSchedModal);
+document.getElementById('schedModalBackdrop')?.addEventListener('click', closeSchedModal);
+document.getElementById('schedStatusClose')?.addEventListener('click', closeSchedStatusModal);
+document.getElementById('schedStatusBackdrop')?.addEventListener('click', closeSchedStatusModal);
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function renderSubjects(subjects) {
+    if (!Array.isArray(subjects) || subjects.length === 0) {
+        return '<p class="text-zinc-500">No class schedule uploaded yet.</p>';
+    }
+    const rows = subjects.map((s) => {
+        const code = escapeHtml(s.course_code || '');
+        const desc = escapeHtml(s.course_description || '');
+        const days = escapeHtml(s.days || '');
+        const time = escapeHtml(s.time_label || '');
+        const inst = escapeHtml(s.instructor || '');
+        return `<tr class="border-b border-zinc-100">
+            <td class="py-2 pr-3 font-semibold text-zinc-900 whitespace-nowrap">${code}</td>
+            <td class="py-2 pr-3">${desc}</td>
+            <td class="py-2 pr-3 whitespace-nowrap">${days}${time ? ' · ' + time : ''}</td>
+            <td class="py-2">${inst}</td>
+        </tr>`;
+    }).join('');
+    return `<table class="w-full text-left"><thead><tr class="text-[11px] uppercase tracking-wide text-zinc-500 border-b border-zinc-200">
+        <th class="py-2 pr-3">Code</th><th class="py-2 pr-3">Description</th><th class="py-2 pr-3">Day / Time</th><th class="py-2">Instructor</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function setStatusButton(data) {
+    if (!schedModalStatusBtn) return;
+    const allMatch = !!data.all_match;
+    const mismatchCount = Number(data.mismatch_count || 0);
+    schedModalStatusBtn.classList.remove('hidden');
+    if (allMatch) {
+        schedModalStatusBtn.textContent = 'Status · Match';
+        schedModalStatusBtn.className = 'text-sm font-semibold px-3 py-1.5 rounded-lg border transition-colors bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100';
+    } else {
+        schedModalStatusBtn.textContent = 'Status · Mismatch' + (mismatchCount > 0 ? ' (' + mismatchCount + ')' : '');
+        schedModalStatusBtn.className = 'text-sm font-semibold px-3 py-1.5 rounded-lg border transition-colors bg-red-50 text-red-800 border-red-200 hover:bg-red-100';
+    }
+}
+
+function renderStatusModal(data) {
+    const studentCount = Number(data.student_count || 0);
+    const matchCount = Number(data.match_count || 0);
+    const mismatchCount = Number(data.mismatch_count || 0);
+    const majorityCount = Number(data.majority_count || 0);
+    const uploadedCount = Number(data.uploaded_count || 0);
+    const allMatch = !!data.all_match;
+    const hasMajority = majorityCount > 0 && Array.isArray(data.subjects) && data.subjects.length > 0;
+    const mismatches = Array.isArray(data.mismatches) ? data.mismatches : [];
+    const differentCount = mismatches.filter((m) => m && m.reason === 'different').length;
+    const noUploadCount = mismatches.filter((m) => m && m.reason === 'no_upload').length;
+
+    let banner = '';
+    if (!hasMajority) {
+        banner = `<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p class="text-sm font-bold text-amber-900">Mismatch</p>
+            <p class="text-xs text-amber-800 mt-1">No majority schedule yet. Students who have not uploaded or updated their registration form are listed below.</p>
+        </div>`;
+    } else if (allMatch) {
+        banner = `<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+            <p class="text-sm font-bold text-emerald-900">Match</p>
+            <p class="text-xs text-emerald-800 mt-1">All ${studentCount} registered student(s) match the majority block schedule (${majorityCount} of ${uploadedCount} upload${uploadedCount === 1 ? '' : 's'}).</p>
+        </div>`;
+    } else {
+        banner = `<div class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+            <p class="text-sm font-bold text-red-900">Mismatch</p>
+            <p class="text-xs text-red-800 mt-1">${matchCount} match · ${mismatchCount} mismatch of ${studentCount} registered. Awaiting signup is not counted. Wrong uploads and registered students who have not updated are mismatch.</p>
+        </div>`;
+    }
+
+    if (mismatches.length === 0) {
+        return banner + '<p class="text-zinc-500">No mismatched students.</p>';
+    }
+
+    const rows = mismatches.map((m) => {
+        const name = escapeHtml(m.name || 'Unnamed');
+        const no = escapeHtml(m.student_no || '—');
+        const isDifferent = m.reason === 'different';
+        const label = escapeHtml(m.reason_label || (isDifferent ? 'Different schedule' : 'No upload'));
+        const badge = isDifferent
+            ? 'bg-red-50 text-red-700 border-red-200'
+            : 'bg-amber-50 text-amber-800 border-amber-200';
+        return `<tr class="border-b border-zinc-100">
+            <td class="py-2 pr-3 whitespace-nowrap"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-zinc-100 text-zinc-700">${no}</span></td>
+            <td class="py-2 pr-3 font-semibold text-zinc-900">${name}</td>
+            <td class="py-2 text-right"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${badge}">${label}</span></td>
+        </tr>`;
+    }).join('');
+    const split = [];
+    if (differentCount > 0) split.push(differentCount + ' different schedule');
+    if (noUploadCount > 0) split.push(noUploadCount + ' no upload');
+    return banner + `<p class="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-1">Mismatched students</p>
+        <p class="text-xs text-zinc-500 mb-2">${escapeHtml(split.join(' · '))}</p>
+        <table class="w-full text-left"><thead><tr class="text-[11px] uppercase tracking-wide text-zinc-500 border-b border-zinc-200">
+            <th class="py-2 pr-3">Student no</th><th class="py-2 pr-3">Name</th><th class="py-2 text-right">Status</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function openSchedStatusModal() {
+    if (!lastBlockSchedData || !schedStatusModal) return;
+    const data = lastBlockSchedData;
+    const matchCount = Number(data.match_count || 0);
+    const studentCount = Number(data.student_count || 0);
+    if (schedStatusTitle) schedStatusTitle.textContent = sectionName + ' schedule status';
+    if (schedStatusSub) schedStatusSub.textContent = matchCount + ' of ' + studentCount + ' registered match the majority schedule';
+    if (schedStatusBody) {
+        schedStatusBody.innerHTML = renderStatusModal(data);
+        schedStatusBody.scrollTop = 0;
+    }
+    schedStatusModal.classList.remove('hidden');
+}
+
+async function loadSchedule(payload, title) {
+    if (!schedModal || !schedModalBody) return;
+    lastBlockSchedData = null;
+    if (schedModalStatusBtn) schedModalStatusBtn.classList.add('hidden');
+    closeSchedStatusModal();
+    schedModalTitle.textContent = title;
+    schedModalSub.textContent = 'Loading…';
+    schedModalBody.innerHTML = '';
+    schedModal.classList.remove('hidden');
+    try {
+        const res = await fetch('/api/admin_section_schedule.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                csrf_token: window.CSRF_TOKEN || '',
+                section_id: sectionId,
+                ...payload
+            })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Could not load schedule');
+        const count = Array.isArray(data.subjects) ? data.subjects.length : 0;
+        if (data.mode === 'block') {
+            lastBlockSchedData = data;
+            const uploaded = Number(data.uploaded_count || 0);
+            schedModalSub.textContent = uploaded + ' student upload(s) · ' + count + ' subject(s)';
+            setStatusButton(data);
+            schedModalBody.innerHTML = renderSubjects(data.subjects || []);
+            schedModalBody.scrollTop = 0;
+        } else {
+            schedModalSub.textContent = count + ' subject(s)';
+            schedModalBody.innerHTML = renderSubjects(data.subjects || []);
+            schedModalBody.scrollTop = 0;
+        }
+    } catch (err) {
+        schedModalSub.textContent = '';
+        schedModalBody.innerHTML = `<p class="text-red-600">${escapeHtml(err.message || 'Failed to load schedule.')}</p>`;
+    }
+}
+
+schedModalStatusBtn?.addEventListener('click', openSchedStatusModal);
+document.getElementById('btnViewBlockSched')?.addEventListener('click', () => {
+    loadSchedule({}, <?= json_encode($sectionName . ' block schedule') ?>);
+});
+document.querySelectorAll('.btnViewStudentSched').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        loadSchedule(
+            { student_id: btn.dataset.studentId || '' },
+            (btn.dataset.studentName || 'Student') + ' schedule'
+        );
     });
 });
 </script>

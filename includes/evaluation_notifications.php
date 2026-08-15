@@ -171,6 +171,38 @@ function evaluation_timeout_is_final_for_eval(
 }
 
 /**
+ * Resolve account UUID for FCM / inbox. Callers sometimes pass school student no.
+ */
+function evaluation_notify_resolve_user_id(string $studentId): string
+{
+    $studentId = trim($studentId);
+    if ($studentId === '') {
+        return '';
+    }
+    if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $studentId)) {
+        return strtolower($studentId);
+    }
+
+    $headers = evaluation_notify_headers();
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+        . '?select=id'
+        . '&student_id=eq.' . rawurlencode($studentId)
+        . '&limit=1';
+    $res = supabase_request('GET', $url, $headers);
+    if (!($res['ok'] ?? false)) {
+        return '';
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+        return '';
+    }
+    $id = trim((string) ($rows[0]['id'] ?? ''));
+    return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)
+        ? strtolower($id)
+        : '';
+}
+
+/**
  * Notify one student that evaluation is available after successful time-out.
  * Non-fatal — never throws to scan callers.
  */
@@ -181,7 +213,7 @@ function notify_student_evaluation_open_after_timeout(
     ?string $sessionId = null
 ): void {
     try {
-        $studentId = trim($studentId);
+        $studentId = evaluation_notify_resolve_user_id($studentId);
         $eventId = trim($eventId);
         if ($studentId === '' || $eventId === '') {
             return;

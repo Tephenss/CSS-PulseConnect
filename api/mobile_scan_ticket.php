@@ -105,8 +105,14 @@ function mobile_scan_earlier_iso(string $incoming, ?string $recorded): string
 
 function mobile_scan_is_present(array $row): bool
 {
+    if (function_exists('attendance_has_valid_time_in')) {
+        return attendance_has_valid_time_in($row);
+    }
     $status = strtolower(trim((string) ($row['status'] ?? '')));
-    if (in_array($status, ['present', 'checked_in', 'in'], true)) {
+    if ($status === 'absent') {
+        return false;
+    }
+    if (in_array($status, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true)) {
         return true;
     }
     return trim((string) ($row['check_in_at'] ?? '')) !== '';
@@ -572,8 +578,13 @@ if ($source === 'session') {
         if (!$alreadySessionIn) {
             json_response([
                 'ok' => false,
-                'error' => 'Cannot time out — no time-in recorded for ' . $sessionName . '.',
-                'status' => 'invalid',
+                'error' => 'Cannot time out — this student has no time-in (marked absent) for ' . $sessionName . '.',
+                'status' => 'absent_no_time_in',
+                'ticket_id' => $ticketId,
+                'participant_name' => $participant['participant_name'],
+                'participant_photo_url' => $participant['participant_photo_url'],
+                'participant_student_id' => $participant['participant_student_id'],
+                'participant_student_no' => $participant['participant_student_no'] ?? '',
                 'action' => 'check_out',
                 'session_id' => $sessionId,
             ], 409);
@@ -620,7 +631,7 @@ if ($source === 'session') {
         // re-checked when the student opens the form. Skipping here caused
         // missing eval pushes after offline/sync timeouts.
         notify_student_evaluation_open_after_timeout(
-            (string) ($participant['participant_student_id'] ?? ''),
+            (string) ($participant['participant_user_id'] ?? ''),
             $eventId,
             (string) ($event['title'] ?? ''),
             $sessionId
@@ -849,6 +860,22 @@ if ($alreadyOut) {
     ], 409);
 }
 
+$wantsCheckOut = ($outWinOpen && !$timeInOpen)
+    || ($scanStatus === 'open' && $scanMode === 'check_out');
+if ($wantsCheckOut && !$isPresent) {
+    json_response([
+        'ok' => false,
+        'error' => 'Cannot time out — this student has no time-in (marked absent).',
+        'status' => 'absent_no_time_in',
+        'ticket_id' => $ticketId,
+        'participant_name' => $participant['participant_name'],
+        'participant_photo_url' => $participant['participant_photo_url'],
+        'participant_student_id' => $participant['participant_student_id'],
+        'participant_student_no' => $participant['participant_student_no'] ?? '',
+        'action' => 'check_out',
+    ], 409);
+}
+
     if ($isPresent) {
     if ($outWinOpen) {
         if ($dryRun) {
@@ -872,7 +899,7 @@ if ($alreadyOut) {
             json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
         }
         notify_student_evaluation_open_after_timeout(
-            (string) ($participant['participant_student_id'] ?? ''),
+            (string) ($participant['participant_user_id'] ?? ''),
             $eventId,
             (string) ($event['title'] ?? ''),
             null
@@ -930,8 +957,8 @@ if ($alreadyOut) {
     json_response($already('Ticket already checked in.', $recorded), 409);
 }
 
-// Not present yet — allow check-in during time-in, or recovery check-in while early/out window is open.
-if (!$timeInOpen && !$outWinOpen) {
+// Not present yet — check-in only while the time-in window is open.
+if (!$timeInOpen) {
     $statusMessage = mobile_scan_window_message($scanStatus, $scanContext);
     if (isset($outWin) && is_array($outWin) && trim((string) ($outWin['message'] ?? '')) !== '') {
         // Prefer checkout-specific copy when grace already ended.
@@ -945,10 +972,7 @@ if (!$timeInOpen && !$outWinOpen) {
 }
 
 if ($dryRun) {
-    $confirmMsg = $outWinOpen && !$timeInOpen
-        ? 'Review participant, then confirm check-in before time-out.'
-        : 'Review participant, then confirm check-in.';
-    json_response($success('ready_for_confirmation', $confirmMsg));
+    json_response($success('ready_for_confirmation', 'Review participant, then confirm check-in.'));
 }
 
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?id=eq.' . rawurlencode((string) $att['id']);
@@ -971,9 +995,7 @@ if (($writeOutcome['ok'] ?? false) !== true) {
     json_response($fail, ($writeOutcome['status'] ?? '') === 'throttled' ? 429 : 500);
 }
 
-$checkInMessage = ($outWinOpen && !$timeInOpen)
-    ? 'Checked in. Scan again to time out.'
-    : 'Check-in successful!';
+$checkInMessage = 'Check-in successful!';
 $payload = $success(
     'present',
     $checkInMessage . mobile_attendance_queued_suffix($writeOutcome),

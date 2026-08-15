@@ -1,0 +1,6 @@
+# Generated user media stays local — never commit photos/covers.
+media/**
+!media/
+!media/**/
+!media/**/.htaccess
+!media/**/.gitkeep

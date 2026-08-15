@@ -700,6 +700,12 @@ render_header('Manage Events', $user);
                 <option value="Sports Event">Sports Event</option>
                 <option value="Other">Other</option>
               </select>
+              <div id="event_type_other_wrap" class="mt-2 hidden">
+                <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide" for="event_type_other">Specify event type</label>
+                <input id="event_type_other" name="event_type_other" type="text" maxlength="80"
+                  class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition placeholder:text-zinc-400"
+                  placeholder="e.g. Hackathon" autocomplete="off" />
+              </div>
             </div>
             <div>
               <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Course</label>
@@ -4096,7 +4102,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       .trim();
     document.getElementById('description').value = cleanedDescription;
 
-    if (document.getElementById('event_type')) document.getElementById('event_type').value = ds('event_type') || 'Event';
+    setEventTypeValue(ds('event_type') || 'Event');
     const decodedTarget = decodeTargetParticipant(ds('event_for') || 'All');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
     setSelectedTargetYears(decodedTarget.years || ['ALL']);
@@ -4374,6 +4380,46 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return paidInput?.checked ? 'paid' : 'free';
   }
 
+  const EVENT_TYPE_PRESETS = ['Event', 'Seminar', 'Off-Campus Activity', 'Sports Event', 'Other'];
+
+  function syncEventTypeOtherVisibility() {
+    const typeSelect = document.getElementById('event_type');
+    const wrap = document.getElementById('event_type_other_wrap');
+    const otherInput = document.getElementById('event_type_other');
+    if (!typeSelect || !wrap) return;
+    const isOther = typeSelect.value === 'Other';
+    wrap.classList.toggle('hidden', !isOther);
+    if (!isOther && otherInput) otherInput.value = '';
+  }
+
+  function setEventTypeValue(rawType) {
+    const typeSelect = document.getElementById('event_type');
+    const otherInput = document.getElementById('event_type_other');
+    if (!typeSelect) return;
+    const value = String(rawType || '').trim() || 'Event';
+    if (EVENT_TYPE_PRESETS.includes(value) && value !== 'Other') {
+      typeSelect.value = value;
+      if (otherInput) otherInput.value = '';
+    } else if (value === 'Other') {
+      typeSelect.value = 'Other';
+      if (otherInput) otherInput.value = '';
+    } else {
+      typeSelect.value = 'Other';
+      if (otherInput) otherInput.value = value.slice(0, 80);
+    }
+    syncEventTypeOtherVisibility();
+  }
+
+  function getEventTypeValue() {
+    const typeSelect = document.getElementById('event_type');
+    const selected = String(typeSelect?.value || 'Event').trim() || 'Event';
+    if (selected !== 'Other') return selected;
+    return String(document.getElementById('event_type_other')?.value || '').trim();
+  }
+
+  document.getElementById('event_type')?.addEventListener('change', syncEventTypeOtherVisibility);
+  syncEventTypeOtherVisibility();
+
   function focusWizardField(focusId) {
     if (!focusId) return;
     const el = document.getElementById(focusId);
@@ -4452,6 +4498,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
       const location = (document.getElementById('location')?.value || '').trim();
       if (!location) return fail('Location is required.', 'location');
+
+      const selectedType = String(document.getElementById('event_type')?.value || '').trim();
+      if (selectedType === 'Other') {
+        const customType = String(document.getElementById('event_type_other')?.value || '').trim();
+        if (!customType) {
+          return fail('Specify what this Other event type is.', 'event_type_other');
+        }
+        if (customType.length > 80) {
+          return fail('Custom event type must be 80 characters or less.', 'event_type_other');
+        }
+      }
 
       const targetYears = typeof getSelectedTargetYears === 'function'
         ? getSelectedTargetYears()
@@ -4743,7 +4800,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     setPickerValue(document.getElementById('seminar2_start_local'), '');
     setPickerValue(document.getElementById('seminar2_end_local'), '');
 
-    if (document.getElementById('event_type')) document.getElementById('event_type').value = 'Event';
+    setEventTypeValue('Event');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = 'ALL';
     setSelectedTargetYears(['ALL']);
     if (document.getElementById('grace_time')) document.getElementById('grace_time').value = '30';
@@ -4858,7 +4915,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const title = document.getElementById('title').value.trim();
       const location = document.getElementById('location').value.trim();
       const description = document.getElementById('description').value.trim();
-      const eventType = document.getElementById('event_type') ? document.getElementById('event_type').value : 'Event';
+      const eventType = getEventTypeValue();
+      if (!eventType) {
+        throw new Error('Specify what this Other event type is.');
+      }
       const targetCourse = document.getElementById('target_course') ? document.getElementById('target_course').value : 'ALL';
       const targetYears = getSelectedTargetYears();
       const eventFor = encodeTargetParticipant(targetCourse, targetYears);
@@ -5385,13 +5445,18 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         console.log('[publish push]', data.push);
         const sent = Number(data.push.fcm_sent ?? 0);
         const failed = Number(data.push.fcm_failed ?? 0);
-        // Only alert when nothing delivered. Stale NotRegistered tokens often fail while
-        // other devices (and inbox) still succeed — that used to look like a full failure.
-        if (data.push.attempted && !data.push.fcm_ok && sent === 0) {
+        const tokens = Number(data.push.tokens ?? 0);
+        const pushError = String(data.push.error || '');
+        // No mobile FCM tokens is not a publish failure — inbox still saved.
+        const skippedNoTokens = data.push.fcm_skipped === true
+          || tokens === 0
+          || pushError.includes('no_fcm_tokens');
+        // Only alert when devices existed but FCM send actually failed.
+        if (data.push.attempted && !data.push.fcm_ok && sent === 0 && !skippedNoTokens) {
           const detail = [
             'Event published, but push notification failed.',
             'targets=' + (data.push.targets ?? 0),
-            'tokens=' + (data.push.tokens ?? 0),
+            'tokens=' + tokens,
             'error=' + (data.push.error || 'unknown'),
             data.push.http_status ? ('http=' + data.push.http_status) : null,
             data.push.detail ? ('detail=' + data.push.detail) : null,
@@ -5763,7 +5828,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           logDebug("Gemini API Error: " + data.error);
           improvedTranscript = ''; // Don't cache error
           if (activeTab === 'improved') {
-            previewText.value = "⚠️ Error formatting text:\n" + data.error;
+            previewText.value = "⚠️ AI formatting unavailable.\n\n"
+              + (data.error || "Use the Raw Text tab to insert your transcript.");
           }
         }
       } catch (err) {
@@ -6065,7 +6131,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
             if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
           } else {
-            mainAiStatus.innerHTML = '❌ Error: ' + json.error;
+            mainAiStatus.innerHTML = '❌ ' + (json.error || 'AI formatting unavailable.');
           }
         } catch (err) {
           mainAiStatus.innerHTML = '❌ Network error.';
@@ -6521,7 +6587,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     if (manageEventsLiveIntervalId) {
       window.clearInterval(manageEventsLiveIntervalId);
     }
-    const intervalMs = document.visibilityState === 'visible' ? 45000 : 120000;
+    const intervalMs = document.visibilityState === 'visible' ? 90000 : 180000;
     manageEventsLiveIntervalId = window.setInterval(refreshManageEventsLive, intervalMs);
   }
 

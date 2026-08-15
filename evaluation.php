@@ -442,17 +442,30 @@ render_header('Evaluation', $user);
 
                     <div class="mt-3">
                       <?php if ($fieldType === 'rating'): ?>
-                        <select
-                          class="w-full rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
-                          data-question-id="<?= htmlspecialchars($questionId) ?>"
-                          data-session-id="<?= htmlspecialchars($section['scope'] === 'session' ? $scopeId : '') ?>"
-                          name="answer_<?= htmlspecialchars($questionId) ?>"
-                        >
-                          <option value="">Select rating</option>
-                          <?php for ($i = 1; $i <= 5; $i++): ?>
-                            <option value="<?= $i ?>" <?= (string) $i === $value ? 'selected' : '' ?>><?= $i ?></option>
-                          <?php endfor; ?>
-                        </select>
+                        <div class="space-y-2">
+                          <div class="grid grid-cols-5 gap-2">
+                            <?php for ($i = 1; $i <= 5; $i++): ?>
+                              <label class="cursor-pointer">
+                                <input
+                                  type="radio"
+                                  class="peer sr-only"
+                                  name="answer_<?= htmlspecialchars($questionId) ?>"
+                                  value="<?= $i ?>"
+                                  data-question-id="<?= htmlspecialchars($questionId) ?>"
+                                  data-session-id="<?= htmlspecialchars($section['scope'] === 'session' ? $scopeId : '') ?>"
+                                  <?= (string) $i === $value ? 'checked' : '' ?>
+                                />
+                                <span class="flex h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-950 text-sm font-bold text-zinc-200 peer-checked:border-rose-500 peer-checked:bg-rose-600 peer-checked:text-white transition">
+                                  <?= $i ?>
+                                </span>
+                              </label>
+                            <?php endfor; ?>
+                          </div>
+                          <div class="flex items-center justify-between text-[11px] font-semibold text-zinc-500">
+                            <span>Poor</span>
+                            <span>Outstanding</span>
+                          </div>
+                        </div>
                       <?php else: ?>
                         <textarea
                           rows="3"
@@ -504,13 +517,33 @@ render_header('Evaluation', $user);
     msg.textContent = 'Submitting...';
 
     const answers = [];
+    const seen = new Set();
     document.querySelectorAll('[data-question-id]').forEach((el) => {
+      const questionId = el.dataset.questionId || '';
+      if (!questionId || seen.has(questionId)) return;
+
+      let answerText = '';
+      if (el.type === 'radio') {
+        const checked = document.querySelector(
+          `input[type="radio"][data-question-id="${CSS.escape(questionId)}"]:checked`
+        );
+        if (!checked) return;
+        answerText = checked.value || '';
+        seen.add(questionId);
+      } else {
+        answerText = el.value || '';
+        seen.add(questionId);
+      }
+
       const answer = {
-        question_id: el.dataset.questionId,
-        answer_text: el.value || ''
+        question_id: questionId,
+        answer_text: answerText
       };
-      if (el.dataset.sessionId) {
-        answer.session_id = el.dataset.sessionId;
+      const sessionId = el.type === 'radio'
+        ? (document.querySelector(`input[type="radio"][data-question-id="${CSS.escape(questionId)}"]:checked`)?.dataset.sessionId || el.dataset.sessionId || '')
+        : (el.dataset.sessionId || '');
+      if (sessionId) {
+        answer.session_id = sessionId;
       }
       answers.push(answer);
     });
