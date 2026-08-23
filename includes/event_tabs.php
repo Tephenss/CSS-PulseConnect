@@ -142,7 +142,7 @@ if (!function_exists('render_event_tabs')) {
      *
      * Options:
      * - event_id (string, required)
-     * - current_tab (details|participants|payments|document_review|absence_reasons|feedback|questions|qr)
+     * - current_tab (details|participants|payments|document_review|absence_reasons|feedback|questions|assistants|qr)
      * - role (admin|teacher|student)
      * - uses_sessions (bool)
      * - event_status (string)
@@ -180,6 +180,7 @@ if (!function_exists('render_event_tabs')) {
         $feedbackHref = '/evaluation_admin?' . $eventQuery . '&tab=feedback' . $returnQuery;
         $questionsHref = '/evaluation_admin?' . $eventQuery . '&tab=questions' . $returnQuery;
         $qrHref = '/event_teachers?' . $eventQuery . $returnQuery;
+        $assistantsHref = '/event_assistants?' . $eventQuery . $returnQuery;
         $detailsHref = '/event_view?id=' . rawurlencode($eventId) . $returnQuery;
         $documentReviewHref = '/event_document_review?event_id=' . rawurlencode($eventId) . $returnQuery;
         $paymentsHref = '/event_payments?event_id=' . rawurlencode($eventId) . $returnQuery;
@@ -222,6 +223,13 @@ if (!function_exists('render_event_tabs')) {
         // Evaluation Questions: event-creator teacher only (not admin, not other teachers).
         if (!$isFinished && $role === 'teacher' && $isEventCreator) {
             echo event_tab_link_html($questionsHref, 'Evaluation Questions', $currentTab === 'questions');
+        }
+
+        // Assist Student: same as app Assistants tab (published / finished events).
+        $statusLower = $status;
+        $assistStatuses = ['published', 'finished', 'expired'];
+        if (in_array($statusLower, $assistStatuses, true) && ($role === 'teacher' || $role === 'admin')) {
+            echo event_tab_link_html($assistantsHref, 'Assist Student', $currentTab === 'assistants');
         }
 
         if (!$isFinished && $role === 'admin') {

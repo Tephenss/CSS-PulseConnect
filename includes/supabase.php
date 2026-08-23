@@ -213,12 +213,19 @@ function build_error($body, int $httpStatus, ?string $curlError, string $fallbac
 {
     if (is_string($curlError) && trim($curlError) !== '') {
         $lower = strtolower($curlError);
+        error_log('supabase curl error: ' . substr($curlError, 0, 400));
         if (str_contains($lower, 'ssl connection timeout') || str_contains($lower, 'connection timed out')) {
             return 'Could not reach the server. Check your internet connection or turn off VPN, then try again.';
         }
 
-        return 'cURL error: ' . $curlError;
+        return $fallback;
     }
 
-    return extract_supabase_message($body, $httpStatus, $fallback);
+    $detailed = extract_supabase_message($body, $httpStatus, $fallback);
+    if ($detailed !== $fallback && $detailed !== ($fallback . ' (HTTP ' . $httpStatus . ')')) {
+        error_log('supabase api error: ' . substr($detailed, 0, 400));
+    }
+
+    // Never return raw PostgREST/cURL details to clients.
+    return $fallback;
 }

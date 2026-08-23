@@ -1711,422 +1711,262 @@ render_event_tabs([
 
 
 <style>
-.pc-card, .pc-card * {
-  box-sizing: border-box;
-}
-
-.pc-card {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  max-width: 280px;
-  background: white;
-  border-radius: 28px;
-  padding: 3px;
-  position: relative;
-  box-shadow: #60747430 0px 50px 24px -36px;
-  transition: all 0.5s ease-in-out;
-  overflow: hidden;
-  cursor: default;
-}
-
-.pc-card .profile-pic {
-  position: absolute;
-  width: calc(100% - 6px);
-  height: calc(100% - 6px);
-  top: 3px;
-  left: 3px;
-  border-radius: 25px;
-  z-index: 1;
-  border: 0px solid #f97316;
-  overflow: hidden;
-  transition: all 0.5s ease-in-out 0.2s, z-index 0.5s ease-in-out 0.2s;
-  background: #fff7ed;
-}
-
-.pc-card .profile-pic img {
-  object-fit: cover;
-  width: 100%;
-  height: 100%;
-  object-position: center top;
-  transition: all 0.5s ease-in-out 0s;
-}
-
-.pc-card .profile-initials {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 3rem;
-  font-weight: 900;
-  color: #ea580c;
-  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
-  transition: all 0.5s ease-in-out 0s;
-  user-select: none;
-}
-
-.pc-card .bottom {
-  position: absolute;
-  bottom: 3px;
-  left: 3px;
-  right: 3px;
-  background: linear-gradient(135deg, #c2410c 0%, #ea580c 60%, #f97316 100%);
-  top: 61%;
-  border-radius: 22px;
-  z-index: 2;
-  box-shadow: rgba(234, 88, 12, 0.22) 0px 5px 5px 0px inset;
-  overflow: hidden;
-  transition: all 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) 0s;
-  padding: 10px 12px 12px 12px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  box-sizing: border-box;
-}
-
-.pc-card .bottom .bottom-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  width: 100%;
-  transition: padding-left 0.5s ease-in-out;
-}
-
-.pc-card:hover .bottom .bottom-header {
-  padding-left: 88px;
-}
-
-.pc-card .bottom .pname {
-  display: block;
-  font-size: 0.95rem;
-  color: white;
-  font-weight: 800;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.18);
-}
-
-.pc-card .bottom .psubtitle {
-  display: block;
-  font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.85);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.1);
-}
-
-.pc-card .bottom .pdetails-hover {
-  opacity: 0;
-  transform: translateY(12px);
-  transition: all 0.4s ease-in-out;
-  margin-top: 8px;
-  visibility: hidden;
-  max-height: 0;
-  overflow: hidden;
-}
-
-.pc-card:hover .bottom .pdetails-hover {
-  visibility: visible;
-  max-height: 200px;
-  opacity: 1;
-  transform: translateY(0);
-  transition-delay: 0.15s;
-  /* Add top margin to clear the 90px circular avatar fully */
-  margin-top: 14px;
-}
-
-.pc-card .bottom .pinfo {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.pc-card .bottom .pinfo-badge {
+.participant-list .att-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
   font-size: 0.65rem;
-  font-weight: 700;
-  color: rgba(255,255,255,0.92);
-  background: rgba(255,255,255,0.18);
-  border: 1px solid rgba(255,255,255,0.22);
-  border-radius: 6px;
-  padding: 2px 6px;
-  white-space: nowrap;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pc-card .bottom .bottom-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  margin-top: auto;
-  padding-top: 8px;
-  min-width: 0;
-  flex-shrink: 0;
-}
-
-.pc-card .bottom .att-badge {
-  font-size: 0.58rem;
   font-weight: 800;
-  padding: 0.28rem 0.55rem;
+  padding: 0.28rem 0.6rem;
   border-radius: 999px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
-  flex: 0 1 auto;
-  max-width: 42%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  border: 1px solid transparent;
 }
-
-.pc-card .bottom .admin-btns {
+.att-present  { background: #d1fae5; color: #065f46; border-color: #a7f3d0; }
+.att-absent   { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+.att-late     { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+.att-early    { background: #e0f2fe; color: #075985; border-color: #bae6fd; }
+.att-timed-out{ background: #dbeafe; color: #1e3a8a; border-color: #bfdbfe; }
+.att-unscanned{ background: #f4f4f5; color: #52525b; border-color: #e4e4e7; }
+.participant-list .admin-btns {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  flex: 0 0 auto;
+  gap: 0.35rem;
   flex-wrap: nowrap;
-  margin-left: auto;
 }
-
-.pc-card .bottom .admin-btns button {
-  background: rgba(255,255,255,0.18);
-  color: white;
-  border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 999px;
-  font-size: 0.58rem;
+.participant-list .admin-btns button {
+  background: #fff;
+  color: #3f3f46;
+  border: 1px solid #d4d4d8;
+  border-radius: 0.5rem;
+  font-size: 0.7rem;
   font-weight: 700;
   line-height: 1;
-  padding: 0.38rem 0.55rem;
+  padding: 0.45rem 0.6rem;
   cursor: pointer;
-  transition: all 0.2s;
   white-space: nowrap;
+}
+.participant-list .admin-btns button:hover {
+  background: #fafafa;
+}
+.participant-list .admin-btns button.btnRemove {
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+.participant-list .admin-btns button.btnRemove:hover {
+  background: #fef2f2;
+}
+.participant-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  overflow: hidden;
   flex-shrink: 0;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-
-.pc-card .bottom .admin-btns button.btnRemove {
-  padding: 0.38rem 0.5rem;
+.participant-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
 }
-
-.pc-card .bottom .admin-btns button:hover {
-  background: rgba(255,255,255,0.32);
+.participant-avatar .profile-initials {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #ea580c;
+  user-select: none;
 }
-
-.pc-card:hover {
-  border-top-left-radius: 50px;
-}
-
-.pc-card:hover .bottom {
-  top: 22%;
-  border-radius: 40px 22px 22px 22px;
-  transition: all 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) 0.2s;
-}
-
-.pc-card:hover .profile-pic {
-  width: 90px;
-  height: 90px;
-  top: 10px;
-  left: 10px;
-  border-radius: 50%;
-  z-index: 3;
-  border: 6px solid #f97316;
-  box-shadow: rgba(234, 88, 12, 0.25) 0px 5px 12px 0px;
-  transition: all 0.5s ease-in-out, z-index 0.5s ease-in-out 0.1s;
-}
-
-.pc-card:hover .profile-pic img,
-.pc-card:hover .profile-initials {
-  transition: all 0.5s ease-in-out 0.4s;
-}
-
-.pc-card:hover .profile-initials {
-  font-size: 2rem;
-}
-
-/* ── Attendance status colours in the bottom panel ───────────────────── */
-.att-present  { background: #d1fae5; color: #065f46; }
-.att-absent   { background: #fee2e2; color: #991b1b; }
-.att-late     { background: #fef3c7; color: #92400e; }
-.att-early    { background: #e0f2fe; color: #075985; }
-.att-timed-out{ background: #dbeafe; color: #1e3a8a; }
-.att-unscanned{ background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); }
 </style>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 pb-10 justify-items-center">
-  <?php if (count($rows) === 0): ?>
-    <div class="col-span-full rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 py-16 flex flex-col items-center justify-center pointer-events-none">
-      <svg class="w-10 h-10 text-zinc-400 mb-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
-      <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
-    </div>
-  <?php endif; ?>
-
-  <?php foreach ($rows as $r): ?>
-    <?php
-      $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
-      $nameParts = [];
-      foreach (['first_name','middle_name','last_name'] as $k) {
-          $v = trim((string) ($u[$k] ?? ''));
-          if ($v !== '') $nameParts[] = $v;
-      }
-      $name = implode(' ', $nameParts);
-      $suffix = trim((string) ($u['suffix'] ?? ''));
-      if ($suffix !== '') $name .= ', ' . $suffix;
-
-      $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
-      $ticket  = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
-      $token   = (string) ($ticket['token'] ?? '');
-
-      $attendance = null;
-      if (isset($ticket['attendance'])) {
-          $atts = $ticket['attendance'];
-          if (is_array($atts)) {
-              $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
-          }
-      }
-
-      $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-      $checkOutRaw = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
-      $attStatus  = is_array($attendance) ? ($attendance['status'] ?? '') : '';
-      if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
-          $attStatus = 'absent';
-      }
-      $registrationId = (string) ($r['id'] ?? '');
-
-      // Initials fallback
-      $initials = '';
-      foreach ($nameParts as $p) { $initials .= mb_strtoupper(mb_substr($p, 0, 1)); if (mb_strlen($initials) >= 2) break; }
-      if (mb_strlen($initials) === 0) $initials = '?';
-
-      // Check-in / check-out times (compact one-line for hover)
-      $checkInShort = '—';
-      $checkOutShort = '—';
-      if ($checkInRaw) {
-          try {
-              $checkInLocal = $toLocalDt((string) $checkInRaw);
-              if ($checkInLocal) $checkInShort = $checkInLocal->format('g:i A');
-          } catch (Throwable $e) {}
-      }
-      if (trim((string) $checkOutRaw) !== '') {
-          try {
-              $checkOutLocal = $toLocalDt((string) $checkOutRaw);
-              if ($checkOutLocal) $checkOutShort = $checkOutLocal->format('g:i A');
-          } catch (Throwable $e) {}
-      }
-      $attendanceTimeLine = $checkInShort . ' / ' . $checkOutShort;
-
-      $sec     = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
-      $secName = is_array($sec) && isset($sec['name']) ? trim((string) $sec['name']) : '';
-      if ($secName === '') {
-          $secName = 'N/A';
-      }
-      $yearKey = student_roster_resolve_year_key(
-          trim((string) ($r['student_id'] ?? '')),
-          trim((string) ($u['student_id'] ?? '')),
-          $secName,
-          $participantYearMaps
-      );
-      $yearLvl = student_roster_year_ordinal_label($yearKey);
-      if ($yearLvl === '') {
-          $yearLvl = 'N/A';
-      }
-      $sectionSubtitle = $secName;
-      $sectionHasYearDigit = preg_match('/[1-4]/', $secName) === 1
-          && !preg_match('/irreg/i', $secName);
-      if ($yearLvl !== 'N/A' && !$sectionHasYearDigit) {
-          $sectionSubtitle = (strcasecmp($secName, 'N/A') === 0)
-              ? $yearLvl
-              : ($secName . ' • ' . $yearLvl);
-      }
-
-      $attStatusNorm = strtolower(trim((string)$attStatus));
-      if ($checkOutShort !== '—' && in_array($attStatusNorm, ['present', 'scanned', 'completed', 'late', 'early', ''], true)) {
-          $attStatusNorm = 'timed out';
-      }
-      $attBadgeClass = match($attStatusNorm) {
-          'present','scanned','completed' => 'att-present',
-          'absent'  => 'att-absent',
-          'late'    => 'att-late',
-          'early'   => 'att-early',
-          'timed out' => 'att-timed-out',
-          default   => 'att-unscanned',
-      };
-      $attLabel = $attStatusNorm !== '' ? ucfirst($attStatusNorm) : 'Unscanned';
-
-      $avatarUrl = storage_resolve_avatar_url((string) ($u['photo_url'] ?? ''));
-      $studentId = (string) ($u['student_id'] ?? 'N/A');
-      $email     = (string) ($u['email'] ?? '');
-      $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName . ' ' . $yearLvl);
-    ?>
-    <div class="pc-card participant-card"
-         data-search="<?= htmlspecialchars($searchStr) ?>">
-
-      <!-- Profile picture / initials -->
-      <div class="profile-pic">
-        <?php if ($avatarUrl !== ''): ?>
-          <img
-            src="<?= htmlspecialchars($avatarUrl) ?>"
-            alt="<?= htmlspecialchars($name) ?>"
-            loading="lazy"
-            onerror="this.style.display='none'; const fb=this.nextElementSibling; if(fb) fb.style.display='flex';"
-          >
-          <div class="profile-initials" style="display:none;"><?= htmlspecialchars($initials) ?></div>
-        <?php else: ?>
-          <div class="profile-initials"><?= htmlspecialchars($initials) ?></div>
+<div class="participant-list rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-x-auto pb-2">
+  <table class="min-w-full divide-y divide-zinc-200">
+    <thead class="bg-zinc-50">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Time In / Out</th>
+        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Status</th>
+        <?php if ($role === 'admin'): ?>
+          <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-zinc-500">Actions</th>
         <?php endif; ?>
-      </div>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-zinc-100">
+      <?php if (count($rows) === 0): ?>
+        <tr class="pointer-events-none">
+          <td colspan="<?= $role === 'admin' ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+            <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
+          </td>
+        </tr>
+      <?php endif; ?>
 
-      <!-- Slide-up info panel -->
-      <div class="bottom">
-        <!-- Always visible name, student number, and section/course -->
-        <div class="bottom-header">
-          <span class="pname" title="<?= htmlspecialchars($name) ?>"><?= htmlspecialchars($name ?: 'Unnamed') ?></span>
-          <span class="psubtitle">#<?= htmlspecialchars($studentId) ?> • <?= htmlspecialchars($sectionSubtitle) ?></span>
-        </div>
+      <?php foreach ($rows as $r): ?>
+        <?php
+          $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+          $nameParts = [];
+          foreach (['first_name','middle_name','last_name'] as $k) {
+              $v = trim((string) ($u[$k] ?? ''));
+              if ($v !== '') $nameParts[] = $v;
+          }
+          $name = implode(' ', $nameParts);
+          $suffix = trim((string) ($u['suffix'] ?? ''));
+          if ($suffix !== '') $name .= ', ' . $suffix;
 
-        <!-- Extra details revealed on hover -->
-        <div class="pdetails-hover">
-          <div class="pinfo">
-            <span class="pinfo-badge" title="<?= htmlspecialchars($email) ?>">
-              ✉ <?= htmlspecialchars($email ?: '—') ?>
-            </span>
-            <span class="pinfo-badge">🏛 <?= htmlspecialchars($secName) ?></span>
-            <span class="pinfo-badge">📅 <?= htmlspecialchars($yearLvl) ?></span>
-            <span class="pinfo-badge" title="Time In / Time Out">⏰ <?= htmlspecialchars($attendanceTimeLine) ?></span>
-          </div>
-        </div>
+          $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
+          $ticket  = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
 
-        <div class="bottom-bottom">
-          <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
-          <?php if ($role === 'admin'): ?>
-            <div class="admin-btns">
-              <button
-                type="button"
-                class="btnResetAttendance"
-                data-id="<?= htmlspecialchars($registrationId) ?>"
-                title="<?= htmlspecialchars($resetConfirmMessage) ?>"
-                aria-label="<?= htmlspecialchars($resetButtonLabel) ?>"
-              ><?= htmlspecialchars($resetButtonShort) ?></button>
-              <button
-                type="button"
-                class="btnRemove"
-                data-id="<?= htmlspecialchars($registrationId) ?>"
-                title="Remove participant"
-                aria-label="Remove participant"
-              >✕</button>
+          $attendance = null;
+          if (isset($ticket['attendance'])) {
+              $atts = $ticket['attendance'];
+              if (is_array($atts)) {
+                  $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
+              }
+          }
+
+          $checkInRaw = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
+          $checkOutRaw = is_array($attendance) ? ($attendance['check_out_at'] ?? '') : '';
+          $attStatus  = is_array($attendance) ? ($attendance['status'] ?? '') : '';
+          if (!$attendanceCountsAsPresent(is_array($attendance) ? $attendance : null) && $eventWindowClosed) {
+              $attStatus = 'absent';
+          }
+          $registrationId = (string) ($r['id'] ?? '');
+
+          $initials = '';
+          foreach ($nameParts as $p) { $initials .= mb_strtoupper(mb_substr($p, 0, 1)); if (mb_strlen($initials) >= 2) break; }
+          if (mb_strlen($initials) === 0) $initials = '?';
+
+          $checkInShort = '—';
+          $checkOutShort = '—';
+          if ($checkInRaw) {
+              try {
+                  $checkInLocal = $toLocalDt((string) $checkInRaw);
+                  if ($checkInLocal) $checkInShort = $checkInLocal->format('g:i A');
+              } catch (Throwable $e) {}
+          }
+          if (trim((string) $checkOutRaw) !== '') {
+              try {
+                  $checkOutLocal = $toLocalDt((string) $checkOutRaw);
+                  if ($checkOutLocal) $checkOutShort = $checkOutLocal->format('g:i A');
+              } catch (Throwable $e) {}
+          }
+          $attendanceTimeLine = $checkInShort . ' / ' . $checkOutShort;
+
+          $sec     = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+          $secName = is_array($sec) && isset($sec['name']) ? trim((string) $sec['name']) : '';
+          if ($secName === '') {
+              $secName = 'N/A';
+          }
+          $yearKey = student_roster_resolve_year_key(
+              trim((string) ($r['student_id'] ?? '')),
+              trim((string) ($u['student_id'] ?? '')),
+              $secName,
+              $participantYearMaps
+          );
+          $yearLvl = student_roster_year_ordinal_label($yearKey);
+          if ($yearLvl === '') {
+              $yearLvl = 'N/A';
+          }
+          $sectionSubtitle = $secName;
+          $sectionHasYearDigit = preg_match('/[1-4]/', $secName) === 1
+              && !preg_match('/irreg/i', $secName);
+          if ($yearLvl !== 'N/A' && !$sectionHasYearDigit) {
+              $sectionSubtitle = (strcasecmp($secName, 'N/A') === 0)
+                  ? $yearLvl
+                  : ($secName . ' • ' . $yearLvl);
+          }
+
+          $attStatusNorm = strtolower(trim((string)$attStatus));
+          if ($checkOutShort !== '—' && in_array($attStatusNorm, ['present', 'scanned', 'completed', 'late', 'early', ''], true)) {
+              $attStatusNorm = 'timed out';
+          }
+          $attBadgeClass = match($attStatusNorm) {
+              'present','scanned','completed' => 'att-present',
+              'absent'  => 'att-absent',
+              'late'    => 'att-late',
+              'early'   => 'att-early',
+              'timed out' => 'att-timed-out',
+              default   => 'att-unscanned',
+          };
+          $attLabel = $attStatusNorm !== '' ? ucfirst($attStatusNorm) : 'Unscanned';
+
+          $avatarUrl = storage_resolve_avatar_url((string) ($u['photo_url'] ?? ''));
+          $studentId = (string) ($u['student_id'] ?? 'N/A');
+          $email     = (string) ($u['email'] ?? '');
+          $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName . ' ' . $yearLvl);
+        ?>
+        <tr class="participant-card participant-row hover:bg-zinc-50/80"
+            data-search="<?= htmlspecialchars($searchStr) ?>">
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="participant-avatar">
+                <?php if ($avatarUrl !== ''): ?>
+                  <img
+                    src="<?= htmlspecialchars($avatarUrl) ?>"
+                    alt="<?= htmlspecialchars($name) ?>"
+                    loading="lazy"
+                    onerror="this.style.display='none'; const fb=this.nextElementSibling; if(fb) fb.style.display='flex';"
+                  >
+                  <div class="profile-initials" style="display:none;"><?= htmlspecialchars($initials) ?></div>
+                <?php else: ?>
+                  <div class="profile-initials"><?= htmlspecialchars($initials) ?></div>
+                <?php endif; ?>
+              </div>
+              <div class="min-w-0">
+                <div class="text-sm font-semibold text-zinc-900 truncate" title="<?= htmlspecialchars($name) ?>">
+                  <?= htmlspecialchars($name ?: 'Unnamed') ?>
+                </div>
+                <div class="text-xs text-zinc-500 truncate" title="<?= htmlspecialchars($email) ?>">
+                  <?= htmlspecialchars($email !== '' ? $email : '—') ?>
+                </div>
+              </div>
             </div>
+          </td>
+          <td class="px-4 py-3 text-sm text-zinc-700 whitespace-nowrap"><?= htmlspecialchars($studentId) ?></td>
+          <td class="px-4 py-3 text-sm text-zinc-600">
+            <div class="truncate" title="<?= htmlspecialchars($sectionSubtitle) ?>"><?= htmlspecialchars($sectionSubtitle) ?></div>
+          </td>
+          <td class="px-4 py-3 text-sm text-zinc-600 whitespace-nowrap"><?= htmlspecialchars($attendanceTimeLine) ?></td>
+          <td class="px-4 py-3">
+            <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
+          </td>
+          <?php if ($role === 'admin'): ?>
+            <td class="px-4 py-3 text-right">
+              <div class="admin-btns justify-end">
+                <button
+                  type="button"
+                  class="btnResetAttendance"
+                  data-id="<?= htmlspecialchars($registrationId) ?>"
+                  title="<?= htmlspecialchars($resetConfirmMessage) ?>"
+                  aria-label="<?= htmlspecialchars($resetButtonLabel) ?>"
+                ><?= htmlspecialchars($resetButtonShort) ?></button>
+                <button
+                  type="button"
+                  class="btnRemove"
+                  data-id="<?= htmlspecialchars($registrationId) ?>"
+                  title="Remove participant"
+                  aria-label="Remove participant"
+                >✕</button>
+              </div>
+            </td>
           <?php endif; ?>
-        </div>
-      </div>
-    </div>
-  <?php endforeach; ?>
+        </tr>
+      <?php endforeach; ?>
+
+      <?php if (count($rows) > 0): ?>
+        <tr id="participantSearchEmpty" class="pointer-events-none hidden">
+          <td colspan="<?= $role === 'admin' ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+            <p class="text-zinc-700 font-semibold text-sm">No results match your search</p>
+          </td>
+        </tr>
+      <?php endif; ?>
+    </tbody>
+  </table>
 </div>
 <?php else: ?>
 <?php if (!$absenceReasonTableAvailable): ?>
@@ -2349,7 +2189,7 @@ render_event_tabs([
   const searchInput = document.getElementById('participantSearch');
   const totalCountEl = document.getElementById('totalCount');
   const cards = document.querySelectorAll('.participant-card');
-  const emptyState = document.querySelector('.pointer-events-none');
+  const searchEmpty = document.getElementById('participantSearchEmpty');
 
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
@@ -2357,7 +2197,7 @@ render_event_tabs([
       let visibleCount = 0;
 
       cards.forEach(card => {
-        const searchable = card.dataset.search;
+        const searchable = card.dataset.search || '';
         if (searchable.includes(term)) {
           card.classList.remove('hidden');
           visibleCount++;
@@ -2367,16 +2207,12 @@ render_event_tabs([
       });
 
       if (totalCountEl) totalCountEl.textContent = visibleCount;
-      
-      if (emptyState) {
+
+      if (searchEmpty) {
         if (visibleCount === 0 && cards.length > 0) {
-          emptyState.classList.remove('hidden');
-          emptyState.querySelector('p').textContent = 'No results match your search';
-        } else if (cards.length === 0) {
-          emptyState.classList.remove('hidden');
-          emptyState.querySelector('p').textContent = 'No participants found';
+          searchEmpty.classList.remove('hidden');
         } else {
-          emptyState.classList.add('hidden');
+          searchEmpty.classList.add('hidden');
         }
       }
     });

@@ -15,6 +15,8 @@ require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/registration_access.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
+require_once __DIR__ . '/../includes/event_schedule_conflict.php';
+require_once __DIR__ . '/../includes/mobile_secure_access.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -37,91 +39,6 @@ $reprHeaders = [
     'Authorization: Bearer ' . SUPABASE_KEY,
     'Prefer: return=representation',
 ];
-
-function mobile_secure_is_event_staff(string $eventId, string $userId, array $headers, bool $requireScan = false): bool
-{
-    if ($eventId === '' || $userId === '') {
-        return false;
-    }
-    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,created_by&id=eq.' . rawurlencode($eventId) . '&limit=1';
-    $eventRes = supabase_request('GET', $eventUrl, $headers);
-    $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
-    $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
-    if (is_array($event) && (string) ($event['created_by'] ?? '') === $userId) {
-        return true;
-    }
-
-    $assignUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
-        . '?select=id&event_id=eq.' . rawurlencode($eventId)
-        . '&teacher_id=eq.' . rawurlencode($userId);
-    if ($requireScan) {
-        $assignUrl .= '&can_scan=eq.true';
-    }
-    $assignUrl .= '&limit=1';
-    $assignRes = supabase_request('GET', $assignUrl, $headers);
-    $assignRows = json_decode((string) ($assignRes['body'] ?? ''), true);
-    if (is_array($assignRows) && count($assignRows) > 0) {
-        return true;
-    }
-
-    // Assistants use student_id (not user_id).
-    $assistUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_assistants'
-        . '?select=id&event_id=eq.' . rawurlencode($eventId)
-        . '&student_id=eq.' . rawurlencode($userId);
-    if ($requireScan) {
-        $assistUrl .= '&allow_scan=eq.true';
-    }
-    $assistUrl .= '&limit=1';
-    $assistRes = supabase_request('GET', $assistUrl, $headers);
-    $assistRows = json_decode((string) ($assistRes['body'] ?? ''), true);
-    return is_array($assistRows) && count($assistRows) > 0;
-}
-
-function mobile_secure_can_manage_assistants(string $eventId, string $teacherId, array $headers): bool
-{
-    if ($eventId === '' || $teacherId === '') {
-        return false;
-    }
-    $manageUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
-        . '?select=id&event_id=eq.' . rawurlencode($eventId)
-        . '&teacher_id=eq.' . rawurlencode($teacherId)
-        . '&can_manage_assistants=eq.true&limit=1';
-    $manageRes = supabase_request('GET', $manageUrl, $headers);
-    $manageRows = json_decode((string) ($manageRes['body'] ?? ''), true);
-    if (is_array($manageRows) && count($manageRows) > 0) {
-        return true;
-    }
-    // Backward compat: can_scan teachers may manage assistants.
-    $scanUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
-        . '?select=id&event_id=eq.' . rawurlencode($eventId)
-        . '&teacher_id=eq.' . rawurlencode($teacherId)
-        . '&can_scan=eq.true&limit=1';
-    $scanRes = supabase_request('GET', $scanUrl, $headers);
-    $scanRows = json_decode((string) ($scanRes['body'] ?? ''), true);
-    return is_array($scanRows) && count($scanRows) > 0;
-}
-
-function mobile_secure_is_event_creator(string $eventId, string $userId, array $headers): bool
-{
-    if ($eventId === '' || $userId === '') {
-        return false;
-    }
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,created_by&id=eq.' . rawurlencode($eventId) . '&limit=1';
-    $res = supabase_request('GET', $url, $headers);
-    $rows = json_decode((string) ($res['body'] ?? ''), true);
-    $event = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
-    return is_array($event) && (string) ($event['created_by'] ?? '') === $userId;
-}
-
-function mobile_secure_can_write_attendance(string $eventId, string $userId, string $role, array $headers): bool
-{
-    if ($role === 'admin') {
-        return true;
-    }
-    return mobile_secure_is_event_staff($eventId, $userId, $headers, true);
-}
 
 switch ($action) {
     case 'fcm_upsert': {
@@ -189,7 +106,7 @@ switch ($action) {
     case 'attendance_upsert': {
         $eventId = trim((string) ($data['event_id'] ?? ''));
         $payload = $data['payload'] ?? null;
-        if (!is_array($payload) || $eventId === '') {
+        if (!is_array($payload) || $eventId === '' || !mobile_secure_is_uuid($eventId)) {
             json_response(['ok' => false, 'error' => 'event_id and payload required.'], 400);
         }
         // Teachers, admins, and student assistants may write attendance for their events.
@@ -206,6 +123,83 @@ switch ($action) {
         }
         $method = strtoupper(trim((string) ($data['method'] ?? 'POST')));
         $filter = trim((string) ($data['filter'] ?? ''));
+        $safeFilterQuery = '';
+        $verifiedRows = [];
+        if ($method === 'PATCH') {
+            $parsed = mobile_secure_parse_attendance_filter($filter);
+            if (!($parsed['ok'] ?? false)) {
+                json_response(['ok' => false, 'error' => (string) ($parsed['error'] ?? 'Invalid filter.')], 400);
+            }
+            $safeFilterQuery = (string) ($parsed['query'] ?? '');
+            $lookupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+                . '?' . $safeFilterQuery
+                . '&select=id,ticket_id,registration_id,session_id,status,check_in_at,check_out_at'
+                . '&limit=20';
+            $lookupRes = supabase_request('GET', $lookupUrl, $readHeaders);
+            $lookupRows = json_decode((string) ($lookupRes['body'] ?? ''), true);
+            if (!is_array($lookupRows) || $lookupRows === []) {
+                json_response(['ok' => false, 'error' => 'Attendance row not found.'], 404);
+            }
+            foreach ($lookupRows as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+                $owner = mobile_secure_attendance_row_owner($table, $candidate, $readHeaders);
+                if (!is_array($owner) || ($owner['event_id'] ?? '') !== $eventId) {
+                    json_response(['ok' => false, 'error' => 'Not allowed to write this attendance row.'], 403);
+                }
+                if (!$isStaff && ($owner['student_id'] ?? '') !== $userId) {
+                    json_response(['ok' => false, 'error' => 'Not allowed to write this attendance row.'], 403);
+                }
+                $verifiedRows[] = $candidate;
+            }
+            if ($verifiedRows === []) {
+                json_response(['ok' => false, 'error' => 'Attendance row not found.'], 404);
+            }
+            // Target only verified row ids (ignore any other client filter tricks).
+            $verifiedIds = [];
+            foreach ($verifiedRows as $vr) {
+                $rid = trim((string) ($vr['id'] ?? ''));
+                if (mobile_secure_is_uuid($rid)) {
+                    $verifiedIds[] = $rid;
+                }
+            }
+            if ($verifiedIds === []) {
+                json_response(['ok' => false, 'error' => 'Attendance row not found.'], 404);
+            }
+            $safeFilterQuery = 'id=in.' . mobile_secure_postgrest_in_list($verifiedIds);
+            if (str_contains($filter, 'check_in_at=is.null')) {
+                $safeFilterQuery .= '&check_in_at=is.null';
+            }
+            if (str_contains($filter, 'check_out_at=is.null')) {
+                $safeFilterQuery .= '&check_out_at=is.null';
+            }
+        } else {
+            // POST must target a ticket/registration that belongs to this event.
+            if (!mobile_secure_attendance_payload_belongs_to_event($table, $payload, $eventId, $readHeaders)) {
+                json_response(['ok' => false, 'error' => 'Attendance target does not belong to this event.'], 403);
+            }
+            if (!$isStaff) {
+                $owner = null;
+                $ticketId = trim((string) ($payload['ticket_id'] ?? ''));
+                $registrationId = trim((string) ($payload['registration_id'] ?? ''));
+                if ($ticketId !== '') {
+                    $owner = mobile_secure_attendance_row_owner('attendance', ['ticket_id' => $ticketId], $readHeaders);
+                } elseif ($registrationId !== '') {
+                    $owner = mobile_secure_attendance_row_owner(
+                        'event_session_attendance',
+                        [
+                            'registration_id' => $registrationId,
+                            'session_id' => trim((string) ($payload['session_id'] ?? '')),
+                        ],
+                        $readHeaders
+                    );
+                }
+                if (!is_array($owner) || ($owner['student_id'] ?? '') !== $userId) {
+                    json_response(['ok' => false, 'error' => 'Not allowed to write this attendance row.'], 403);
+                }
+            }
+        }
         $outgoingCheckOut = trim((string) ($payload['check_out_at'] ?? ''));
         $outgoingCheckIn = trim((string) ($payload['check_in_at'] ?? ''));
         $outgoingStatus = strtolower(trim((string) ($payload['status'] ?? '')));
@@ -217,18 +211,7 @@ switch ($action) {
             if (is_file($windowsPath)) {
                 require_once $windowsPath;
             }
-            $existingRow = null;
-            if ($method === 'PATCH' && $filter !== '' && preg_match('/^[a-z0-9_.=,&%-]+$/i', $filter)) {
-                $lookupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
-                    . '?' . $filter
-                    . '&select=id,status,check_in_at,check_out_at'
-                    . '&limit=1';
-                $lookupRes = supabase_request('GET', $lookupUrl, $readHeaders);
-                $lookupRows = json_decode((string) ($lookupRes['body'] ?? ''), true);
-                $existingRow = is_array($lookupRows) && isset($lookupRows[0]) && is_array($lookupRows[0])
-                    ? $lookupRows[0]
-                    : null;
-            }
+            $existingRow = $verifiedRows[0] ?? null;
             $hasTimeIn = function_exists('attendance_has_valid_time_in')
                 ? attendance_has_valid_time_in($existingRow)
                 : (is_array($existingRow)
@@ -243,10 +226,7 @@ switch ($action) {
             }
         }
         if ($method === 'PATCH') {
-            if ($filter === '' || !preg_match('/^[a-z0-9_.=,&%-]+$/i', $filter)) {
-                json_response(['ok' => false, 'error' => 'Invalid filter.'], 400);
-            }
-            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table . '?' . $filter;
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table . '?' . $safeFilterQuery;
             $res = supabase_request('PATCH', $url, $reprHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
         } else {
             $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table;
@@ -326,11 +306,17 @@ switch ($action) {
         // Prefer dedicated mobile_register_event.php; this is a constrained fallback.
         $eventId = trim((string) ($data['event_id'] ?? ''));
         $studentId = trim((string) ($data['student_id'] ?? $userId));
-        if ($eventId === '') {
+        if ($eventId === '' || !mobile_secure_is_uuid($eventId)) {
             json_response(['ok' => false, 'error' => 'event_id required.'], 400);
         }
-        if ($studentId !== $userId && !($role === 'teacher' || $role === 'admin')) {
-            json_response(['ok' => false, 'error' => 'Not allowed.'], 403);
+        if ($studentId !== $userId) {
+            if ($role === 'admin') {
+                // ok
+            } elseif ($role === 'teacher' && mobile_secure_is_event_staff($eventId, $userId, $readHeaders, false)) {
+                // ok — creator / assigned teacher only
+            } else {
+                json_response(['ok' => false, 'error' => 'Not allowed.'], 403);
+            }
         }
         $payload = ['event_id' => $eventId, 'student_id' => $studentId];
         $res = supabase_request(
@@ -585,10 +571,26 @@ switch ($action) {
         $method = strtoupper(trim((string) ($data['method'] ?? 'POST')));
         $filter = trim((string) ($data['filter'] ?? ''));
         if ($method === 'PATCH' && $filter !== '') {
-            if (!preg_match('/^[a-z0-9_.=,&%-]+$/i', $filter)) {
+            if (!preg_match('/^id=eq\.([0-9a-f-]{36})$/i', $filter, $fm) || !mobile_secure_is_uuid($fm[1])) {
                 json_response(['ok' => false, 'error' => 'Invalid filter.'], 400);
             }
-            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons?' . $filter;
+            $reasonId = $fm[1];
+            $existingUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons'
+                . '?select=id,student_id,event_id&id=eq.' . rawurlencode($reasonId)
+                . '&limit=1';
+            $existingRes = supabase_request('GET', $existingUrl, $readHeaders);
+            $existingRows = json_decode((string) ($existingRes['body'] ?? ''), true);
+            $existing = is_array($existingRows) && isset($existingRows[0]) && is_array($existingRows[0])
+                ? $existingRows[0]
+                : null;
+            if (!is_array($existing)) {
+                json_response(['ok' => false, 'error' => 'Absence reason not found.'], 404);
+            }
+            if ((string) ($existing['event_id'] ?? '') !== $eventId
+                || (string) ($existing['student_id'] ?? '') !== $studentId) {
+                json_response(['ok' => false, 'error' => 'Not allowed.'], 403);
+            }
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance_absence_reasons?id=eq.' . rawurlencode($reasonId);
             $res = supabase_request('PATCH', $url, $reprHeaders, json_encode($cleanPayload, JSON_UNESCAPED_SLASHES));
         } else {
             $res = supabase_request(
@@ -852,14 +854,33 @@ switch ($action) {
         unset($payload['uses_sessions']);
 
         $startAtRaw = trim((string) ($payload['start_at'] ?? ''));
+        $endAtRaw = trim((string) ($payload['end_at'] ?? ''));
         try {
             $startAtDt = $startAtRaw !== '' ? new DateTimeImmutable($startAtRaw) : null;
         } catch (Throwable $e) {
             $startAtDt = null;
         }
+        try {
+            $endAtDt = $endAtRaw !== '' ? new DateTimeImmutable($endAtRaw) : null;
+        } catch (Throwable $e) {
+            $endAtDt = null;
+        }
         if ($startAtDt === null) {
             json_response(['ok' => false, 'error' => 'Start date/time is required.'], 400);
         }
+        if ($endAtDt === null) {
+            json_response(['ok' => false, 'error' => 'End date/time is required.'], 400);
+        }
+        if ($endAtDt <= $startAtDt) {
+            json_response(['ok' => false, 'error' => 'End must be after start.'], 400);
+        }
+
+        event_reject_if_published_schedule_conflict(
+            $startAtDt->format('c'),
+            $endAtDt->format('c'),
+            (string) ($payload['location'] ?? ''),
+            (string) ($payload['event_for'] ?? 'All')
+        );
 
         if ($role === 'teacher') {
             $isFreeEvent = true;

@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_schedule_conflict.php';
 
 $user = require_role(['admin']);
 $data = require_post_json();
@@ -369,6 +370,16 @@ $proposalStage = strtolower(trim((string) ($existingEvent['proposal_stage'] ?? '
 $supportsProposalStage = !empty($existingEvent['proposal_stage_supported']);
 $initialPublishFlow = $status === 'published' && in_array($previousStatus, ['approved', 'pending'], true);
 $validTeacherIds = [];
+
+if ($status === 'published' && $previousStatus !== 'published') {
+    event_reject_if_published_schedule_conflict(
+        (string) ($existingEvent['start_at'] ?? ''),
+        (string) ($existingEvent['end_at'] ?? ''),
+        (string) ($existingEvent['location'] ?? ''),
+        (string) ($existingEvent['event_for'] ?? 'All'),
+        $eventId
+    );
+}
 
 if ($status === 'approved' && $supportsProposalStage && $proposalStage !== 'under_review') {
     json_response([

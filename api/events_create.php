@@ -17,6 +17,7 @@ require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
 require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_schedule_conflict.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
 {
@@ -86,6 +87,15 @@ try {
 if ($end <= $start) {
     json_response(['ok' => false, 'error' => 'End must be after start'], 400);
 }
+
+// Block proposals that would collide with an already-published event
+// (same time + same place + overlapping target participants).
+event_reject_if_published_schedule_conflict(
+    $start->format('c'),
+    $end->format('c'),
+    $location,
+    $eventFor
+);
 
 $role = (string) ($user['role'] ?? 'student');
 $status = $role === 'admin' ? 'approved' : 'pending';

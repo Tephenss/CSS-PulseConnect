@@ -72,7 +72,10 @@ if (!($stored['ok'] ?? false)) {
     json_response(['ok' => false, 'error' => (string) ($stored['error'] ?? 'Failed to upload the photo.')], 500);
 }
 
-$objectPath = (string) ($stored['path'] ?? '');
+$objectPath = storage_normalize_avatar_photo_value((string) ($stored['path'] ?? ''));
+if ($objectPath === '') {
+    $objectPath = (string) ($stored['path'] ?? '');
+}
 $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format(DATE_ATOM);
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?id=eq.' . rawurlencode($userId)

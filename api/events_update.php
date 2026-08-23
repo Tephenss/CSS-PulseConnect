@@ -13,6 +13,7 @@ require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/registration_access.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
+require_once __DIR__ . '/../includes/event_schedule_conflict.php';
 
 function mode_to_structure(string $eventMode, array $sessions): string
 {
@@ -241,6 +242,18 @@ if ($role === 'teacher') {
         }
     }
 }
+
+$mergedStart = (string) ($fields['start_at'] ?? $currentEvent['start_at'] ?? '');
+$mergedEnd = (string) ($fields['end_at'] ?? $currentEvent['end_at'] ?? '');
+$mergedLocation = (string) ($fields['location'] ?? $currentEvent['location'] ?? '');
+$mergedEventFor = (string) ($fields['event_for'] ?? $currentEvent['event_for'] ?? 'All');
+event_reject_if_published_schedule_conflict(
+    $mergedStart,
+    $mergedEnd,
+    $mergedLocation,
+    $mergedEventFor,
+    $eventId
+);
 
 $fields['updated_at'] = gmdate('c');
 

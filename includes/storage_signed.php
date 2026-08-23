@@ -95,6 +95,82 @@ function storage_create_signed_url(string $bucket, string $objectPath, int $expi
 }
 
 /**
+ * Download a private avatars-bucket object with the service role key.
+ */
+function storage_download_avatar_object(string $objectPath): string
+{
+    $objectPath = ltrim(trim($objectPath), '/');
+    if ($objectPath === '' || str_contains($objectPath, '..')
+        || !defined('SUPABASE_URL') || !defined('SUPABASE_KEY')) {
+        return '';
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/storage/v1/object/avatars/'
+        . implode('/', array_map('rawurlencode', explode('/', $objectPath)));
+    $res = supabase_request('GET', $url, [
+        'Accept: */*',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ], null);
+
+    if (!($res['ok'] ?? false)) {
+        return '';
+    }
+    $body = (string) ($res['body'] ?? '');
+    return @getimagesizefromstring($body) === false ? '' : $body;
+}
+
+/**
+ * Resolve an avatars-bucket object path to a URL, preferring the Hostinger copy.
+ *
+ * When the local file is gone (e.g. uploads folder wiped) the Supabase copy is
+ * downloaded once and re-cached locally so later views cost no Storage egress.
+ */
+function storage_avatar_url_from_bucket(string $objectPath, int $expiresInSeconds = 3600): string
+{
+    $objectPath = ltrim(trim($objectPath), '/');
+    if ($objectPath === '' || str_contains($objectPath, '..')) {
+        return '';
+    }
+
+    if (!function_exists('media_avatar_signed_url')) {
+        require_once __DIR__ . '/media_assets.php';
+    }
+
+    $localUrl = media_avatar_signed_url('media/avatars/' . $objectPath, $expiresInSeconds);
+    if ($localUrl !== '') {
+        return $localUrl;
+    }
+
+    $signed = storage_create_signed_url('avatars', $objectPath, $expiresInSeconds);
+    if ($signed === null && preg_match('#^profiles/([0-9a-fA-F-]{36})\.#', $objectPath, $m)) {
+        // Stored extension may differ from the recorded one (jpg vs png/webp).
+        $found = storage_find_user_avatar_path(strtolower((string) $m[1]));
+        if ($found !== '' && $found !== $objectPath) {
+            $objectPath = $found;
+            $localUrl = media_avatar_signed_url('media/avatars/' . $objectPath, $expiresInSeconds);
+            if ($localUrl !== '') {
+                return $localUrl;
+            }
+            $signed = storage_create_signed_url('avatars', $objectPath, $expiresInSeconds);
+        }
+    }
+    if ($signed === null) {
+        return '';
+    }
+
+    $bytes = storage_download_avatar_object($objectPath);
+    if ($bytes !== '' && media_write_local_avatar_bytes('media/avatars/' . $objectPath, $bytes)) {
+        $localUrl = media_avatar_signed_url('media/avatars/' . $objectPath, $expiresInSeconds);
+        if ($localUrl !== '') {
+            return $localUrl;
+        }
+    }
+
+    return $signed;
+}
+
+/**
  * Resolve a user photo_url (public URL, storage path, or signed URL) to a
  * short-lived signed URL for the private avatars bucket / Hostinger media.
  */
@@ -110,10 +186,22 @@ function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSecond
     }
 
     if (media_is_local_avatar_path($raw)) {
-        $local = media_avatar_signed_url($raw, $expiresInSeconds);
+        $localLogical = media_normalize_local_avatar_path($raw);
+        $local = media_avatar_signed_url($localLogical, $expiresInSeconds);
         if ($local !== '') {
             return $local;
         }
+        // Local file missing — fall back to the Supabase copy of the same object.
+        if ($localLogical !== '') {
+            $recovered = storage_avatar_url_from_bucket(
+                substr($localLogical, strlen('media/avatars/')),
+                $expiresInSeconds
+            );
+            if ($recovered !== '') {
+                return $recovered;
+            }
+        }
+        return '';
     }
 
     if ((str_starts_with($raw, 'http://') || str_starts_with($raw, 'https://'))
@@ -138,17 +226,7 @@ function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSecond
         return '';
     }
 
-    // Prefer Hostinger copy if present for legacy profiles/{id}.* paths.
-    if (preg_match('#^profiles/([0-9a-fA-F-]{36})\.#', $path, $m)) {
-        $localPath = 'media/avatars/profiles/' . strtolower((string) $m[1]) . '.jpg';
-        $localUrl = media_avatar_signed_url($localPath, $expiresInSeconds);
-        if ($localUrl !== '') {
-            return $localUrl;
-        }
-    }
-
-    $signed = storage_create_signed_url('avatars', $path, $expiresInSeconds);
-    return $signed ?? '';
+    return storage_avatar_url_from_bucket($path, $expiresInSeconds);
 }
 
 /**

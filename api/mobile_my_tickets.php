@@ -41,13 +41,14 @@ if (!$res['ok']) {
     $res = supabase_request('GET', $fallbackUrl, $headers);
 }
 if (!$res['ok']) {
-    $bodySnippet = substr((string) ($res['body'] ?? ''), 0, 300);
+    error_log(
+        'mobile_my_tickets failed user=' . $userId
+        . ' status=' . (int) ($res['status'] ?? 0)
+        . ' body=' . substr((string) ($res['body'] ?? ''), 0, 300)
+    );
     json_response([
         'ok' => false,
         'error' => 'Failed to load tickets.',
-        'debug_status' => (int) ($res['status'] ?? 0),
-        'debug_curl' => (string) ($res['error'] ?? ''),
-        'debug_body' => $bodySnippet,
     ], 500);
 }
 

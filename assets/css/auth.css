@@ -185,6 +185,56 @@
   display: none;
 }
 
+/* OTP digit boxes (login verify step) */
+.otp-boxes {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.otp-box {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 3.35rem;
+  border-radius: 0.85rem;
+  border: 1px solid #27272a;
+  background: #09090b;
+  color: #fafafa;
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  outline: none;
+  caret-color: #e4e4e7;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.otp-box:hover {
+  border-color: #3f3f46;
+}
+
+.otp-box:focus {
+  border-color: #71717a;
+  box-shadow: 0 0 0 3px rgba(113, 113, 122, 0.28);
+  background: #0c0c0e;
+}
+
+.otp-box.is-filled {
+  border-color: #3f3f46;
+  background: #111113;
+}
+
+@media (max-width: 420px) {
+  .otp-boxes {
+    gap: 0.4rem;
+  }
+
+  .otp-box {
+    font-size: 1.1rem;
+    border-radius: 0.7rem;
+  }
+}
+
 .auth-links a,
 .auth-foot a {
   color: #e4e4e7;

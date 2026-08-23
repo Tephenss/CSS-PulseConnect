@@ -96,11 +96,27 @@ if (!in_array($status, ['published', 'approved', 'finished', 'expired'], true)) 
 }
 
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-$scanAtIso = $now->format(DATE_ATOM);
-$nowIso = $scanAtIso;
+// Offline queue replay: honor client scanned_at when present and sane.
+$scannedAtRaw = trim((string) ($data['scanned_at'] ?? $data['scanned_at_iso'] ?? ''));
+$scanAt = $now;
+if ($scannedAtRaw !== '') {
+    try {
+        $parsedScan = new DateTimeImmutable($scannedAtRaw);
+        $parsedScan = $parsedScan->setTimezone(new DateTimeZone('UTC'));
+        $skewSeconds = abs($parsedScan->getTimestamp() - $now->getTimestamp());
+        // Reject absurd clocks (more than 7 days from server now).
+        if ($skewSeconds <= 7 * 24 * 3600) {
+            $scanAt = $parsedScan;
+        }
+    } catch (Throwable $e) {
+        // Keep server now.
+    }
+}
+$scanAtIso = $scanAt->format(DATE_ATOM);
+$nowIso = $now->format(DATE_ATOM);
 
-attendance_lazy_clear_early_out('events', $eventId, $event['early_out_enabled_at'] ?? null, $now, $headers);
-if (!attendance_early_out_is_active((string) ($event['early_out_enabled_at'] ?? ''), $now)) {
+attendance_lazy_clear_early_out('events', $eventId, $event['early_out_enabled_at'] ?? null, $scanAt, $headers);
+if (!attendance_early_out_is_active((string) ($event['early_out_enabled_at'] ?? ''), $scanAt)) {
     $event['early_out_enabled_at'] = null;
 }
 
@@ -263,8 +279,8 @@ if ($usesSessions && !empty($sessions)) {
                     continue;
                 }
                 $sid = (string) $row['id'];
-                attendance_lazy_clear_early_out('event_sessions', $sid, $row['early_out_enabled_at'] ?? null, $now, $headers);
-                $eoMap[$sid] = attendance_early_out_is_active((string) ($row['early_out_enabled_at'] ?? ''), $now)
+                attendance_lazy_clear_early_out('event_sessions', $sid, $row['early_out_enabled_at'] ?? null, $scanAt, $headers);
+                $eoMap[$sid] = attendance_early_out_is_active((string) ($row['early_out_enabled_at'] ?? ''), $scanAt)
                     ? (string) $row['early_out_enabled_at']
                     : null;
             }
@@ -315,7 +331,7 @@ if ($usesSessions) {
             continue;
         }
         $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-        $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $now);
+        $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
         if (($outWin['open'] ?? false) === true) {
             $outCandidates[] = [
                 'session' => $session,
@@ -369,7 +385,7 @@ if ($usesSessions) {
     }
 
     // Try time-in for open session.
-    $inResolve = attendance_resolve_session_check_in($sessions, $now);
+    $inResolve = attendance_resolve_session_check_in($sessions, $scanAt);
     $inStatus = (string) ($inResolve['status'] ?? 'closed');
     $session = is_array($inResolve['session'] ?? null) ? $inResolve['session'] : null;
     $sessionId = is_array($session) ? (string) ($session['id'] ?? '') : '';
@@ -391,7 +407,7 @@ if ($usesSessions) {
         if ($isPresent($existing)) {
             // Checked in but out window not open.
             $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-            $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $now);
+            $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
             $endLabel = attendance_format_manila_time($endAt);
             $msg = 'Already timed in for ' . $sessionName . '.';
             if (($outWin['status'] ?? '') === 'too_early_checkout') {
@@ -425,7 +441,7 @@ if ($usesSessions) {
                     continue;
                 }
                 $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-                $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $now);
+                $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
                 if (($outWin['open'] ?? false) !== true) {
                     continue;
                 }
@@ -466,7 +482,7 @@ if ($usesSessions) {
                     break;
                 }
                 $endAt = parse_iso_datetime((string) ($sess['end_at'] ?? ''));
-                $outWin = attendance_check_out_window($endAt, $sess['early_out_enabled_at'] ?? null, $now);
+                $outWin = attendance_check_out_window($endAt, $sess['early_out_enabled_at'] ?? null, $scanAt);
                 $sessName = trim((string) (build_session_display_name($sess) ?: ($sess['title'] ?? 'Seminar')));
                 if ($sessName === '') {
                     $sessName = 'Seminar';
@@ -601,7 +617,7 @@ if ($alreadyOut) {
 
 if ($alreadyIn) {
     $endAt = parse_iso_datetime((string) ($event['end_at'] ?? ''));
-    $outWin = attendance_check_out_window($endAt, $event['early_out_enabled_at'] ?? null, $now);
+    $outWin = attendance_check_out_window($endAt, $event['early_out_enabled_at'] ?? null, $scanAt);
     if (($outWin['open'] ?? false) !== true) {
         $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), (string) ($outWin['message'] ?? 'Time-out is not open yet.'), 409, ['action' => 'check_out']);
     }
@@ -631,7 +647,7 @@ if ($alreadyIn) {
 }
 
 $endAtForOut = parse_iso_datetime((string) ($event['end_at'] ?? ''));
-$outWinForAbsent = attendance_check_out_window($endAtForOut, $event['early_out_enabled_at'] ?? null, $now);
+$outWinForAbsent = attendance_check_out_window($endAtForOut, $event['early_out_enabled_at'] ?? null, $scanAt);
 if (($outWinForAbsent['open'] ?? false) === true) {
     $respond(false, 'absent_no_time_in', 'Cannot time out — you have no time-in (marked absent).', 409, [
         'action' => 'check_out',
@@ -639,7 +655,7 @@ if (($outWinForAbsent['open'] ?? false) === true) {
 }
 
 $startAt = parse_iso_datetime((string) ($event['start_at'] ?? ''));
-$inWin = attendance_check_in_window_for_start($startAt, simple_event_grace_minutes($event), $now);
+$inWin = attendance_check_in_window_for_start($startAt, simple_event_grace_minutes($event), $scanAt);
 if (($inWin['open'] ?? false) !== true) {
     $respond(false, (string) ($inWin['status'] ?? 'closed'), (string) ($inWin['message'] ?? 'Time-in is not open.'), 409, [
         'action' => 'check_in',

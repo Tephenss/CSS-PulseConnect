@@ -93,7 +93,7 @@ Expected: empty / permission denied / RLS violation — **not** user rows.
 - **Firebase FCM** assists: push wakes clients so the app/web need not poll Supabase every few seconds.
 - **Firebase Firestore (assist only):** `public_catalog_events/{id}` + `public_catalog_meta/signals` cache **public published** event list fields. Synced by PHP on publish/archive via the same service-account JSON used for FCM. Clients may read the catalog to spare Nano; registration/attendance/tickets still go through PHP + Supabase.
 - **Scan ingress middleware (assist only):** mobile attendance writes go **Firestore ingress → Supabase** (with PHP file-queue fallback). Collections: `scan_ingress_signals/{eventId}` (read-only aggregate: `pending_count`, `revision` — no names/tickets) and `scan_ingress_jobs/{jobId}` (server-only hashed job metadata). Implemented in `includes/firestore_scan_middleware.php` + `includes/mobile_scan_write.php` for `mobile_scan_ticket.php` and `mobile_event_self_checkin.php` (`self_check_in` / `self_check_out` kinds).
-- **Student Event QR time-in/out:** `api/mobile_event_self_checkin.php` (session student) — time-in uses stored `grace_time` / `scan_window_minutes`; time-out at `end_at`+1h or Early Out (`early_out_enabled_at`+1h). Teacher Early Out: `api/mobile_event_early_out.php` / `api/event_early_out.php` (ownership-checked). Eval answers: `evaluation_upsert` (checkout-gated). Auto-cert: separate BFF action `certificate_auto_issue` via `includes/certificate_auto_issue.php` (checkout + eval complete + **FIFO registrar code from `event_certificate_codes` pool** + idempotent; service role only — no Flutter→Supabase cert writes). Cert design library is standalone (`certificate_templates.event_id` nullable); coded PPTX/PDF **or manual code paste** via `api/event_certificate_import.php` (teacher ownership-checked; optional link of saved template to event; anon writes revoked on pool tables).
+- **Student Event QR time-in/out:** `api/mobile_event_self_checkin.php` (session student) — time-in uses stored `grace_time` / `scan_window_minutes`; time-out at `end_at`+1h or Early Out (`early_out_enabled_at`+1h). Honors client `scanned_at` for offline queue replay (bounded clock skew). Offline warm pack: `api/mobile_self_attendance_pack.php` (registered events + schedule + attendance only for the session user). Teacher Early Out: `api/mobile_event_early_out.php` / `api/event_early_out.php` (ownership-checked). Eval answers: `evaluation_upsert` (checkout-gated). Auto-cert: separate BFF action `certificate_auto_issue` via `includes/certificate_auto_issue.php` (checkout + eval complete + **FIFO registrar code from `event_certificate_codes` pool** + idempotent; service role only — no Flutter→Supabase cert writes). Cert design library is standalone (`certificate_templates.event_id` nullable); coded PPTX/PDF **or manual code paste** via `api/event_certificate_import.php` (teacher ownership-checked; optional link of saved template to event; anon writes revoked on pool tables).
 - Deploy Firestore rules from [`firebase/firestore.rules`](firebase/firestore.rules): public **read**, deny client **writes**.
 - After first deploy, admin can POST `/api/firestore_catalog_rebuild.php` (CSRF + admin session) once to backfill published events.
 - Web/app use longer TTL caches + slower live refresh (manage events, notifications, scan). Reupload PHP + rebuild app after those changes.
@@ -125,3 +125,16 @@ users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, stu
 - Event view + registration capacity use `Prefer: count=exact` (no multi-thousand row downloads).
 - Mobile my-tickets: explicit columns + `limit=150` via session-authenticated PHP only.
 - Participants: throttle absent backfill writes; skip legacy attendance fetch when primary rows exist.
+
+## Backup & disaster recovery
+
+Keep an offsite encrypted copy of Hostinger `.env`, Firebase service-account JSON, and any local `includes/*credentials*` files. Do **not** store these in git.
+
+Quarterly checklist:
+
+1. **Supabase** — confirm PITR / daily backups (or export SQL dump of critical tables: `users` without sharing hashes publicly, `student_roster`, `events`, registrations, attendance, certificates metadata).
+2. **Roster** — after each CSV import, keep the source CSV in a secure admin drive (not the web root).
+3. **Certificates / media** — back up Supabase Storage buckets (`event-covers`, `student-documents`, `proposal-documents`, `avatars`) and any Hostinger `uploads/media` that still hold local avatars.
+4. **Restore drill** — on staging: empty DB → restore dump → roster lookup + one ticket/cert flow must succeed.
+
+`uploads/` is denied by `.htaccess`; never rely on public URLs for private docs.

@@ -75,12 +75,20 @@ foreach ($sessions as $session) {
         $effectiveEndAt = $sessionEnd;
     }
 }
-$eventFinishedForCertificates = $effectiveEndAt instanceof DateTimeImmutable
-    ? $effectiveEndAt <= new DateTimeImmutable('now')
-    : false;
+$eventFinishedForCertificates = false;
+if ($effectiveEndAt instanceof DateTimeImmutable) {
+    if (!function_exists('attendance_event_is_past_lifecycle')) {
+        require_once __DIR__ . '/includes/event_attendance_windows.php';
+    }
+    // Early Out → finish with early_out+1h; else effective end_at + 1h.
+    $eventFinishedForCertificates = attendance_event_is_past_lifecycle(
+        $effectiveEndAt,
+        isset($event['early_out_enabled_at']) ? (string) $event['early_out_enabled_at'] : null
+    );
+}
 
 // Keep detail badge aligned with list behavior:
-// if this published event has already ended, mark it finished.
+// mark finished only after the check-out / Early Out window ends.
 if (strtolower(trim((string) ($event['status'] ?? ''))) === 'published'
     && $eventFinishedForCertificates) {
     try {

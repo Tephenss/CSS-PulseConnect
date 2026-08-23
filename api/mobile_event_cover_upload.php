@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * Teacher/admin event cover upload (mobile session).
- * Compresses and stores on Hostinger (not Supabase Storage) to cut egress.
+ * Stores covers in the public Supabase event-covers bucket, matching the web flow.
  */
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/supabase.php';
@@ -11,7 +11,24 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
-require_once __DIR__ . '/../includes/media_assets.php';
+
+function mobile_event_cover_public_url(string $path): string
+{
+    $segments = array_map(
+        'rawurlencode',
+        array_filter(explode('/', $path), static fn($part): bool => $part !== '')
+    );
+    return rtrim(SUPABASE_URL, '/') . '/storage/v1/object/public/event-covers/' . implode('/', $segments);
+}
+
+function mobile_event_cover_extension(string $mimeType): string
+{
+    return match ($mimeType) {
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        default => 'jpg',
+    };
+}
 
 mobile_api_handle_preflight();
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -110,12 +127,24 @@ if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded image.'], 400);
 }
 
-$stored = media_store_event_cover($eventId, $fileBytes, $mimeType);
-if (!($stored['ok'] ?? false)) {
-    json_response(['ok' => false, 'error' => (string) ($stored['error'] ?? 'Failed to upload cover image.')], 500);
+$ext = mobile_event_cover_extension($mimeType);
+$objectPath = $eventId . '/' . bin2hex(random_bytes(8)) . '.' . $ext;
+$storageUrl = rtrim(SUPABASE_URL, '/') . '/storage/v1/object/event-covers/'
+    . implode('/', array_map('rawurlencode', explode('/', $objectPath)));
+$storageRes = supabase_request('POST', $storageUrl, [
+    'Content-Type: ' . $mimeType,
+    'x-upsert: true',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+], $fileBytes);
+if (!($storageRes['ok'] ?? false)) {
+    json_response([
+        'ok' => false,
+        'error' => 'Failed to upload cover image.',
+    ], 500);
 }
 
-$coverUrl = (string) ($stored['public_url'] ?? '');
+$coverUrl = mobile_event_cover_public_url($objectPath);
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
     . '&select=id,cover_image_url';
 $patchRes = supabase_request(
@@ -137,9 +166,30 @@ if (!($patchRes['ok'] ?? false)) {
 $rows = json_decode((string) ($patchRes['body'] ?? ''), true);
 $updated = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
 
+// Keep the public event catalog aligned with the event row.
+try {
+    require_once __DIR__ . '/../includes/firestore_catalog.php';
+    $catalogUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,title,description,location,start_at,end_at,status,cover_image_url,event_type,event_for,updated_at'
+        . '&id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $catalogRes = supabase_request('GET', $catalogUrl, [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ]);
+    if ($catalogRes['ok'] ?? false) {
+        $catalogRows = json_decode((string) ($catalogRes['body'] ?? ''), true);
+        if (is_array($catalogRows) && isset($catalogRows[0]) && is_array($catalogRows[0])) {
+            firestore_catalog_sync_event($catalogRows[0]);
+        }
+    }
+} catch (Throwable $e) {
+    // Fail-open: the cover is already saved in Supabase and on the event row.
+}
+
 json_response([
     'ok' => true,
     'cover_image_url' => $coverUrl,
     'event' => $updated,
-    'stored_bytes' => (int) ($stored['bytes'] ?? 0),
 ], 200);

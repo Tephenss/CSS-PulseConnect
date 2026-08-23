@@ -85,6 +85,39 @@ function attendance_early_out_expires_at(?DateTimeImmutable $enabledAt): ?DateTi
     return $enabledAt->modify('+' . ATTENDANCE_CHECK_OUT_WINDOW_HOURS . ' hours');
 }
 
+/**
+ * When the event leaves Published/Active lists and may auto-finish.
+ * - Early Out activated: early_out_enabled_at + 1h (ignore normal end_at window).
+ * - Otherwise: end_at + 1h.
+ */
+function attendance_event_lifecycle_ends_at(
+    ?DateTimeImmutable $endAt,
+    ?string $earlyOutEnabledAtRaw
+): ?DateTimeImmutable {
+    $earlyRaw = trim((string) $earlyOutEnabledAtRaw);
+    if ($earlyRaw !== '') {
+        $enabledAt = parse_iso_datetime($earlyRaw);
+        $closes = attendance_early_out_expires_at($enabledAt);
+        if ($closes instanceof DateTimeImmutable) {
+            return $closes;
+        }
+    }
+    if (!$endAt instanceof DateTimeImmutable) {
+        return null;
+    }
+    return $endAt->modify('+' . ATTENDANCE_CHECK_OUT_WINDOW_HOURS . ' hours');
+}
+
+function attendance_event_is_past_lifecycle(
+    ?DateTimeImmutable $endAt,
+    ?string $earlyOutEnabledAtRaw,
+    ?DateTimeImmutable $nowUtc = null
+): bool {
+    $now = $nowUtc ?? new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    $ends = attendance_event_lifecycle_ends_at($endAt, $earlyOutEnabledAtRaw);
+    return $ends instanceof DateTimeImmutable && $now > $ends;
+}
+
 function attendance_early_out_is_active(?string $enabledAtRaw, DateTimeImmutable $nowUtc): bool
 {
     $enabledAt = parse_iso_datetime(trim((string) $enabledAtRaw));

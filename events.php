@@ -55,7 +55,7 @@ if ($events === []) {
       $catalogIds
     ));
     $hydrateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-      . '?select=id,cover_image_url,status,start_at,end_at'
+      . '?select=id,cover_image_url,status,start_at,end_at,early_out_enabled_at'
       . '&id=in.(' . $inList . ')'
       . '&limit=' . count($catalogIds);
     $hydrateRes = supabase_request('GET', $hydrateUrl, $headers);
@@ -90,14 +90,16 @@ if ($events === []) {
         continue;
       }
       $cover = trim((string) ($truth['cover_image_url'] ?? ''));
-      if ($cover !== '') {
-        $eventRow['cover_image_url'] = $cover;
-      }
+      // Empty is authoritative too (e.g. a broken/deleted cover was cleared).
+      $eventRow['cover_image_url'] = $cover;
       if (trim((string) ($truth['start_at'] ?? '')) !== '') {
         $eventRow['start_at'] = $truth['start_at'];
       }
       if (trim((string) ($truth['end_at'] ?? '')) !== '') {
         $eventRow['end_at'] = $truth['end_at'];
+      }
+      if (array_key_exists('early_out_enabled_at', $truth)) {
+        $eventRow['early_out_enabled_at'] = $truth['early_out_enabled_at'];
       }
       $eventRow['status'] = 'published';
     }
@@ -153,8 +155,15 @@ foreach ($events as $eventRow) {
   $isFinished = false;
   if ($endSource !== '') {
     try {
+      if (!function_exists('attendance_event_is_past_lifecycle')) {
+        require_once __DIR__ . '/includes/event_attendance_windows.php';
+      }
       $eventEnd = new DateTimeImmutable($endSource);
-      $isFinished = $eventEnd <= $now;
+      $earlyOut = isset($eventRow['early_out_enabled_at'])
+        ? (string) $eventRow['early_out_enabled_at']
+        : null;
+      // Early Out → leave Published at early_out+1h; else end_at+1h.
+      $isFinished = attendance_event_is_past_lifecycle($eventEnd, $earlyOut, $now);
     } catch (Throwable $e) {
       $isFinished = false;
     }

@@ -53,8 +53,17 @@ $role = (string) ($user['role'] ?? '');
 $userId = (string) ($user['id'] ?? '');
 if ($role === 'teacher') {
     $isOwner = ((string) ($event['created_by'] ?? '') === $userId);
-    $isPublished = ((string) ($event['status'] ?? '') === 'published');
-    if (!$isOwner && !$isPublished) {
+    $isAssigned = false;
+    if (!$isOwner && $userId !== '') {
+        $assignUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+            . '?select=id&event_id=eq.' . rawurlencode($eventId)
+            . '&teacher_id=eq.' . rawurlencode($userId)
+            . '&limit=1';
+        $assignRes = supabase_request('GET', $assignUrl, $headers);
+        $assignRows = json_decode((string) ($assignRes['body'] ?? ''), true);
+        $isAssigned = is_array($assignRows) && count($assignRows) > 0;
+    }
+    if (!$isOwner && !$isAssigned) {
         json_response(['ok' => false, 'error' => 'Forbidden'], 403);
     }
 }

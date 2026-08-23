@@ -9,7 +9,24 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
-require_once __DIR__ . '/../includes/media_assets.php';
+
+function event_cover_public_url(string $path): string
+{
+    $segments = array_map(
+        'rawurlencode',
+        array_filter(explode('/', $path), static fn($part): bool => $part !== '')
+    );
+    return rtrim(SUPABASE_URL, '/') . '/storage/v1/object/public/event-covers/' . implode('/', $segments);
+}
+
+function event_cover_extension(string $mimeType): string
+{
+    return match ($mimeType) {
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        default => 'jpg',
+    };
+}
 
 $user = require_role(['teacher', 'admin']);
 csrf_validate($_POST['csrf_token'] ?? null);
@@ -104,15 +121,30 @@ if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded image.'], 400);
 }
 
-$stored = media_store_event_cover($eventId, $fileBytes, $mimeType);
-if (!($stored['ok'] ?? false)) {
+$ext = event_cover_extension($mimeType);
+$objectPath = $eventId . '/' . bin2hex(random_bytes(8)) . '.' . $ext;
+$storageUrl = rtrim(SUPABASE_URL, '/') . '/storage/v1/object/event-covers/'
+    . implode('/', array_map('rawurlencode', explode('/', $objectPath)));
+$storageHeaders = [
+    'Content-Type: ' . $mimeType,
+    'x-upsert: true',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+$storageRes = supabase_request('POST', $storageUrl, $storageHeaders, $fileBytes);
+if (!$storageRes['ok']) {
     json_response([
         'ok' => false,
-        'error' => (string) ($stored['error'] ?? 'Failed to upload cover image'),
+        'error' => build_error(
+            $storageRes['body'] ?? null,
+            (int) ($storageRes['status'] ?? 0),
+            $storageRes['error'] ?? null,
+            'Failed to upload cover image'
+        ),
     ], 500);
 }
 
-$coverUrl = (string) ($stored['public_url'] ?? '');
+$coverUrl = event_cover_public_url($objectPath);
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
     . '&select=id,cover_image_url';
 $patchHeaders = [
@@ -143,6 +175,7 @@ if (!$patchRes['ok']) {
 $rows = json_decode((string) ($patchRes['body'] ?? ''), true);
 $updated = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
 
+// Keep Firestore public catalog in sync so /events.php shows the new cover.
 try {
     require_once __DIR__ . '/../includes/firestore_catalog.php';
     $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
@@ -163,12 +196,11 @@ try {
         }
     }
 } catch (Throwable $e) {
-    // Fail-open: cover is already saved locally + on the event row.
+    // Fail-open: cover is already saved in Supabase.
 }
 
 json_response([
     'ok' => true,
     'cover_image_url' => $coverUrl,
     'event' => $updated,
-    'stored_bytes' => (int) ($stored['bytes'] ?? 0),
 ], 200);

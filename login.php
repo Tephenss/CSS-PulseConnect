@@ -210,7 +210,15 @@ function admin_login_establish_user_session(string $userId, string $fullName, st
         throw new InvalidArgumentException('Invalid staff role for web session.');
     }
 
-    session_regenerate_id(true);
+    // Prefer regenerate, but never abort login if it fails (Windows/php -S / locked session files).
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        try {
+            @session_regenerate_id(true);
+        } catch (Throwable $e) {
+            error_log('admin_login_establish_user_session: session_regenerate_id failed: ' . $e->getMessage());
+        }
+    }
+
     $_SESSION['user'] = [
         'id' => $userId,
         'full_name' => $fullName !== '' ? $fullName : ($normalized === 'teacher' ? 'Teacher' : 'Admin'),
@@ -218,6 +226,23 @@ function admin_login_establish_user_session(string $userId, string $fullName, st
         'role' => $normalized,
     ];
     unset($_SESSION['admin_login_challenge']);
+}
+
+/**
+ * Seed the same short-lived gate cache used by auth_enforce_daily_web_verification
+ * so /home does not race-logout right after a successful OTP (trust upsert lag / IP glitch).
+ */
+function admin_login_seed_daily_ok_cache(string $userId, string $trustKey): void
+{
+    $userId = trim($userId);
+    if ($userId === '') {
+        return;
+    }
+    $phDay = (new DateTimeImmutable('now', admin_login_ph_timezone()))->format('Y-m-d');
+    $_SESSION['web_daily_ok_user'] = $userId;
+    $_SESSION['web_daily_ok_trust'] = $trustKey;
+    $_SESSION['web_daily_ok_ph_day'] = $phDay;
+    $_SESSION['web_daily_ok_until'] = time() + 600;
 }
 
 function admin_login_resend_cooldown_seconds(): int
@@ -474,6 +499,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($challenge === null) {
                 $error = 'Verification session expired. Please log in again.';
             } else {
+                require_once __DIR__ . '/includes/api_rate_limit.php';
+                $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+                $verifyRateKey = 'web_login_verify:' . (string) ($challenge['id'] ?? '') . ':' . $clientIp;
+                if (!api_rate_limit_allow($verifyRateKey, 10, 900)) {
+                    $error = 'Too many verification attempts. Try again in a few minutes.';
+                } else {
                 $enteredCode = trim((string) ($_POST['verification_code'] ?? ''));
                 if ($enteredCode === '' || !preg_match('/^\d{6}$/', $enteredCode)) {
                     $error = 'Enter the 6-digit verification code.';
@@ -486,7 +517,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $expiresAt = isset($row['expires_at']) ? strtotime((string) $row['expires_at']) : false;
                         if ($expiresAt === false || time() > $expiresAt) {
                             $error = 'Verification code expired. Please resend the code.';
-                        } elseif (!hash_equals($storedCode, $enteredCode)) {
+                        } elseif ($storedCode === '' || !preg_match('/^\d{6}$/', $storedCode)
+                            || !hash_equals($storedCode, $enteredCode)) {
                             $error = 'Invalid verification code.';
                         } else {
                             admin_login_delete_code((string) ($challenge['id'] ?? ''));
@@ -498,27 +530,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 unset($_SESSION['admin_login_challenge']);
                                 $challenge = null;
                             } else {
-                                admin_login_store_daily_verification($verifiedUserId);
-                                device_trust_upsert(
-                                    $verifiedUserId,
-                                    $webTrustKey,
-                                    'web',
-                                    'ip:' . device_trust_client_ip()
-                                );
+                                // 1) Create the web session FIRST so a later DB blip cannot strand trust rows
+                                //    without a logged-in session (or wipe a fresh login at /home).
                                 admin_login_establish_user_session(
                                     $verifiedUserId,
                                     (string) ($challenge['full_name'] ?? ''),
                                     (string) ($challenge['email'] ?? ''),
                                     $sessionRole
                                 );
+                                admin_login_seed_daily_ok_cache($verifiedUserId, $webTrustKey);
+
+                                // 2) Persist OTP gate state (best-effort — session already valid for ~10 min).
+                                try {
+                                    admin_login_store_daily_verification($verifiedUserId);
+                                } catch (Throwable $persistEx) {
+                                    error_log('OTP daily verification store failed: ' . $persistEx->getMessage());
+                                }
+                                try {
+                                    $trustRes = device_trust_upsert(
+                                        $verifiedUserId,
+                                        $webTrustKey,
+                                        'web',
+                                        'ip:' . device_trust_client_ip()
+                                    );
+                                    if (!($trustRes['ok'] ?? false)) {
+                                        error_log(
+                                            'OTP device trust upsert failed user=' . $verifiedUserId
+                                            . ' err=' . (string) ($trustRes['error'] ?? 'unknown')
+                                        );
+                                    }
+                                } catch (Throwable $trustEx) {
+                                    error_log('OTP device trust upsert exception: ' . $trustEx->getMessage());
+                                }
+
                                 header('Location: /home');
                                 exit;
                             }
                         }
                     }
                 }
+                }
             }
         } else {
+            require_once __DIR__ . '/includes/api_rate_limit.php';
+            $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+            if (!api_rate_limit_allow('web_login:' . $clientIp, 8, 900)) {
+                $error = 'Too many login attempts. Try again in a few minutes.';
+            } else {
             $email = isset($_POST['email']) ? strtolower(clean_string((string) $_POST['email'])) : '';
             $password = isset($_POST['password']) ? (string) $_POST['password'] : '';
 
@@ -537,12 +595,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $res = supabase_request('GET', $url, admin_login_headers());
 
                 if (!$res['ok']) {
-                    $error = build_error(
-                        $res['body'] ?? null,
-                        (int) ($res['status'] ?? 0),
-                        $res['error'] ?? null,
-                        'Login failed'
-                    );
+                    $error = 'Login failed. Please try again.';
                 } else {
                     $decoded = is_string($res['body']) ? json_decode($res['body'], true) : null;
                     $rows = is_array($decoded) ? $decoded : [];
@@ -571,6 +624,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 if ($verifiedToday && $trustedIp) {
                                     device_trust_touch($userId, $webTrustKey);
                                     admin_login_establish_user_session($userId, $fullName, $userEmail, $role);
+                                    admin_login_seed_daily_ok_cache($userId, $webTrustKey);
                                     header('Location: /home');
                                     exit;
                                 }
@@ -587,8 +641,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
+            } // rate-limit allow
         }
     } catch (Throwable $e) {
+        error_log(
+            'login.php POST failed: ' . $e->getMessage()
+            . ' @ ' . $e->getFile() . ':' . $e->getLine()
+        );
+        // OTP may have already created a session before a later step threw.
+        if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
+            header('Location: /home');
+            exit;
+        }
         $error = 'Login failed. Please try again.';
     }
 }
@@ -703,15 +767,27 @@ if ($isVerificationMode && is_array($challenge)) {
                             </div>
                         </div>
 
-                        <label class="block text-xs text-zinc-400 mb-1" for="verification_code">Verification Code</label>
-                        <input id="verification_code" name="verification_code" type="text" inputmode="numeric"
-                            pattern="[0-9]*" maxlength="6" required
-                            class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-center text-lg tracking-[0.45em] font-semibold outline-none focus:ring-2 focus:ring-zinc-700"
-                            placeholder="000000" autocomplete="one-time-code" />
+                        <label class="block text-xs text-zinc-400 mb-3" id="verification_code_label">Verification Code</label>
+                        <input type="hidden" id="verification_code" name="verification_code" value="" autocomplete="one-time-code" />
+                        <div class="otp-boxes" role="group" aria-labelledby="verification_code_label" data-otp-root>
+                            <?php for ($i = 0; $i < 6; $i++): ?>
+                                <input
+                                    type="text"
+                                    inputmode="numeric"
+                                    pattern="[0-9]*"
+                                    maxlength="6"
+                                    class="otp-box"
+                                    data-otp-index="<?= $i ?>"
+                                    aria-label="Digit <?= $i + 1 ?> of 6"
+                                    autocomplete="<?= $i === 0 ? 'one-time-code' : 'off' ?>"
+                                    <?= $i === 0 ? 'autofocus' : '' ?>
+                                />
+                            <?php endfor; ?>
+                        </div>
 
                         <div class="h-5"></div>
 
-                        <button type="submit"
+                        <button type="submit" id="btnVerifyCode"
                             class="w-full rounded-xl bg-zinc-100 text-zinc-900 px-4 py-3 font-medium hover:bg-zinc-200 transition">
                             Verify and Continue
                         </button>
@@ -779,6 +855,168 @@ if ($isVerificationMode && is_array($challenge)) {
         </div>
     </div>
     <script>
+        (function () {
+            var root = document.querySelector('[data-otp-root]');
+            var hidden = document.getElementById('verification_code');
+            var form = root ? root.closest('form') : null;
+            if (!root || !hidden || !form) return;
+
+            var boxes = Array.prototype.slice.call(root.querySelectorAll('.otp-box'));
+            if (boxes.length !== 6) return;
+
+            function digitsOnly(value) {
+                return String(value || '').replace(/\D/g, '');
+            }
+
+            function syncHidden() {
+                hidden.value = boxes.map(function (box) {
+                    return digitsOnly(box.value).slice(0, 1);
+                }).join('');
+                boxes.forEach(function (box) {
+                    box.classList.toggle('is-filled', digitsOnly(box.value).length > 0);
+                });
+            }
+
+            function focusBox(index) {
+                var target = boxes[Math.max(0, Math.min(boxes.length - 1, index))];
+                if (!target) return;
+                target.focus();
+                try { target.select(); } catch (_) {}
+            }
+
+            function applyCode(text, startIndex) {
+                var digits = digitsOnly(text);
+                if (!digits) return false;
+
+                // Full / multi-digit paste always fills from the first box.
+                var from = digits.length > 1 ? 0 : Math.max(0, startIndex | 0);
+                if (digits.length > 1) {
+                    boxes.forEach(function (box) { box.value = ''; });
+                }
+
+                var slice = digits.slice(0, boxes.length - from);
+                for (var i = 0; i < slice.length; i++) {
+                    boxes[from + i].value = slice.charAt(i);
+                }
+                syncHidden();
+                var next = from + slice.length;
+                focusBox(next >= boxes.length ? boxes.length - 1 : next);
+                return true;
+            }
+
+            function readClipboard(event) {
+                try {
+                    if (event && event.clipboardData) {
+                        return event.clipboardData.getData('text')
+                            || event.clipboardData.getData('text/plain')
+                            || '';
+                    }
+                } catch (_) {}
+                try {
+                    if (window.clipboardData) {
+                        return window.clipboardData.getData('Text') || '';
+                    }
+                } catch (_) {}
+                return '';
+            }
+
+            function onPaste(event, startIndex) {
+                var pasted = readClipboard(event);
+                if (!digitsOnly(pasted)) return;
+                event.preventDefault();
+                applyCode(pasted, startIndex);
+            }
+
+            boxes.forEach(function (box, index) {
+                box.addEventListener('input', function () {
+                    var cleaned = digitsOnly(box.value);
+                    if (cleaned.length > 1) {
+                        applyCode(cleaned, 0);
+                        return;
+                    }
+                    box.value = cleaned.slice(0, 1);
+                    syncHidden();
+                    if (box.value && index < boxes.length - 1) {
+                        focusBox(index + 1);
+                    }
+                });
+
+                box.addEventListener('beforeinput', function (event) {
+                    if (!event || event.inputType !== 'insertFromPaste') return;
+                    var data = event.data || '';
+                    if (digitsOnly(data).length > 1) {
+                        event.preventDefault();
+                        applyCode(data, 0);
+                    }
+                });
+
+                box.addEventListener('keydown', function (event) {
+                    if ((event.ctrlKey || event.metaKey) && String(event.key || '').toLowerCase() === 'v') {
+                        // Let the native paste event run (handler below fills all boxes).
+                        return;
+                    }
+                    if (event.key === 'Backspace') {
+                        if (box.value === '' && index > 0) {
+                            event.preventDefault();
+                            boxes[index - 1].value = '';
+                            syncHidden();
+                            focusBox(index - 1);
+                        } else {
+                            window.setTimeout(syncHidden, 0);
+                        }
+                        return;
+                    }
+                    if (event.key === 'ArrowLeft' && index > 0) {
+                        event.preventDefault();
+                        focusBox(index - 1);
+                        return;
+                    }
+                    if (event.key === 'ArrowRight' && index < boxes.length - 1) {
+                        event.preventDefault();
+                        focusBox(index + 1);
+                        return;
+                    }
+                });
+
+                box.addEventListener('paste', function (event) {
+                    onPaste(event, index);
+                });
+            });
+
+            // Paste anywhere on the OTP row (even between boxes).
+            root.addEventListener('paste', function (event) {
+                onPaste(event, 0);
+            });
+
+            form.addEventListener('submit', function (event) {
+                var submitter = event.submitter;
+                if (submitter && submitter.getAttribute('name') === 'auth_step'
+                    && submitter.getAttribute('value') === 'resend_code') {
+                    return;
+                }
+                syncHidden();
+                if (!/^\d{6}$/.test(hidden.value)) {
+                    event.preventDefault();
+                    focusBox(hidden.value.length);
+                    return;
+                }
+                // Prevent double-submit (double click / Enter spam) which can
+                // delete the OTP on the first request and fail the second.
+                if (form.getAttribute('data-otp-submitting') === '1') {
+                    event.preventDefault();
+                    return;
+                }
+                form.setAttribute('data-otp-submitting', '1');
+                var verifyBtn = document.getElementById('btnVerifyCode');
+                if (verifyBtn) {
+                    verifyBtn.disabled = true;
+                    verifyBtn.textContent = 'Verifying…';
+                }
+            });
+
+            syncHidden();
+        })();
+
         (function () {
             var btn = document.getElementById('btnResendCode');
             var hint = document.getElementById('resendCooldownHint');

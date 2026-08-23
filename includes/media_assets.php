@@ -2,9 +2,8 @@
 declare(strict_types=1);
 
 /**
- * Hostinger-local media (covers + avatars) to cut Supabase Storage egress.
+ * Hostinger-local private avatars and shared image optimization helpers.
  *
- * - Covers: public under /uploads/media/covers/ (same visibility as public bucket)
  * - Avatars: files blocked by .htaccess; served only via HMAC URL (api/media_serve.php)
  */
 
@@ -204,52 +203,6 @@ function media_compress_image_bytes(
 }
 
 /**
- * @return array{ok:bool,relative_path?:string,public_url?:string,bytes?:int,error?:string}
- */
-function media_store_event_cover(string $eventId, string $rawBytes, string $sourceMime = ''): array
-{
-    $eventId = trim($eventId);
-    if ($eventId === '' || !preg_match('/^[0-9a-fA-F-]{8,}$/', $eventId)) {
-        return ['ok' => false, 'error' => 'Invalid event id.'];
-    }
-
-    // Covers: 1280×720 @ ~75 quality keeps UI sharp while cutting egress.
-    $compressed = media_compress_image_bytes($rawBytes, 1280, 720, 75);
-    if (!($compressed['ok'] ?? false)) {
-        return ['ok' => false, 'error' => (string) ($compressed['error'] ?? 'Compress failed.')];
-    }
-
-    $relDir = 'covers/' . $eventId;
-    $absDir = media_root_dir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relDir);
-    if (!media_ensure_dir($absDir)) {
-        return ['ok' => false, 'error' => 'Unable to create cover directory.'];
-    }
-
-    $ext = strtolower(trim((string) ($compressed['ext'] ?? 'jpg')));
-    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true)) {
-        $ext = 'jpg';
-    }
-    if ($ext === 'jpeg') {
-        $ext = 'jpg';
-    }
-    $filename = bin2hex(random_bytes(8)) . '.' . $ext;
-    $relPath = $relDir . '/' . $filename;
-    $absPath = $absDir . DIRECTORY_SEPARATOR . $filename;
-    $written = @file_put_contents($absPath, (string) $compressed['bytes']);
-    if ($written === false) {
-        return ['ok' => false, 'error' => 'Unable to save cover image.'];
-    }
-
-    $publicUrl = media_public_base_url() . '/uploads/media/' . $relPath;
-    return [
-        'ok' => true,
-        'relative_path' => $relPath,
-        'public_url' => $publicUrl,
-        'bytes' => (int) $written,
-    ];
-}
-
-/**
  * Store compressed avatar. Returns logical path: media/avatars/profiles/{userId}.jpg
  *
  * @return array{ok:bool,path?:string,bytes?:int,error?:string}
@@ -293,7 +246,7 @@ function media_store_user_avatar(string $userId, string $rawBytes): array
 
     return [
         'ok' => true,
-        'path' => 'media/avatars/' . $relPath,
+        'path' => 'media/' . $relPath,
         'bytes' => (int) $written,
     ];
 }
@@ -359,17 +312,29 @@ function media_normalize_local_avatar_path(string $photoUrlOrPath): string
 
     if (preg_match('#/uploads/media/avatars/([^?]+)#', $raw, $m)) {
         $path = 'media/avatars/' . ltrim(rawurldecode((string) $m[1]), '/');
+        if (str_starts_with($path, 'media/avatars/avatars/')) {
+            $path = 'media/avatars/' . substr($path, strlen('media/avatars/avatars/'));
+        }
         return str_contains($path, '..') ? '' : $path;
     }
 
     if (preg_match('#[?&]p=([^&]+)#', $raw, $m)) {
         $decoded = rawurldecode((string) $m[1]);
         if (str_starts_with($decoded, 'media/avatars/') && !str_contains($decoded, '..')) {
+            if (str_starts_with($decoded, 'media/avatars/avatars/')) {
+                $decoded = 'media/avatars/' . substr($decoded, strlen('media/avatars/avatars/'));
+            }
             return $decoded;
         }
     }
 
     $normalized = ltrim(str_replace('\\', '/', $raw), '/');
+    // Compatibility for avatars uploaded while the API accidentally returned
+    // media/avatars/avatars/profiles/... although the file was correctly saved
+    // under media/avatars/profiles/....
+    if (str_starts_with($normalized, 'media/avatars/avatars/')) {
+        $normalized = 'media/avatars/' . substr($normalized, strlen('media/avatars/avatars/'));
+    }
     if (str_starts_with($normalized, 'media/avatars/') && !str_contains($normalized, '..')) {
         return $normalized;
     }
@@ -385,6 +350,29 @@ function media_local_avatar_abs_path(string $logicalPath): string
     }
     $rel = substr($path, strlen('media/'));
     return media_root_dir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+}
+
+/**
+ * Write avatar bytes to the local private tree for an already-known logical path
+ * (media/avatars/profiles/{userId}.{ext}). Used to re-seed the Hostinger cache
+ * when only the Supabase copy survives.
+ */
+function media_write_local_avatar_bytes(string $logicalPath, string $bytes): bool
+{
+    if ($bytes === '') {
+        return false;
+    }
+    $abs = media_local_avatar_abs_path($logicalPath);
+    if ($abs === '') {
+        return false;
+    }
+
+    media_ensure_avatar_protection();
+    if (!media_ensure_dir(dirname($abs))) {
+        return false;
+    }
+
+    return @file_put_contents($abs, $bytes) !== false;
 }
 
 function media_avatar_signed_url(string $logicalPath, int $expiresInSeconds = 3600): string

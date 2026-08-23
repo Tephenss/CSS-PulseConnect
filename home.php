@@ -13,9 +13,10 @@ require_once __DIR__ . '/includes/api_cache.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
+$userId = trim((string) ($user['id'] ?? ''));
 
 // Load events to show on homepage (students see published only).
-$select = 'select=id,title,description,location,start_at,end_at,status';
+$select = 'select=id,title,description,location,start_at,end_at,status,created_by';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
 $url = $role === 'student' ? $base . '&status=eq.published&limit=60' : $base . '&status=neq.archived&limit=60';
 
@@ -25,7 +26,8 @@ $headers = [
   'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$homeCache = api_cache_remember('home_events:' . $role, 30, static function () use ($url, $headers): array {
+$homeCacheKey = 'home_events_v2:' . $role;
+$homeCache = api_cache_remember($homeCacheKey, 30, static function () use ($url, $headers): array {
   $res = supabase_request('GET', $url, $headers);
   if (!$res['ok']) {
     return ['events' => []];
@@ -667,35 +669,83 @@ render_header('Dashboard', $user);
 </div>
 
 <?php
-// Calculate stats
+// Calculate stats (non-archived events loaded above).
 $upcoming = 0;
 $published = 0;
 $pending = 0;
+$finished = 0;
+$totalEventsCount = 0;
+
 $now = new DateTime('now', $manilaTz);
+$isTeacher = strtolower($role) === 'teacher';
 
 foreach ($events as $e) {
-  $s = (string) ($e['status'] ?? '');
+  $s = strtolower(trim((string) ($e['status'] ?? '')));
+  $creatorId = trim((string) ($e['created_by'] ?? ''));
 
-  if (!empty($e['start_at']) && $s === 'published') {
-    try {
-      if ((new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz) > $now)
-        $upcoming++;
-    } catch (Throwable $ex) {
+  // Teachers only see and track metrics for their own events.
+  $isMine = !$isTeacher || ($userId !== '' && $creatorId === $userId);
+
+  if ($isMine) {
+    $totalEventsCount++;
+
+    if (!empty($e['start_at']) && $s === 'published') {
+      try {
+        if ((new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz) > $now) {
+          $upcoming++;
+        }
+      } catch (Throwable $ex) {
+      }
+    }
+
+    if ($s === 'published') {
+      $published++;
+    } elseif ($s === 'pending') {
+      $pending++;
+    } elseif ($s === 'finished') {
+      $finished++;
     }
   }
-
-  if ($s === 'published')
-    $published++;
-  if ($s === 'pending')
-    $pending++;
 }
+
+// Fetch system counts (students, teachers, sections, assistants)
+$totalStudents = 0;
+$totalTeachers = 0;
+$totalSections = 0;
+$totalAssistants = 0;
+
+// Separate cache key by role and userId to prevent cache collision.
+$sysCountsCacheKey = 'home_sys_counts:' . $role . ($isTeacher ? ':' . $userId : '');
+$sysCounts = api_cache_remember($sysCountsCacheKey, 60, static function () use ($headers, $role, $userId): array {
+  $students = supabase_exact_count(SUPABASE_TABLE_USERS, $headers, 'role=eq.student');
+  $sections = supabase_exact_count('sections', $headers);
+  $teachers = 0;
+  $assistants = 0;
+
+  if ($role === 'admin') {
+    $teachers = supabase_exact_count(SUPABASE_TABLE_USERS, $headers, 'role=eq.teacher');
+  } else {
+    $assistants = supabase_exact_count('event_assistants', $headers, 'assigned_by_teacher_id=eq.' . rawurlencode($userId));
+  }
+
+  return [
+    'students' => $students,
+    'teachers' => $teachers,
+    'sections' => $sections,
+    'assistants' => $assistants,
+  ];
+});
+$totalStudents = (int) ($sysCounts['students'] ?? 0);
+$totalTeachers = (int) ($sysCounts['teachers'] ?? 0);
+$totalSections = (int) ($sysCounts['sections'] ?? 0);
+$totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
 ?>
 
 <!-- System Stats -->
 <div class="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
   <h3 class="text-sm font-semibold text-zinc-800 tracking-wide uppercase">System Overview</h3>
 
-  <?php if ($role === 'admin' || $role === 'teacher'): ?>
+  <?php if ($role === 'teacher'): ?>
     <div class="flex flex-wrap items-center gap-2">
       <a href="/manage_events.php"
         class="flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-600 text-white px-3.5 py-2 text-xs font-bold hover:bg-orange-700 shadow-sm transition-colors group">
@@ -708,77 +758,164 @@ foreach ($events as $e) {
     </div>
   <?php endif; ?>
 </div>
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-10">
   <!-- Total Events -->
   <div
-    class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm group hover:border-sky-300 transition-colors relative overflow-hidden">
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-sky-300 transition-colors relative overflow-hidden">
     <div class="absolute top-0 right-0 w-24 h-24 bg-sky-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
-    <div class="relative z-10 flex items-center gap-4">
-      <div class="w-12 h-12 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center flex-shrink-0">
-        <svg class="w-6 h-6 text-sky-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-sky-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
         </svg>
       </div>
-      <div>
-        <div class="text-3xl font-bold text-zinc-900 tracking-tight"><?= count($events) ?></div>
-        <div class="text-[13px] font-medium text-zinc-600">Total Events</div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $totalEventsCount ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Events' : 'Total Events' ?></div>
       </div>
     </div>
   </div>
 
   <!-- Upcoming -->
   <div
-    class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm group hover:border-emerald-300 transition-colors relative overflow-hidden">
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-emerald-300 transition-colors relative overflow-hidden">
     <div class="absolute top-0 right-0 w-24 h-24 bg-emerald-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
-    <div class="relative z-10 flex items-center gap-4">
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
-        class="w-12 h-12 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center flex-shrink-0">
-        <svg class="w-6 h-6 text-emerald-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-emerald-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </div>
-      <div>
-        <div class="text-3xl font-bold text-zinc-900 tracking-tight"><?= $upcoming ?></div>
-        <div class="text-[13px] font-medium text-zinc-600">Upcoming</div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $upcoming ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Upcoming' : 'Upcoming' ?></div>
       </div>
     </div>
   </div>
 
   <!-- Published -->
   <div
-    class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm group hover:border-orange-300 transition-colors relative overflow-hidden">
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-orange-300 transition-colors relative overflow-hidden">
     <div class="absolute top-0 right-0 w-24 h-24 bg-orange-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
-    <div class="relative z-10 flex items-center gap-4">
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
-        class="w-12 h-12 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center flex-shrink-0">
-        <svg class="w-6 h-6 text-orange-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-orange-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </div>
-      <div>
-        <div class="text-3xl font-bold text-zinc-900 tracking-tight"><?= $published ?></div>
-        <div class="text-[13px] font-medium text-zinc-600">Published</div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $published ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Published' : 'Published' ?></div>
       </div>
     </div>
   </div>
 
-  <!-- Pending -->
+  <!-- Pending proposals -->
   <div
-    class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm group hover:border-amber-300 transition-colors relative overflow-hidden">
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-amber-300 transition-colors relative overflow-hidden">
     <div class="absolute top-0 right-0 w-24 h-24 bg-amber-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
-    <div class="relative z-10 flex items-center gap-4">
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
-        class="w-12 h-12 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center flex-shrink-0">
-        <svg class="w-6 h-6 text-amber-800" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-amber-800" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
         </svg>
       </div>
-      <div>
-        <div class="text-3xl font-bold text-zinc-900 tracking-tight"><?= $pending ?></div>
-        <div class="text-[13px] font-medium text-zinc-600">Pending Request</div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $pending ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Pending' : 'Pending' ?></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Finished -->
+  <div
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-zinc-400 transition-colors relative overflow-hidden">
+    <div class="absolute top-0 right-0 w-24 h-24 bg-zinc-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-zinc-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $finished ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Finished' : 'Finished' ?></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Total Students -->
+  <div
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-indigo-300 transition-colors relative overflow-hidden">
+    <div class="absolute top-0 right-0 w-24 h-24 bg-indigo-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-indigo-100 border border-indigo-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-indigo-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+        </svg>
+      </div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $totalStudents ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate">Students</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Total Teachers or My Assistants -->
+  <div
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-rose-300 transition-colors relative overflow-hidden">
+    <div class="absolute top-0 right-0 w-24 h-24 bg-rose-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-rose-100 border border-rose-200 flex items-center justify-center flex-shrink-0">
+        <?php if ($role === 'admin'): ?>
+          <svg class="w-5 h-5 sm:w-6 sm:h-6 text-rose-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z" />
+          </svg>
+        <?php else: ?>
+          <svg class="w-5 h-5 sm:w-6 sm:h-6 text-rose-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M7.5 3.75H6A2.25 2.25 0 003.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0120.25 6v1.5m0 9V18a2.25 2.25 0 01-2.25 2.25h-1.5m-9 0H6A2.25 2.25 0 013.75 18v-1.5M10.125 9h3.75m-3.75 3h3.75M9 15h6M12 3v18" />
+          </svg>
+        <?php endif; ?>
+      </div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight">
+          <?= $role === 'admin' ? $totalTeachers : $totalAssistants ?>
+        </div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate">
+          <?= $role === 'admin' ? 'Teachers' : 'My Assistants' ?>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Total Blocks/Sections -->
+  <div
+    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-teal-300 transition-colors relative overflow-hidden">
+    <div class="absolute top-0 right-0 w-24 h-24 bg-teal-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
+    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div
+        class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-teal-100 border border-teal-200 flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-teal-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25a2.25 2.25 0 01-2.25 2.25h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25h-2.25a2.25 2.25 0 01-2.25-2.25v-2.25z" />
+        </svg>
+      </div>
+      <div class="min-w-0">
+        <div class="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight"><?= $totalSections ?></div>
+        <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate">Blocks</div>
       </div>
     </div>
   </div>

@@ -855,6 +855,7 @@ function resolve_event_scan_context(array $event, DateTimeImmutable $nowUtc, arr
         return resolve_session_scan_context(array_merge($event, ['sessions' => $sessions]), $nowUtc, $headers);
     }
 
+    $event = scan_context_attach_event_early_out($event, $nowUtc, $headers);
     return resolve_simple_event_scan_context($event, $nowUtc);
 }
 
@@ -864,16 +865,32 @@ function load_teacher_scan_assignments(string $teacherId, array $headers): array
         return [];
     }
 
-    $select = rawurlencode('event_id,events!inner(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time)');
+    $select = rawurlencode(
+        'event_id,can_scan,can_manage_assistants,'
+        . 'events!inner(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time,early_out_enabled_at)'
+    );
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
         . '?select=' . $select
         . '&teacher_id=eq.' . rawurlencode($teacherId)
-        . '&can_scan=eq.true'
-        . '&events.status=eq.published';
+        . '&events.status=eq.published'
+        . '&or=(can_scan.eq.true,can_manage_assistants.eq.true)';
 
     $res = supabase_request('GET', $url, $headers);
     if (!$res['ok']) {
-        throw new RuntimeException(build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to load scanner assignments'));
+        // Legacy schema without can_manage_assistants / early_out.
+        $selectLegacy = rawurlencode(
+            'event_id,can_scan,'
+            . 'events!inner(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time)'
+        );
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
+            . '?select=' . $selectLegacy
+            . '&teacher_id=eq.' . rawurlencode($teacherId)
+            . '&can_scan=eq.true'
+            . '&events.status=eq.published';
+        $res = supabase_request('GET', $url, $headers);
+        if (!$res['ok']) {
+            throw new RuntimeException(build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to load scanner assignments'));
+        }
     }
 
     $rows = json_decode((string) $res['body'], true);
@@ -893,6 +910,91 @@ function load_teacher_scan_assignments(string $teacherId, array $headers): array
     }
 
     return $events;
+}
+
+/**
+ * Student assistants assigned to scan tickets (allow_scan + assigned_by_teacher_id).
+ *
+ * @return list<array>
+ */
+function load_assistant_scan_assignments(string $studentId, array $headers): array
+{
+    if (trim($studentId) === '') {
+        return [];
+    }
+
+    $select = rawurlencode(
+        'event_id,allow_scan,assigned_by_teacher_id,'
+        . 'events!inner(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time,early_out_enabled_at)'
+    );
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_assistants'
+        . '?select=' . $select
+        . '&student_id=eq.' . rawurlencode($studentId)
+        . '&allow_scan=eq.true'
+        . '&events.status=eq.published';
+
+    $res = supabase_request('GET', $url, $headers);
+    if (!$res['ok']) {
+        $selectLegacy = rawurlencode(
+            'event_id,allow_scan,'
+            . 'events!inner(id,title,status,start_at,end_at,location,grace_time)'
+        );
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_assistants'
+            . '?select=' . $selectLegacy
+            . '&student_id=eq.' . rawurlencode($studentId)
+            . '&allow_scan=eq.true'
+            . '&events.status=eq.published';
+        $res = supabase_request('GET', $url, $headers);
+        if (!$res['ok']) {
+            throw new RuntimeException(build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to load assistant scanner assignments'));
+        }
+    }
+
+    $rows = json_decode((string) $res['body'], true);
+    if (!is_array($rows)) {
+        return [];
+    }
+
+    $events = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $event = $row['events'] ?? null;
+        if (is_array($event) && trim((string) ($event['id'] ?? '')) !== '') {
+            $events[] = $event;
+        }
+    }
+
+    return $events;
+}
+
+/**
+ * Attach / refresh early_out_enabled_at on a simple (non-seminar) event row.
+ */
+function scan_context_attach_event_early_out(array $event, DateTimeImmutable $nowUtc, array $headers): array
+{
+    $eventId = trim((string) ($event['id'] ?? ''));
+    if ($eventId === '' || !function_exists('attendance_early_out_is_active')) {
+        return $event;
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=early_out_enabled_at&id=eq.' . rawurlencode($eventId) . '&limit=1';
+    $res = supabase_request('GET', $url, $headers);
+    if (!($res['ok'] ?? false)) {
+        return $event;
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    $raw = is_array($rows) && isset($rows[0]) ? ($rows[0]['early_out_enabled_at'] ?? null) : null;
+    if (function_exists('attendance_lazy_clear_early_out')) {
+        attendance_lazy_clear_early_out('events', $eventId, is_string($raw) ? $raw : null, $nowUtc, $headers);
+    }
+    $event['early_out_enabled_at'] = attendance_early_out_is_active(is_string($raw) ? $raw : null, $nowUtc)
+        ? (string) $raw
+        : null;
+
+    return $event;
 }
 
 function select_best_scan_context(array $contexts): array
@@ -972,7 +1074,7 @@ function select_best_scan_context(array $contexts): array
 
 function resolve_user_scan_context(array $user, DateTimeImmutable $nowUtc, array $headers): array
 {
-    $role = (string) ($user['role'] ?? 'student');
+    $role = strtolower(trim((string) ($user['role'] ?? 'student')));
     $userId = (string) ($user['id'] ?? '');
     if ($userId === '') {
         return [
@@ -984,24 +1086,34 @@ function resolve_user_scan_context(array $user, DateTimeImmutable $nowUtc, array
         ];
     }
 
-    // Teachers and admins both follow assignment-based scanner context.
-    if (!in_array($role, ['teacher', 'admin'], true)) {
+    if ($role === 'student') {
+        $events = load_assistant_scan_assignments($userId, $headers);
+        if (empty($events)) {
+            return [
+                'status' => 'no_assignment',
+                'scanner_enabled' => false,
+                'context' => null,
+                'message' => 'No published scan assignment found.',
+                'assignments' => 0,
+            ];
+        }
+    } elseif (in_array($role, ['teacher', 'admin', 'super_admin'], true)) {
+        $events = load_teacher_scan_assignments($userId, $headers);
+        if (empty($events)) {
+            return [
+                'status' => 'no_assignment',
+                'scanner_enabled' => false,
+                'context' => null,
+                'message' => 'No published scan assignment found.',
+                'assignments' => 0,
+            ];
+        }
+    } else {
         return [
             'status' => 'forbidden',
             'scanner_enabled' => false,
             'context' => null,
-            'message' => 'Only teacher/admin roles can use scanner.',
-            'assignments' => 0,
-        ];
-    }
-
-    $events = load_teacher_scan_assignments($userId, $headers);
-    if (empty($events)) {
-        return [
-            'status' => 'no_assignment',
-            'scanner_enabled' => false,
-            'context' => null,
-            'message' => 'No published scan assignment found.',
+            'message' => 'Only teacher/admin/assistant roles can use scanner.',
             'assignments' => 0,
         ];
     }

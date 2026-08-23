@@ -271,11 +271,67 @@ function pulse_auto_finish_published_events(array $headers, int $ttlSeconds = 30
     }
 
     try {
-        $nowUtc = gmdate('c');
-        $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        if (!function_exists('attendance_event_is_past_lifecycle')) {
+            require_once __DIR__ . '/event_attendance_windows.php';
+        }
+
+        $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $selectCols = 'id,status,title,description,location,start_at,end_at,cover_image_url,event_type,event_for,updated_at,early_out_enabled_at';
+        $listUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
             . '?status=eq.published'
-            . '&end_at=lt.' . rawurlencode($nowUtc)
-            . '&select=id,status,title,description,location,start_at,end_at,cover_image_url,event_type,event_for,updated_at';
+            . '&select=' . rawurlencode($selectCols)
+            . '&order=end_at.asc'
+            . '&limit=250';
+        $listRes = supabase_request('GET', $listUrl, $headers);
+        if (!($listRes['ok'] ?? false)) {
+            // Older DBs may lack early_out_enabled_at.
+            $selectCols = 'id,status,title,description,location,start_at,end_at,cover_image_url,event_type,event_for,updated_at';
+            $listUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?status=eq.published'
+                . '&select=' . rawurlencode($selectCols)
+                . '&order=end_at.asc'
+                . '&limit=250';
+            $listRes = supabase_request('GET', $listUrl, $headers);
+        }
+
+        $rows = ($listRes['ok'] ?? false) ? json_decode((string) ($listRes['body'] ?? ''), true) : [];
+        if (!is_array($rows) || $rows === []) {
+            api_cache_write('auto_finish_published_events', ['ok' => true, 'at' => gmdate('c')]);
+            return;
+        }
+
+        $finishIds = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = trim((string) ($row['id'] ?? ''));
+            if ($id === '') {
+                continue;
+            }
+            $endAt = null;
+            try {
+                $endRaw = trim((string) ($row['end_at'] ?? ''));
+                if ($endRaw !== '') {
+                    $endAt = new DateTimeImmutable($endRaw);
+                }
+            } catch (Throwable $e) {
+                $endAt = null;
+            }
+            $earlyOut = isset($row['early_out_enabled_at'])
+                ? (string) $row['early_out_enabled_at']
+                : null;
+            // Early Out → finish at early_out+1h; else end_at+1h.
+            if (attendance_event_is_past_lifecycle($endAt, $earlyOut, $nowUtc)) {
+                $finishIds[] = $id;
+            }
+        }
+
+        if ($finishIds === []) {
+            api_cache_write('auto_finish_published_events', ['ok' => true, 'at' => gmdate('c')]);
+            return;
+        }
+
         $finishHeaders = array_merge($headers, [
             'Content-Type: application/json',
             'Prefer: return=representation',
@@ -286,17 +342,30 @@ function pulse_auto_finish_published_events(array $headers, int $ttlSeconds = 30
             return;
         }
 
-        $finishRes = supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
         $finishedRows = [];
-        if (($finishRes['ok'] ?? false) === true) {
-            $decoded = json_decode((string) ($finishRes['body'] ?? ''), true);
-            if (is_array($decoded)) {
-                $finishedRows = $decoded;
+        // Patch in chunks to keep URLs reasonable.
+        foreach (array_chunk($finishIds, 40) as $chunk) {
+            $inList = implode(',', array_map(
+                static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+                $chunk
+            ));
+            $finishUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?status=eq.published'
+                . '&id=in.(' . $inList . ')'
+                . '&select=id,status,title,description,location,start_at,end_at,cover_image_url,event_type,event_for,updated_at';
+            $finishRes = supabase_request('PATCH', $finishUrl, $finishHeaders, $finishPayload);
+            if (($finishRes['ok'] ?? false) === true) {
+                $decoded = json_decode((string) ($finishRes['body'] ?? ''), true);
+                if (is_array($decoded)) {
+                    foreach ($decoded as $decodedRow) {
+                        if (is_array($decodedRow)) {
+                            $finishedRows[] = $decodedRow;
+                        }
+                    }
+                }
             }
         }
 
-        // Catalog can lag behind Supabase status — drop finished docs so Events
-        // "Published" does not keep showing the same event.
         if ($finishedRows !== []) {
             if (!function_exists('firestore_catalog_sync_event')) {
                 require_once __DIR__ . '/firestore_catalog.php';

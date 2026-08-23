@@ -53,7 +53,7 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
  */
 function manage_events_production_select(): string
 {
-  return 'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,users:created_by(first_name,last_name,suffix)';
+  return 'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,early_out_enabled_at,users:created_by(first_name,last_name,suffix)';
 }
 
 /**
@@ -109,7 +109,7 @@ pulse_auto_close_registration_windows($headers);
 
 // Short TTL list cache — sidebar revisits should not re-query the full events set every time.
 $listGen = api_cache_generation('manage_events');
-$listCacheKey = 'manage_events_list_v2_g' . $listGen . '_' . $role . '_' . substr(hash('sha256', $userId), 0, 16);
+$listCacheKey = 'manage_events_list_v3_g' . $listGen . '_' . $role . '_' . substr(hash('sha256', $userId), 0, 16);
 $listCached = api_cache_remember($listCacheKey, 25, static function () use ($headers, $role, $userId): array {
   $workingSelect = manage_events_production_select();
   $eventsUrl = build_manage_events_url($workingSelect, $role, $userId);
@@ -338,6 +338,12 @@ render_header('Manage Events', $user);
     color: #a1a1aa;
     transition: color 0.3s ease;
     white-space: nowrap;
+  }
+
+  .field-req::after {
+    content: ' *';
+    color: #e11d48;
+    font-weight: 700;
   }
 
   .wizard-step.active .step-label {
@@ -592,7 +598,7 @@ render_header('Manage Events', $user);
         </div>
         <div>
           <div class="text-base font-semibold text-zinc-900" id="modalTitle">Create Event</div>
-          <div class="text-[11px] text-zinc-500" id="modalSubtitle">Fill in the details below</div>
+          <div class="text-[11px] text-zinc-500" id="modalSubtitle">Fill in the event info · <span class="text-rose-600 font-semibold">*</span> required</div>
         </div>
       </div>
       <button id="btnCloseModal" class="p-2 rounded-xl text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition">
@@ -663,7 +669,7 @@ render_header('Manage Events', $user);
             <input id="cover_file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" />
           </div>
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Title</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Event Title</label>
             <div class="field-icon-wrap">
               <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round"
@@ -675,7 +681,7 @@ render_header('Manage Events', $user);
             </div>
           </div>
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Location</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Location</label>
             <div class="field-icon-wrap">
               <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -691,7 +697,7 @@ render_header('Manage Events', $user);
           <!-- NEW: Event Type & Target -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Type</label>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Event Type</label>
               <select id="event_type" name="event_type"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
                 <option value="Event" selected>Event</option>
@@ -701,14 +707,14 @@ render_header('Manage Events', $user);
                 <option value="Other">Other</option>
               </select>
               <div id="event_type_other_wrap" class="mt-2 hidden">
-                <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide" for="event_type_other">Specify event type</label>
+                <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req" for="event_type_other">Specify event type</label>
                 <input id="event_type_other" name="event_type_other" type="text" maxlength="80"
                   class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition placeholder:text-zinc-400"
                   placeholder="e.g. Hackathon" autocomplete="off" />
               </div>
             </div>
             <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Course</label>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Target Course</label>
               <select id="target_course" name="target_course"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
                 <option value="ALL" selected>All Courses</option>
@@ -720,7 +726,7 @@ render_header('Manage Events', $user);
             </div>
           </div>
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Year Level</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Target Year Level</label>
             <div id="target_year_group" class="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-2">
               <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200 bg-zinc-50">
                 <input type="checkbox" class="target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="ALL" checked />
@@ -746,7 +752,7 @@ render_header('Manage Events', $user);
           </div>
 
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Registration Type</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Registration Type</label>
             <div class="space-y-2">
               <label class="inline-flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 cursor-pointer hover:bg-zinc-50 transition w-full">
                 <input type="checkbox" id="registration_type_free" class="registration-type-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" data-value="free" checked />
@@ -765,7 +771,7 @@ render_header('Manage Events', $user);
             </div>
 
             <div id="event_fee_wrap" class="mt-3 hidden">
-              <label for="event_fee" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Settlement Amount (₱)</label>
+              <label for="event_fee" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Settlement Amount (₱)</label>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">₱</span>
                 <input type="number" id="event_fee" name="event_fee" min="1" step="0.01" inputmode="decimal"
@@ -785,7 +791,7 @@ render_header('Manage Events', $user);
           </div>
 
           <div class="pt-2">
-            <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide">Event Structure</label>
+            <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide field-req">Event Structure</label>
             <div class="grid grid-cols-1 gap-3">
               <button type="button"
                 class="structure-option group rounded-2xl border border-orange-300 bg-orange-50/70 p-4 text-left transition-all shadow-sm"
@@ -830,7 +836,7 @@ render_header('Manage Events', $user);
           <div>
             <label
               class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide flex items-center justify-between">
-              <span>Description</span>
+              <span class="field-req">Description</span>
               <span class="text-[10px] text-zinc-400 font-normal">Click the mic to dictate</span>
             </label>
             <div class="stt-wrapper">
@@ -873,7 +879,7 @@ render_header('Manage Events', $user);
         <!-- Step 3: Schedule -->
         <div id="step3" class="space-y-4 hidden pb-4">
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Grace Time (Minutes)</label>
             <div class="field-icon-wrap">
               <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round"
@@ -886,7 +892,7 @@ render_header('Manage Events', $user);
 
           <div id="simpleScheduleSection" class="space-y-4">
             <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Start Date & Time</label>
               <div class="field-icon-wrap">
                 <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round"
@@ -897,7 +903,7 @@ render_header('Manage Events', $user);
               </div>
             </div>
             <div>
-              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">End Date & Time</label>
+              <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">End Date & Time</label>
               <div class="field-icon-wrap">
                 <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round"
@@ -925,19 +931,19 @@ render_header('Manage Events', $user);
             <div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">
               <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 1</div>
               <div>
-                <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">Title</label>
                 <input id="seminar1_title" type="text"
                   class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400"
                   placeholder="Seminar 1 title" />
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">Start Date & Time</label>
                   <input id="seminar1_start_local" type="text" placeholder="Select start date & time..."
                     class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
                 <div>
-                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">End Date & Time</label>
                   <input id="seminar1_end_local" type="text" placeholder="Select end date & time..."
                     class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 bg-zinc-50 outline-none cursor-not-allowed transition" />
                 </div>
@@ -952,19 +958,19 @@ render_header('Manage Events', $user);
                 </p>
               </div>
               <div>
-                <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Title</label>
+                <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">Title</label>
                 <input id="seminar2_title" type="text"
                   class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400"
                   placeholder="Seminar 2 title" disabled />
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">Start Date & Time</label>
                   <input id="seminar2_start_local" type="text" placeholder="Select start date & time..."
                     class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
                 <div>
-                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
+                  <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">End Date & Time</label>
                   <input id="seminar2_end_local" type="text" placeholder="Select end date & time..."
                     class="datetime-picker w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 bg-zinc-50 outline-none cursor-not-allowed transition" />
                 </div>
@@ -1008,7 +1014,7 @@ render_header('Manage Events', $user);
                 </div>
                 <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
               </div>
-              <label class="mt-3 block text-xs font-medium text-zinc-600">Upload Image File</label>
+              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload Image File</label>
               <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
                 class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
             </div>
@@ -1024,7 +1030,7 @@ render_header('Manage Events', $user);
                 </div>
                 <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
               </div>
-              <label class="mt-3 block text-xs font-medium text-zinc-600">Upload Image File</label>
+              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload Image File</label>
               <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
                 class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
             </div>
@@ -1267,21 +1273,6 @@ render_header('Manage Events', $user);
 
 <?php
 // Compute stats
-$publishedCount = 0;
-$pendingCount = 0;
-$approvedCount = 0;
-$draftCount = 0;
-foreach ($events as $ev) {
-  $s = (string) ($ev['status'] ?? '');
-  if ($s === 'published')
-    $publishedCount++;
-  elseif ($s === 'pending')
-    $pendingCount++;
-  elseif ($s === 'approved')
-    $approvedCount++;
-  elseif ($s === 'draft')
-    $draftCount++;
-}
 $liveListHash = manage_events_live_list_hash($user, $events);
 ?>
 
@@ -1304,68 +1295,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   <?php endif; ?>
 </div>
 
-<!-- ═══════  STAT CARDS  ═══════ -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-  <div
-    class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm group hover:border-emerald-300 transition-colors">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center">
-        <svg class="w-5 h-5 text-emerald-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      </div>
-      <div>
-        <div class="text-2xl font-bold text-zinc-900"><?= $publishedCount ?></div>
-        <div class="text-[11px] text-zinc-600 font-medium">Published</div>
-      </div>
-    </div>
-  </div>
-  <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm group hover:border-amber-300 transition-colors">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center">
-        <svg class="w-5 h-5 text-amber-800" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      </div>
-      <div>
-        <div class="text-2xl font-bold text-zinc-900"><?= $pendingCount ?></div>
-        <div class="text-[11px] text-zinc-600 font-medium">Pending</div>
-      </div>
-    </div>
-  </div>
-  <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm group hover:border-sky-300 transition-colors">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center">
-        <svg class="w-5 h-5 text-sky-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-        </svg>
-      </div>
-      <div>
-        <div class="text-2xl font-bold text-zinc-900"><?= $approvedCount ?></div>
-        <div class="text-[11px] text-zinc-600 font-medium">Approved</div>
-      </div>
-    </div>
-  </div>
-  <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm group hover:border-orange-300 transition-colors">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center">
-        <svg class="w-5 h-5 text-orange-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-        </svg>
-      </div>
-      <div>
-        <div class="text-2xl font-bold text-zinc-900"><?= count($events) ?></div>
-        <div class="text-[11px] text-zinc-600 font-medium">Total Active</div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- ═══════  FEATURED 3D SAMPLE EVENT  ═══════ -->
 <div
-  class="mb-14 lg:mb-16 w-full relative overflow-visible mt-10 rounded-[1.5rem] bg-gradient-to-br from-[#450a0a] via-[#7f1d1d] to-[#450a0a] px-8 lg:px-14 py-6 lg:py-0 shadow-xl border border-red-500/30 flex flex-col lg:flex-row items-center justify-between lg:h-[260px]">
+  class="mb-14 lg:mb-16 w-full relative overflow-visible mt-2 rounded-[1.5rem] bg-gradient-to-br from-[#450a0a] via-[#7f1d1d] to-[#450a0a] px-8 lg:px-14 py-6 lg:py-0 shadow-xl border border-red-500/30 flex flex-col lg:flex-row items-center justify-between lg:h-[260px]">
   <div
     class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjZmZmIiBmaWxsLW9wYWNpdHk9IjAuMDUiLz4KPC9zdmc+')] opacity-20 rounded-[1.5rem] mix-blend-overlay pointer-events-none">
   </div>
@@ -1913,6 +1845,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-teacher="<?= htmlspecialchars($tName ?? '') ?>" data-status="<?= htmlspecialchars($status) ?>"
             data-start-at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
             data-end-at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
+            data-early-out-at="<?= htmlspecialchars((string) ($e['early_out_enabled_at'] ?? '')) ?>"
             data-is-rejected="<?= $isRejected ? '1' : '0' ?>"
             data-id="<?= htmlspecialchars($eid) ?>"
             data-location-full="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
@@ -3753,6 +3686,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     ? ['Fill in the event info', 'Add a description', 'Set the schedule', 'Event & student requirements']
     : ['Fill in the event info', 'Add a description', 'Set the schedule'];
 
+  function setModalSubtitle(text, { showRequiredHint = true } = {}) {
+    const subtitle = document.getElementById('modalSubtitle');
+    if (!subtitle) return;
+    const base = String(text || '').trim();
+    if (!showRequiredHint || base === '') {
+      subtitle.textContent = base;
+      return;
+    }
+    subtitle.innerHTML = `${base.replace(/</g, '&lt;')} · <span class="text-rose-600 font-semibold">*</span> required`;
+  }
+
   function collectStudentRequirements() {
     const items = [];
     document.querySelectorAll('#studentRequirementsSection .student-req-checkbox:checked').forEach((checkbox) => {
@@ -3844,7 +3788,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     btnSubmit?.classList.toggle('hidden', s !== maxWizardStep || eventModalReadOnly);
 
     const subtitle = document.getElementById('modalSubtitle');
-    if (subtitle) subtitle.textContent = subtitles[s - 1] || '';
+    if (subtitle) setModalSubtitle(subtitles[s - 1] || '');
 
     ['ws1', 'ws2', 'ws3', 'ws4'].forEach((id, i) => {
       const el = document.getElementById(id);
@@ -4183,9 +4127,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
     const subtitle = document.getElementById('modalSubtitle');
     if (subtitle) {
-      subtitle.textContent = readOnly
-        ? 'Review Info → Details → Schedule (use Next)'
-        : 'Update Info → Details → Schedule (use Next for full fields)';
+      setModalSubtitle(
+        readOnly
+          ? 'Review Info → Details → Schedule (use Next)'
+          : 'Update Info → Details → Schedule (use Next for full fields)',
+        { showRequiredHint: !readOnly }
+      );
     }
 
     if (!readOnly) {
@@ -4822,8 +4769,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
     const modalTitle = document.getElementById('modalTitle');
     if (modalTitle) modalTitle.textContent = 'Create Event';
-    const subtitle = document.getElementById('modalSubtitle');
-    if (subtitle) subtitle.textContent = 'Fill in the event info';
+    setModalSubtitle('Fill in the event info');
     const submitLabel = document.querySelector('#btnSubmit span:last-child');
     if (submitLabel) submitLabel.textContent = teacherProposalMode ? 'Submit for Review' : 'Save Event';
 
@@ -5495,9 +5441,19 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const hasRejectRemark = ((card.dataset.isRejected || '') + '') === '1';
 
     const endRaw = ((card.dataset.endAt || '') + '').trim();
+    const earlyOutRaw = ((card.dataset.earlyOutAt || '') + '').trim();
     const endDate = endRaw !== '' ? new Date(endRaw) : null;
+    const earlyOutDate = earlyOutRaw !== '' ? new Date(earlyOutRaw) : null;
     const now = new Date();
-    const isPast = endDate instanceof Date && !Number.isNaN(endDate.getTime()) && endDate < now;
+    // Early Out → finish with early_out+1h; else end_at+1h (match attendance windows).
+    const HOUR_MS = 60 * 60 * 1000;
+    let lifecycleEnds = null;
+    if (earlyOutDate instanceof Date && !Number.isNaN(earlyOutDate.getTime())) {
+      lifecycleEnds = new Date(earlyOutDate.getTime() + HOUR_MS);
+    } else if (endDate instanceof Date && !Number.isNaN(endDate.getTime())) {
+      lifecycleEnds = new Date(endDate.getTime() + HOUR_MS);
+    }
+    const isPast = lifecycleEnds instanceof Date && lifecycleEnds < now;
 
     if (((status === 'expired' || status === 'finished' || isPast) && status !== 'archived')) {
       return 'expired';

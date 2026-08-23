@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/student_requirements.php';
 
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/media_assets.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 
 mobile_api_handle_preflight();
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -19,6 +20,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 mobile_api_validate_key($_POST);
 $sessionUser = mobile_api_require_user_from_post();
 $studentId = (string) ($sessionUser['id'] ?? '');
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('mobile_student_doc:' . $studentId . ':' . $clientIp, 20, 60)) {
+    json_response(['ok' => false, 'error' => 'Too many uploads. Please wait.'], 429);
+}
 
 $eventId = trim((string) ($_POST['event_id'] ?? ''));
 $requirementId = trim((string) ($_POST['requirement_id'] ?? ''));
@@ -90,6 +96,12 @@ if ($finfo) {
 
 if (!in_array($mimeType, student_requirement_allowed_mime_types(), true)) {
     json_response(['ok' => false, 'error' => 'Only PDF, DOC, DOCX, JPG, PNG, or WEBP files are allowed.'], 400);
+}
+
+$maxBytes = 10 * 1024 * 1024;
+$fileSize = (int) ($upload['size'] ?? 0);
+if ($fileSize <= 0 || $fileSize > $maxBytes) {
+    json_response(['ok' => false, 'error' => 'Each file must be 10MB or smaller.'], 400);
 }
 
 $fileBytes = file_get_contents($tmpName);

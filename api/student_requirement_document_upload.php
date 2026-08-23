@@ -89,6 +89,12 @@ if (!in_array($mimeType, student_requirement_allowed_mime_types(), true)) {
     json_response(['ok' => false, 'error' => 'Only PDF, DOC, DOCX, JPG, PNG, or WEBP files are allowed.'], 400);
 }
 
+$maxBytes = 10 * 1024 * 1024;
+$fileSize = (int) ($upload['size'] ?? 0);
+if ($fileSize <= 0 || $fileSize > $maxBytes) {
+    json_response(['ok' => false, 'error' => 'Each file must be 10MB or smaller.'], 400);
+}
+
 $fileBytes = file_get_contents($tmpName);
 if (!is_string($fileBytes) || $fileBytes === '') {
     json_response(['ok' => false, 'error' => 'Unable to read the uploaded file.'], 400);
