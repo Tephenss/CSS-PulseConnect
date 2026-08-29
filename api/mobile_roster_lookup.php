@@ -4,6 +4,9 @@ declare(strict_types=1);
 /**
  * Mobile: exact student-number lookup against school roster (Create Account).
  * Fail-closed: API key + rate limit; no list/search; generic miss message.
+ *
+ * Incomplete signups (preverify, OTP never finished) stay claimable so students
+ * are not stuck with "already has an account" before email verification.
  */
 
 require_once __DIR__ . '/../config.php';
@@ -36,11 +39,28 @@ if ($row === null) {
     json_response(['ok' => false, 'error' => 'No matching student record found. Check your student number or contact admin.'], 404);
 }
 
-if (trim((string) ($row['user_id'] ?? '')) !== '') {
-    json_response(['ok' => false, 'error' => 'This student number already has an account. Please log in.'], 409);
+$claimedUserId = trim((string) ($row['user_id'] ?? ''));
+$incomplete = false;
+if ($claimedUserId !== '') {
+    $claimedUser = student_roster_fetch_signup_user($claimedUserId);
+    if ($claimedUser !== null && student_user_is_incomplete_signup($claimedUser)) {
+        $incomplete = true;
+    } else {
+        json_response(['ok' => false, 'error' => 'This student number already has an account. Please log in.'], 409);
+    }
+} else {
+    // Roster unclaimed, but a leftover preverify user may still exist.
+    $orphan = student_roster_find_incomplete_by_student_no($studentNo);
+    if ($orphan !== null) {
+        $incomplete = true;
+    }
 }
 
 json_response([
     'ok' => true,
     'roster' => student_roster_public_preview($row),
+    'incomplete_signup' => $incomplete,
+    'message' => $incomplete
+        ? 'Previous signup was not verified. Continue to finish email verification.'
+        : null,
 ]);

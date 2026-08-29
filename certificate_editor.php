@@ -155,12 +155,11 @@ if ($eventId !== '') {
                     if (!is_array($tpl)) {
                         continue;
                     }
-                    $customTemplates[] = [
-                        ...$tpl,
+                    $customTemplates[] = array_merge($tpl, [
                         'template_scope' => 'event',
                         'scope_session_id' => '',
                         'scope_label' => 'Whole Event',
-                    ];
+                    ]);
                 }
             }
         }
@@ -188,12 +187,11 @@ if ($eventId !== '') {
                         $sessionMeta = isset($tpl['event_sessions']) && is_array($tpl['event_sessions'])
                             ? $tpl['event_sessions']
                             : [];
-                        $customTemplates[] = [
-                            ...$tpl,
+                        $customTemplates[] = array_merge($tpl, [
                             'template_scope' => 'session',
                             'scope_session_id' => (string) ($tpl['session_id'] ?? ''),
                             'scope_label' => build_session_display_name($sessionMeta),
-                        ];
+                        ]);
                     }
                 }
             }
@@ -203,6 +201,9 @@ if ($eventId !== '') {
     // Design library: teacher's templates (created_by) + claimable orphans.
     $templatesById = [];
     $mergeTpl = static function (array $rows, string $scopeLabel = 'Design Library') use (&$templatesById, &$customTemplates): void {
+        if ($rows !== [] && isset($rows['id']) && is_string($rows['id'] ?? null)) {
+            $rows = [$rows];
+        }
         foreach ($rows as $tpl) {
             if (!is_array($tpl)) {
                 continue;
@@ -216,12 +217,11 @@ if ($eventId !== '') {
                 continue;
             }
             $templatesById[$tid] = true;
-            $customTemplates[] = [
-                ...$tpl,
+            $customTemplates[] = array_merge($tpl, [
                 'template_scope' => 'library',
                 'scope_session_id' => '',
                 'scope_label' => $scopeLabel,
-            ];
+            ]);
         }
     };
 
@@ -432,6 +432,12 @@ if ($templateId !== '' && $initialEditingScope !== '') {
         }
         input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
         input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px;}
+
+        /* Signature line selected: only color picker is active */
+        #textFormattingBar.cert-line-color-mode > *:not(#fontColor) {
+            opacity: 0.35;
+            pointer-events: none;
+        }
         
         .template-card:hover { transform: scale(1.02); border-color: #f97316 !important; }
 
@@ -609,6 +615,18 @@ if ($templateId !== '' && $initialEditingScope !== '') {
                         <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
                         Saved Templates
                     </h3>
+
+                    <!-- Always-available reset: return to empty white canvas without leaving the editor -->
+                    <div class="template-card border border-zinc-700 bg-[#18181b] rounded-lg p-2 cursor-pointer transition-all flex flex-col gap-2 shadow-sm hover:border-orange-500" data-preset="blank" title="Reset to a blank white page">
+                        <div class="w-full h-32 bg-white rounded border border-zinc-600 overflow-hidden relative pointer-events-none flex flex-col items-center justify-center gap-2">
+                            <svg class="w-8 h-8 text-zinc-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                            <div class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Blank</div>
+                        </div>
+                        <div class="flex items-center justify-between gap-2 px-1">
+                            <div class="text-xs font-semibold text-zinc-300 truncate">Blank Page</div>
+                            <span class="shrink-0 rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400">Reset</span>
+                        </div>
+                    </div>
                     <?php if (count($customTemplates) > 0): ?>
                     <?php foreach ($customTemplates as $tpl): ?>
                         <?php
@@ -758,7 +776,7 @@ if ($templateId !== '' && $initialEditingScope !== '') {
                             </button>
                             <button type="button" id="btnCancelCertificateCode" class="rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-[11px] font-bold px-3 py-2 transition">
                                 Cancel
-                            </button>
+                    </button>
                         </div>
                     </div>
                 </div>
@@ -927,7 +945,7 @@ function showSaveLayoutModal(onSave, opts = {}) {
         confirmBtn.textContent = mode === 'update' ? 'Save Changes' : (mode === 'another' ? 'Save Another' : 'Save Layout');
     }
     nameInput.value = opts.defaultName || '';
-
+    
     modal.classList.remove('hidden');
     setTimeout(() => {
         modal.classList.remove('opacity-0');
@@ -949,7 +967,7 @@ function showSaveLayoutModal(onSave, opts = {}) {
         onSave(name);
         close();
     };
-
+    
     nameInput.onkeydown = (e) => {
         if (e.key === 'Enter') document.getElementById('btnConfirmSave').click();
     };
@@ -982,7 +1000,7 @@ function showNotification(message, type = 'success') {
         
     toast.innerHTML = `${icon}<span class="text-sm font-bold tracking-tight">${escapeToastHtml(message)}</span>`;
     container.appendChild(toast);
-
+    
     // Errors (e.g. "code already used in …") need reading time.
     const visibleFor = type === 'success' ? 4000 : 9000;
     setTimeout(() => { toast.classList.remove('translate-y-10', 'opacity-0'); }, 10);
@@ -1314,18 +1332,16 @@ function ensureTextWraps(obj) {
     return tb;
 }
 
-function addCanvasText(text, size, bold = false) {
+function addCanvasText(text, size, bold = false, slot = 'body') {
     const txt = new fabric.Textbox(text, {
-        left: canvas.width / 2,
-        top: canvas.height / 2,
+        ...getTextSlotCenter(slot),
         fontFamily: 'Inter',
         fontSize: size,
         fontWeight: bold ? 'bold' : 'normal',
         fill: '#000000',
-        originX: 'center',
-        originY: 'center',
         textAlign: 'center',
         width: defaultTextboxWidth(),
+        textSlot: slot,
     });
     canvas.add(txt);
     canvas.setActiveObject(txt);
@@ -1334,10 +1350,10 @@ function addCanvasText(text, size, bold = false) {
     if (typeof pushHistoryState === 'function') pushHistoryState();
 }
 
-document.getElementById('addHeading').addEventListener('click',      () => addCanvasText('CERTIFICATE TITLE', 60, true));
-document.getElementById('addSubheading').addEventListener('click',   () => addCanvasText('Subheading Text', 30));
-document.getElementById('addBodyText').addEventListener('click',     () => addCanvasText('Double click to edit text...', 20));
-document.getElementById('addAutoName').addEventListener('click',     () => addCanvasText('{{participant_name}}', 50, true));
+document.getElementById('addHeading').addEventListener('click',      () => addCanvasText('CERTIFICATE TITLE', 60, true, 'heading'));
+document.getElementById('addSubheading').addEventListener('click',   () => addCanvasText('Subheading Text', 30, false, 'subheading'));
+document.getElementById('addBodyText').addEventListener('click',     () => addCanvasText('Double click to edit text...', 20, false, 'body'));
+document.getElementById('addAutoName').addEventListener('click',     () => addCanvasText('{{participant_name}}', 50, true, 'participant_name'));
 
 /** @type {string[]} */
 let pendingRegistrarCodes = [];
@@ -1377,18 +1393,16 @@ function placeCertificateCodeOnCanvas(sampleCode) {
         return existing;
     }
     const txt = new fabric.Textbox(code, {
-        left: canvas.width / 2,
-        top: canvas.height / 2,
+        ...getTextSlotCenter('certificate_code'),
         fontFamily: 'Inter',
         fontSize: 18,
         fontWeight: 'bold',
         fill: '#111827',
-        originX: 'center',
-        originY: 'center',
         textAlign: 'center',
         width: boxWidth,
         id: 'certificate_code',
         name: 'Certificate Code',
+        textSlot: 'certificate_code',
     });
     canvas.add(txt);
     canvas.setActiveObject(txt);
@@ -1440,23 +1454,25 @@ document.getElementById('btnPlaceCertificateCode')?.addEventListener('click', ()
 });
 document.getElementById('addSignatoryLine').addEventListener('click', () => {
     const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
+    const lineY = getTextSlotTop('signatory');
     const half = 140;
-    const line = new fabric.Line([cx - half, cy - 12, cx + half, cy - 12], {
+    const line = new fabric.Line([cx - half, lineY, cx + half, lineY], {
         stroke: '#111827',
         strokeWidth: 2,
         selectable: true,
-        evented: true
+        evented: true,
+        name: 'signature_line',
     });
     const label = new fabric.IText('Authorized Signature', {
         left: cx,
-        top: cy + 6,
+        top: lineY + 18,
         fontFamily: 'Inter',
         fontSize: 18,
         fill: '#111827',
         originX: 'center',
         originY: 'top',
-        textAlign: 'center'
+        textAlign: 'center',
+        textSlot: 'signatory',
     });
     canvas.add(line, label);
     canvas.setActiveObject(label);
@@ -1658,7 +1674,7 @@ async function buildLiveExportCanvasState() {
 
     let state;
     try {
-        state = canvas.toJSON(['crossOrigin', 'selectable', 'evented', 'id', 'name']);
+        state = canvas.toJSON(['crossOrigin', 'selectable', 'evented', 'id', 'name', 'logoSlot', 'textSlot']);
     } finally {
         stubbed.forEach(([img, fn]) => {
             try { img.getSrc = fn; } catch (_) {}
@@ -1821,6 +1837,107 @@ function minifyCanvasStateForExport(state) {
     };
 }
 
+const LOGO_SLOT_MAX_WIDTH = 140;
+
+function getHeaderLogoCenterY() {
+    const logoTop = Math.round(Math.max(44, canvas.height * 0.055));
+    return logoTop + Math.round(LOGO_SLOT_MAX_WIDTH / 2);
+}
+
+function getTextSlotTop(slot) {
+    const headerY = getHeaderLogoCenterY();
+    const h = canvas.height;
+    switch (slot) {
+        case 'heading':
+            return headerY;
+        case 'subheading':
+            return headerY + Math.round(h * 0.09);
+        case 'participant_name':
+            return Math.round(h * 0.50);
+        case 'body':
+            return Math.round(h * 0.65);
+        case 'certificate_code':
+            return Math.round(h * 0.78);
+        case 'signatory':
+            return Math.round(h * 0.72);
+        default:
+            return Math.round(h * 0.5);
+    }
+}
+
+function getTextSlotCenter(slot) {
+    return {
+        left: canvas.width / 2,
+        top: getTextSlotTop(slot),
+        originX: 'center',
+        originY: 'center',
+    };
+}
+
+function getLogoSlotPosition(slot) {
+    if (slot === 'center') {
+        return {
+            left: canvas.width / 2,
+            top: canvas.height / 2,
+            originX: 'center',
+            originY: 'center',
+        };
+    }
+    const padX = Math.round(Math.max(72, canvas.width * 0.08));
+    const padY = Math.round(Math.max(44, canvas.height * 0.055));
+    if (slot === 1) {
+        return {
+            left: padX,
+            top: padY,
+            originX: 'left',
+            originY: 'top',
+        };
+    }
+    return {
+        left: canvas.width - padX,
+        top: padY,
+        originX: 'right',
+        originY: 'top',
+    };
+}
+
+function getOccupiedLogoSlots() {
+    const occupied = new Set();
+    canvas.getObjects().forEach((obj) => {
+        if (obj?.type !== 'image') return;
+        const slot = Number.parseInt(String(obj.logoSlot || ''), 10);
+        if (slot === 1 || slot === 2) {
+            occupied.add(slot);
+        }
+    });
+    return occupied;
+}
+
+function resolveNextLogoSlot() {
+    const occupied = getOccupiedLogoSlots();
+    if (!occupied.has(1)) return 1;
+    if (!occupied.has(2)) return 2;
+    return 'center';
+}
+
+function placeLogoOnCanvas(img, name) {
+    const slot = resolveNextLogoSlot();
+    const maxWidth = slot === 'center' ? 220 : LOGO_SLOT_MAX_WIDTH;
+
+    img.set({
+        ...getLogoSlotPosition(slot),
+        name: name || 'Logo',
+        logoSlot: slot,
+        crossOrigin: 'anonymous',
+    });
+    if (img.width > maxWidth) img.scaleToWidth(maxWidth);
+    canvas.add(img);
+    canvas.setActiveObject(img);
+    canvas.renderAll();
+    isCanvasDirty = true;
+    pushHistoryState();
+}
+
 function addLogoFromUrl(url, name) {
     if (!url) return;
     fabric.Image.fromURL(url, (img) => {
@@ -1828,24 +1945,11 @@ function addLogoFromUrl(url, name) {
             showNotification('Failed to load logo', 'error');
             return;
         }
-        img.set({
-            left: canvas.width / 2,
-            top: canvas.height / 2,
-            originX: 'center',
-            originY: 'center',
-            name: name || 'Logo',
-            crossOrigin: 'anonymous',
-        });
-        if (img.width > 220) img.scaleToWidth(220);
-        canvas.add(img);
-        canvas.setActiveObject(img);
-        canvas.renderAll();
-        isCanvasDirty = true;
-        pushHistoryState();
+        placeLogoOnCanvas(img, name);
     }, { crossOrigin: 'anonymous' });
 }
 
-function handleImageUpload(e, isBackground = false) {
+function handleImageUpload(e, isBackground = false, placement = 'logo') {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = async (f) => {
@@ -1865,6 +1969,8 @@ function handleImageUpload(e, isBackground = false) {
                     pushHistoryState();
                 });
                 isCanvasDirty = true;
+            } else if (placement === 'logo') {
+                placeLogoOnCanvas(img, file.name || 'Logo');
             } else {
                 img.set({ left: canvas.width / 2, top: canvas.height / 2, originX: 'center', originY: 'center' });
                 if (img.width > 250) img.scaleToWidth(250);
@@ -1877,8 +1983,8 @@ function handleImageUpload(e, isBackground = false) {
     reader.readAsDataURL(file); e.target.value = '';
 }
 document.getElementById('uploadBg').addEventListener('change',  e => handleImageUpload(e, true));
-document.getElementById('uploadLogo').addEventListener('change', e => handleImageUpload(e, false));
-document.getElementById('uploadSig').addEventListener('change',  e => handleImageUpload(e, false));
+document.getElementById('uploadLogo').addEventListener('change', e => handleImageUpload(e, false, 'logo'));
+document.getElementById('uploadSig').addEventListener('change',  e => handleImageUpload(e, false, 'signature'));
 document.querySelectorAll('.preset-logo-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
         addLogoFromUrl(btn.getAttribute('data-logo-src') || '', btn.getAttribute('data-logo-name') || 'Logo');
@@ -1901,11 +2007,25 @@ canvas.on('selection:updated', syncToolbars);
 canvas.on('selection:cleared', () => {
     objToolbar.classList.add('opacity-0', 'pointer-events-none');
     textToolbar.classList.add('opacity-30', 'pointer-events-none');
+    textToolbar.classList.remove('cert-line-color-mode');
 });
 
 function isFabricText(obj) {
     const t = String(obj?.type || '').toLowerCase();
     return t === 'i-text' || t === 'text' || t === 'textbox';
+}
+
+function isFabricLine(obj) {
+    return String(obj?.type || '').toLowerCase() === 'line';
+}
+
+function colorPickerValueFromFabric(obj) {
+    if (isFabricLine(obj)) {
+        const stroke = obj.stroke;
+        return (typeof stroke === 'string' && stroke.startsWith('#')) ? stroke : '#111827';
+    }
+    const fill = obj.fill;
+    return (typeof fill === 'string' && fill.startsWith('#')) ? fill : '#000000';
 }
 
 function syncToolbars() {
@@ -1921,12 +2041,15 @@ function syncToolbars() {
     document.getElementById('btnLock').classList.toggle('border-orange-500/50', isLocked);
     document.getElementById('btnLock').classList.toggle('bg-orange-500/10', isLocked);
 
+    const fontColorEl = document.getElementById('fontColor');
+
     if (isFabricText(obj)) {
-        textToolbar.classList.remove('opacity-30', 'pointer-events-none');
+        textToolbar.classList.remove('opacity-30', 'pointer-events-none', 'cert-line-color-mode');
+        fontColorEl.title = 'Text Color';
         document.getElementById('fontSize').value   = obj.fontSize   ?? 24;
         document.getElementById('fontFamily').value = obj.fontFamily ?? 'Inter';
-        const fillVal = (typeof obj.fill === 'string' && obj.fill.startsWith('#')) ? obj.fill : '#000000';
-        document.getElementById('fontColor').value  = fillVal;
+        const fillVal = colorPickerValueFromFabric(obj);
+        fontColorEl.value = fillVal;
         
         // Highlights for formatting buttons (prefer active character selection while editing)
         const selBold = hasTextSelection(obj) ? selectionStyleValue(obj, 'fontWeight') : undefined;
@@ -1943,7 +2066,7 @@ function syncToolbars() {
         const selFill = hasTextSelection(obj) ? selectionStyleValue(obj, 'fill') : undefined;
         const selFamily = hasTextSelection(obj) ? selectionStyleValue(obj, 'fontFamily') : undefined;
         if (selSize != null) document.getElementById('fontSize').value = selSize;
-        if (typeof selFill === 'string' && selFill.startsWith('#')) document.getElementById('fontColor').value = selFill;
+        if (typeof selFill === 'string' && selFill.startsWith('#')) fontColorEl.value = selFill;
         if (selFamily) document.getElementById('fontFamily').value = selFamily;
         
         // Highlights for alignment buttons
@@ -1952,8 +2075,14 @@ function syncToolbars() {
         document.getElementById('btnAlignCenter').classList.toggle('active', align === 'center');
         document.getElementById('btnAlignRight').classList.toggle('active',  align === 'right');
         document.getElementById('btnAlignJustify')?.classList.toggle('active', align === 'justify');
+    } else if (isFabricLine(obj)) {
+        textToolbar.classList.remove('opacity-30', 'pointer-events-none');
+        textToolbar.classList.add('cert-line-color-mode');
+        fontColorEl.title = 'Line Color';
+        fontColorEl.value = colorPickerValueFromFabric(obj);
     } else {
         textToolbar.classList.add('opacity-30', 'pointer-events-none');
+        textToolbar.classList.remove('cert-line-color-mode');
     }
 }
 
@@ -2115,7 +2244,16 @@ document.getElementById('btnSizeDec').addEventListener('click', () => {
     el.value = s;
     setStyle('fontSize', s);
 });
-document.getElementById('fontColor').addEventListener('input',  e => setStyle('fill', e.target.value));
+document.getElementById('fontColor').addEventListener('input', e => {
+    executeActiveObj(o => {
+        if (isFabricLine(o)) {
+            o.set('stroke', e.target.value);
+            o.setCoords();
+            return;
+        }
+        applyTextStyle(o, { fill: e.target.value }, { selectionOnly: true });
+    });
+});
 document.getElementById('fontFamily').addEventListener('change', e => setStyle('fontFamily', e.target.value));
 document.getElementById('btnBold').addEventListener('click', () => executeActiveObj(o => {
     const fromSel = hasTextSelection(o) ? selectionStyleValue(o, 'fontWeight') : undefined;
@@ -2184,12 +2322,12 @@ function resolveTemplateScope() {
 }
 
 async function buildCanvasSavePayload() {
-    canvas.discardActiveObject();
-    canvas.renderAll();
-    ensureFabricObjectIds();
+        canvas.discardActiveObject(); 
+        canvas.renderAll();
+        ensureFabricObjectIds();
     // Yield so the "Saving…" label paints before heavy serialize/rasterize.
     await new Promise((r) => setTimeout(r, 0));
-    const jsonState = canvas.toJSON(['src', 'crossOrigin', 'selectable', 'evented', 'id', 'name']);
+    const jsonState = canvas.toJSON(['src', 'crossOrigin', 'selectable', 'evented', 'id', 'name', 'logoSlot', 'textSlot']);
     // Prefer existing JSON src — getSrc() re-encodes and freezes on large BGs.
     if (canvas.backgroundImage && jsonState.backgroundImage && !jsonState.backgroundImage.src) {
         try {
@@ -2527,7 +2665,7 @@ async function persistTemplate({ mode, name }) {
         showNotification('Please wait — another save/export is still running.', 'error');
         return;
     }
-    const btn = document.getElementById('btnSaveTemplate');
+        const btn = document.getElementById('btnSaveTemplate');
     const btnAnother = document.getElementById('btnSaveAnother');
     const btnExport = document.getElementById('btnExportPptx');
     const originalBtnContent = btn ? btn.innerHTML : '';
@@ -2580,36 +2718,36 @@ async function persistTemplate({ mode, name }) {
             }, 900);
         } else {
             data = await editorFetchJson('/api/certificate_save.php', {
-                event_id: '<?php echo htmlspecialchars($eventId); ?>',
-                session_id: selectedSessionId,
-                template_scope: templateScope,
+                    event_id: '<?php echo htmlspecialchars($eventId); ?>',
+                    session_id: selectedSessionId,
+                    template_scope: templateScope,
                 template_id: (mode === 'another') ? '' : (editingTemplate?.id || ''),
-                title: name,
-                canvas_state: jsonState,
+                    title: name, 
+                    canvas_state: jsonState, 
                 thumbnail_url: thumb || null,
-                csrf_token: <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>
+                    csrf_token: <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>
             });
             if (!data.ok) throw new Error(data.error || 'Save failed');
             showNotification(mode === 'another' ? 'New template saved!' : 'Template saved successfully!');
-
+            
             isCanvasDirty = false;
             if (btn) {
                 btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg> <span id="btnSaveTemplateLabel">Saved!</span>`;
-                btn.classList.add('!from-emerald-500', '!to-emerald-400');
+            btn.classList.add('!from-emerald-500', '!to-emerald-400');
             }
-
+            
             redirected = true;
             setTimeout(() => {
                 try {
-                    const nextUrl = new URL(window.location.href);
+                const nextUrl = new URL(window.location.href);
                     const tid = data?.template_id || editingTemplate?.id || '';
                     if (tid) nextUrl.searchParams.set('template_id', tid);
-                    if (data?.template_scope === 'session' && data?.session_id) {
-                        nextUrl.searchParams.set('session_id', data.session_id);
+                if (data?.template_scope === 'session' && data?.session_id) {
+                    nextUrl.searchParams.set('session_id', data.session_id);
                     } else if (!(editingTemplate?.scope === 'session' && editingTemplate?.sessionId)) {
-                        nextUrl.searchParams.delete('session_id');
-                    }
-                    window.location.href = nextUrl.toString();
+                    nextUrl.searchParams.delete('session_id');
+                }
+                window.location.href = nextUrl.toString();
                 } catch (_) {
                     redirected = false;
                     editorIoBusy = false;
@@ -2618,7 +2756,7 @@ async function persistTemplate({ mode, name }) {
                 }
             }, 700);
         }
-    } catch (err) {
+        } catch (err) {
         const msg = (err && err.name === 'AbortError')
             ? 'Save timed out. Try again (large images can slow this down).'
             : (err.message || 'Save failed');
@@ -2845,8 +2983,11 @@ function filterCustomTemplatesByScope() {
 function doLoadPreset(type, cardEl) {
     isProgrammaticChange = true;
     canvas.clear();
+    canvas.backgroundImage = null;
 
-    if (type === 'classic-green') {
+    if (type === 'blank') {
+        canvas.backgroundColor = '#ffffff';
+    } else if (type === 'classic-green') {
         canvas.backgroundColor = '#064e3b';
         canvas.add(
             new fabric.Rect({ left: 0, top: 0, width: sizes['A4'].width, height: 25, fill: '#f6ad55', selectable: false, evented: false }),

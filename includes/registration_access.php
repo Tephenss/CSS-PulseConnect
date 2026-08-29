@@ -82,6 +82,33 @@ function event_registration_limit(array $event): ?int
     return normalize_registration_limit($event['registration_limit'] ?? null);
 }
 
+const EVENT_FEE_MAX = 5000.0;
+const DESCRIPTION_MAX_WORDS = 200;
+
+function count_description_words(string $text): int
+{
+    $trimmed = trim($text);
+    if ($trimmed === '') {
+        return 0;
+    }
+
+    $parts = preg_split('/\s+/u', $trimmed, -1, PREG_SPLIT_NO_EMPTY);
+    return is_array($parts) ? count($parts) : 0;
+}
+
+function validate_event_description_words(string $description): ?string
+{
+    if (trim($description) === '') {
+        return 'Event description is required.';
+    }
+
+    if (count_description_words($description) > DESCRIPTION_MAX_WORDS) {
+        return 'Description must be ' . DESCRIPTION_MAX_WORDS . ' words or less.';
+    }
+
+    return null;
+}
+
 function normalize_event_fee(mixed $value): ?float
 {
     if ($value === null || $value === '') {
@@ -97,7 +124,7 @@ function normalize_event_fee(mixed $value): ?float
     }
 
     $fee = round((float) $value, 2);
-    if ($fee < 0 || $fee > 9999999.99) {
+    if ($fee < 0 || $fee > EVENT_FEE_MAX) {
         return null;
     }
 
@@ -245,18 +272,6 @@ function resolve_registration_close_extend_request(
     mixed $requestedDaysFromAnchor,
     ?DateTimeInterface $now = null
 ): array {
-    $base = event_registration_base_last_day($event);
-    $maxLast = event_registration_max_last_day($event);
-    if ($base === null || $maxLast === null) {
-        return [
-            'ok' => true,
-            'extend_days' => 0,
-            'last_day' => null,
-            'anchor' => null,
-            'max_last_day' => null,
-        ];
-    }
-
     if ($requestedDaysFromAnchor === null || $requestedDaysFromAnchor === '') {
         $requested = 0;
     } elseif (!is_numeric($requestedDaysFromAnchor)) {
@@ -278,6 +293,24 @@ function resolve_registration_close_extend_request(
         return [
             'ok' => false,
             'error' => 'Extension days cannot be more than 60.',
+        ];
+    }
+
+    $base = event_registration_base_last_day($event);
+    $maxLast = event_registration_max_last_day($event);
+    if ($base === null || $maxLast === null) {
+        if ($requested > 0) {
+            return [
+                'ok' => false,
+                'error' => 'This event has no registration close-limit weeks set, so days cannot be extended.',
+            ];
+        }
+        return [
+            'ok' => true,
+            'extend_days' => 0,
+            'last_day' => null,
+            'anchor' => null,
+            'max_last_day' => null,
         ];
     }
 

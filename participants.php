@@ -95,6 +95,8 @@ if ($role === 'teacher' && $participantTab === 'absence_reasons') {
 $backHref = event_management_return_to($role, isset($_GET['return_to']) ? (string) $_GET['return_to'] : null);
 $hasStudentRequirements = event_has_student_requirements($eventId, $headers);
 $isEventCreator = $role === 'admin' || ((string) ($event['created_by'] ?? '') === $userId);
+$canResetAttendance = $isEventCreator;
+$canRemoveParticipant = $role === 'admin';
 $isAbsenceFormCreator = ((string) ($event['created_by'] ?? '') === $userId);
 $absenceExportHtml = '';
 if ($isAbsenceFormCreator) {
@@ -810,7 +812,9 @@ if ($usesSessions) {
                 <?php foreach ($sessions as $session): ?>
                   <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
                 <?php endforeach; ?>
-                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Action</th>
+                <?php if ($canResetAttendance): ?>
+                  <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Action</th>
+                <?php endif; ?>
               </tr>
             </thead>
             <tbody class="divide-y divide-zinc-100">
@@ -868,11 +872,13 @@ if ($usesSessions) {
                       <?php endif; ?>
                     </td>
                   <?php endforeach; ?>
+                  <?php if ($canResetAttendance): ?>
                   <td class="px-4 py-4">
                     <button class="btnResetAttendance rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
                       <?= htmlspecialchars($resetButtonLabel) ?>
                     </button>
                   </td>
+                  <?php endif; ?>
                 </tr>
               <?php endforeach; ?>
             </tbody>
@@ -1202,12 +1208,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     header('Content-Type: application/vnd.ms-excel; charset=utf-8');
     header('Content-Disposition: attachment; filename="Event_Participants_' . preg_replace('/[^A-Za-z0-9_\-]/', '_', (string)($event['title'] ?? '')) . '.xls"');
     
-    // Group participants by Section
+    // Group participants by block (section name)
     $sectionsMap = [];
     foreach ($participants as $r) {
         $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
         $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
-        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Section';
+        $secName = is_array($sec) && isset($sec['name']) ? $sec['name'] : 'Unknown Block';
         
         $yearKey = student_roster_resolve_year_key(
             trim((string) ($r['student_id'] ?? '')),
@@ -1226,6 +1232,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
 
     $eventTitle = strtoupper(htmlspecialchars((string)($event['title'] ?? 'UNKNOWN EVENT')));
     $eventDate = ($start ? $start->format('M d, Y') : '') . ($multiDay && $end ? ' - ' . $end->format('M d, Y') : '');
+    $colCount = 7;
 
     echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
     echo '<head><meta charset="utf-8"> <style>';
@@ -1236,53 +1243,76 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     echo '  .event-hdr { background-color: #ea580c; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 14pt; font-weight: bold; padding: 15px; text-align: center; height: 35px; border: 1pt solid #c2410c; }';
     echo '  .event-date { background-color: #fef2f2; color: #991b1b; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; text-align: center; height: 25px; border-bottom: 2pt solid #ea580c; }';
     echo '  .sec-hdr { background-color: #1e293b; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; padding: 10px; height: 25px; }';
-    echo '  .col-hdr { background-color: #f8fafc; border: 1pt solid #cbd5e1; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; height: 30px; }';
+    echo '  .col-hdr { background-color: #f8fafc; border: 1pt solid #cbd5e1; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; height: 30px; white-space: nowrap; mso-rotate: 0; }';
     echo '  .data-cell { border: 0.2pt solid #e2e8f0; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; height: 25px; vertical-align: middle; }';
     echo '  .compl { color: #059669; font-weight: bold; text-align: center; background-color: #f0fdf4; }';
     echo '  .pend  { color: #d97706; font-weight: bold; text-align: center; background-color: #fffbeb; }';
+    echo '  col.col-name { width: 280px; mso-width-source: userset; mso-width-alt: 7000; }';
+    echo '  col.col-studno { width: 170px; mso-width-source: userset; mso-width-alt: 4800; }';
+    echo '  col.col-year { width: 70px; mso-width-source: userset; mso-width-alt: 2000; }';
+    echo '  col.col-block { width: 150px; mso-width-source: userset; mso-width-alt: 4200; }';
+    echo '  col.col-time { width: 160px; mso-width-source: userset; mso-width-alt: 4500; }';
+    echo '  col.col-status { width: 110px; mso-width-source: userset; mso-width-alt: 3000; }';
     echo ' </style></head>';
     echo '<body>';
-    echo '<table border="0" style="border-collapse:collapse;">';
+    echo '<table border="0" style="border-collapse:collapse; table-layout:fixed;">';
+    echo '<colgroup>';
+    echo '<col class="col-name" style="width:280px" />';
+    echo '<col class="col-studno" style="width:170px" />';
+    echo '<col class="col-year" style="width:70px" />';
+    echo '<col class="col-block" style="width:150px" />';
+    echo '<col class="col-time" style="width:160px" />';
+    echo '<col class="col-time" style="width:160px" />';
+    echo '<col class="col-status" style="width:110px" />';
+    echo '</colgroup>';
     
     // Top Logo & Header (Merged perfectly)
-    echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+    echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
     echo '<tr>';
-    echo '  <td colspan="1" rowspan="3" class="logo-badge">CCS</td>'; // Styled badge logo
-    echo '  <td colspan="5" class="hdr-main">COLLEGE OF COMPUTER STUDIES</td>';
+    echo '  <td colspan="1" rowspan="3" class="logo-badge">CCS</td>';
+    echo '  <td colspan="' . ($colCount - 1) . '" class="hdr-main">COLLEGE OF COMPUTER STUDIES</td>';
     echo '</tr>';
-    echo '<tr><td colspan="5" class="hdr-sub">PulseConnect Participant Registry Report</td></tr>';
-    echo '<tr><td colspan="5" class="gen-on">Generated on ' . date('F j, Y, g:i A') . '</td></tr>';
+    echo '<tr><td colspan="' . ($colCount - 1) . '" class="hdr-sub">PulseConnect Participant Registry Report</td></tr>';
+    echo '<tr><td colspan="' . ($colCount - 1) . '" class="gen-on">Generated on ' . date('F j, Y, g:i A') . '</td></tr>';
     
-    echo '<tr><td colspan="6" style="height: 15px;"></td></tr>';
+    echo '<tr><td colspan="' . $colCount . '" style="height: 15px;"></td></tr>';
     
     // Event Center Banner
-    echo '<tr><td colspan="6" class="event-hdr">' . htmlspecialchars($eventTitle) . '</td></tr>';
-    echo '<tr><td colspan="6" class="event-date">' . htmlspecialchars($eventDate) . '</td></tr>';
-    echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+    echo '<tr><td colspan="' . $colCount . '" class="event-hdr">' . htmlspecialchars($eventTitle) . '</td></tr>';
+    echo '<tr><td colspan="' . $colCount . '" class="event-date">' . htmlspecialchars($eventDate) . '</td></tr>';
+    echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
 
     foreach($sectionsMap as $secName => $secData) {
-        $secText = 'SECTION: ' . strtoupper(htmlspecialchars($secName)) . '   |   YEAR LEVEL: ' . htmlspecialchars($secData['year']);
-        echo '<tr><td colspan="6" class="sec-hdr">' . $secText . '</td></tr>';
+        $secText = 'BLOCK: ' . strtoupper(htmlspecialchars($secName)) . '   |   YEAR LEVEL: ' . htmlspecialchars($secData['year']);
+        echo '<tr><td colspan="' . $colCount . '" class="sec-hdr">' . $secText . '</td></tr>';
         
         echo '<tr>';
-        echo ' <th class="col-hdr" style="width:300px;">STUDENT NAME</th>';
-        echo ' <th class="col-hdr" style="width:130px;">STUDENT NUMBER</th>';
-        echo ' <th class="col-hdr" style="width:80px;">YEAR</th>';
-        echo ' <th class="col-hdr" style="width:150px;">SECTION</th>';
-        echo ' <th class="col-hdr" style="width:180px;">CHECK IN</th>';
-        echo ' <th class="col-hdr" style="width:120px;">STATUS</th>';
+        echo ' <th class="col-hdr" style="width:280px;">STUDENT NAME</th>';
+        echo ' <th class="col-hdr" style="width:170px; white-space:nowrap;">STUDENT&nbsp;NUMBER</th>';
+        echo ' <th class="col-hdr" style="width:70px;">YEAR</th>';
+        echo ' <th class="col-hdr" style="width:150px;">BLOCK</th>';
+        echo ' <th class="col-hdr" style="width:160px;">TIME IN</th>';
+        echo ' <th class="col-hdr" style="width:160px;">TIME OUT</th>';
+        echo ' <th class="col-hdr" style="width:110px;">STATUS</th>';
         echo '</tr>';
         
         foreach($secData['participants'] as $r) {
             $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
-            $nameParts = [];
-            foreach (['first_name','middle_name','last_name'] as $k) {
+            $lastName = trim((string) ($u['last_name'] ?? ''));
+            $givenParts = [];
+            foreach (['first_name', 'middle_name'] as $k) {
                 $v = trim((string) ($u[$k] ?? ''));
-                if ($v !== '') $nameParts[] = $v;
+                if ($v !== '') $givenParts[] = $v;
             }
-            $name = implode(' ', $nameParts);
+            $given = implode(' ', $givenParts);
             $suffix = trim((string) ($u['suffix'] ?? ''));
-            if ($suffix !== '') $name .= ', ' . $suffix;
+            if ($lastName !== '' && $given !== '') {
+                $name = $lastName . ($suffix !== '' ? ' ' . $suffix : '') . ', ' . $given;
+            } elseif ($lastName !== '') {
+                $name = $lastName . ($suffix !== '' ? ', ' . $suffix : '');
+            } else {
+                $name = $given . ($suffix !== '' ? ', ' . $suffix : '');
+            }
             
             $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
             $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
@@ -1293,12 +1323,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
                     $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : (isset($atts) && is_array($atts) ? $atts : null);
                 }
             }
-            $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
+            $checkIn = is_array($attendance) ? trim((string) ($attendance['check_in_at'] ?? '')) : '';
+            $checkOut = is_array($attendance) ? trim((string) ($attendance['check_out_at'] ?? '')) : '';
             $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
             
-            if ($checkIn) {
-                $checkInLocal = $toLocalDt((string) $checkIn);
-                if ($checkInLocal) $checkIn = $checkInLocal->format('m/d/Y h:i A');
+            $timeInDisplay = '-';
+            $timeOutDisplay = '-';
+            if ($checkIn !== '') {
+                $checkInLocal = $toLocalDt($checkIn);
+                if ($checkInLocal) {
+                    $timeInDisplay = $checkInLocal->format('m/d/Y h:i A');
+                }
+            }
+            if ($checkOut !== '') {
+                $checkOutLocal = $toLocalDt($checkOut);
+                if ($checkOutLocal) {
+                    $timeOutDisplay = $checkOutLocal->format('m/d/Y h:i A');
+                }
             }
             $normalizedStatus = strtolower(trim((string) $attStatus));
             $isComp = $checkIn !== '' || in_array($normalizedStatus, ['completed', 'present', 'late', 'early', 'scanned'], true);
@@ -1314,14 +1355,15 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             
             echo '<tr>';
             echo ' <td class="data-cell" style="padding-left: 5px;">' . htmlspecialchars($name) . '</td>';
-            echo ' <td class="data-cell" style="text-align:center; font-family: monospace;">' . htmlspecialchars($studentNumber) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center; font-family: Consolas, monospace; mso-number-format:\'\\@\';">' . htmlspecialchars($studentNumber) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secData['year']) . '</td>';
             echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($secName) . '</td>';
-            echo ' <td class="data-cell" style="text-align:center;">' . ($checkIn ? htmlspecialchars($checkIn) : '-') . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($timeInDisplay) . '</td>';
+            echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($timeOutDisplay) . '</td>';
             echo ' <td class="data-cell ' . $statusCls . '">' . $statusStr . '</td>';
             echo '</tr>';
         }
-        echo '<tr><td colspan="6" style="height: 10px;"></td></tr>';
+        echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
     }
     
     echo '</table></body></html>';
@@ -1333,17 +1375,24 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="participants.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Name', 'StudentNumber', 'Email', 'RegisteredAt', 'Token', 'CheckIn', 'AttendanceStatus']);
+    fputcsv($out, ['Name', 'StudentNumber', 'Email', 'RegisteredAt', 'Token', 'TimeIn', 'TimeOut', 'AttendanceStatus']);
     foreach ($participants as $r) {
         $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
-        $nameParts = [];
-        foreach (['first_name','middle_name','last_name'] as $k) {
+        $lastName = trim((string) ($u['last_name'] ?? ''));
+        $givenParts = [];
+        foreach (['first_name', 'middle_name'] as $k) {
             $v = trim((string) ($u[$k] ?? ''));
-            if ($v !== '') $nameParts[] = $v;
+            if ($v !== '') $givenParts[] = $v;
         }
-        $name = implode(' ', $nameParts);
+        $given = implode(' ', $givenParts);
         $suffix = trim((string) ($u['suffix'] ?? ''));
-        if ($suffix !== '') $name .= ', ' . $suffix;
+        if ($lastName !== '' && $given !== '') {
+            $name = $lastName . ($suffix !== '' ? ' ' . $suffix : '') . ', ' . $given;
+        } elseif ($lastName !== '') {
+            $name = $lastName . ($suffix !== '' ? ', ' . $suffix : '');
+        } else {
+            $name = $given . ($suffix !== '' ? ', ' . $suffix : '');
+        }
 
         $tickets = isset($r['tickets']) && is_array($r['tickets']) ? $r['tickets'] : [];
         $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
@@ -1356,8 +1405,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $attendance = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : (isset($atts) && is_array($atts) ? $atts : null);
             }
         }
-        $checkIn = is_array($attendance) ? ($attendance['check_in_at'] ?? '') : '';
-        $attStatus = is_array($attendance) ? ($attendance['status'] ?? '') : '';
+        $checkIn = is_array($attendance) ? trim((string) ($attendance['check_in_at'] ?? '')) : '';
+        $checkOut = is_array($attendance) ? trim((string) ($attendance['check_out_at'] ?? '')) : '';
+        $attStatus = is_array($attendance) ? (string) ($attendance['status'] ?? '') : '';
+        $timeIn = '';
+        $timeOut = '';
+        if ($checkIn !== '') {
+            $checkInLocal = $toLocalDt($checkIn);
+            if ($checkInLocal) {
+                $timeIn = $checkInLocal->format('m/d/Y h:i A');
+            }
+        }
+        if ($checkOut !== '') {
+            $checkOutLocal = $toLocalDt($checkOut);
+            if ($checkOutLocal) {
+                $timeOut = $checkOutLocal->format('m/d/Y h:i A');
+            }
+        }
         $studentNumber = trim((string) ($u['student_id'] ?? ''));
         if ($studentNumber === '') {
             $studentNumber = trim((string) ($r['student_number'] ?? ''));
@@ -1372,8 +1436,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
             (string) ($u['email'] ?? ''),
             (string) ($r['registered_at'] ?? ''),
             $token,
-            is_string($checkIn) ? $checkIn : '',
-            (string) $attStatus,
+            $timeIn,
+            $timeOut,
+            $attStatus,
         ]);
     }
     fclose($out);
@@ -1792,7 +1857,7 @@ render_event_tabs([
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Time In / Out</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Status</th>
-        <?php if ($role === 'admin'): ?>
+        <?php if ($canResetAttendance || $canRemoveParticipant): ?>
           <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-zinc-500">Actions</th>
         <?php endif; ?>
       </tr>
@@ -1800,7 +1865,7 @@ render_event_tabs([
     <tbody class="divide-y divide-zinc-100">
       <?php if (count($rows) === 0): ?>
         <tr class="pointer-events-none">
-          <td colspan="<?= $role === 'admin' ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+          <td colspan="<?= ($canResetAttendance || $canRemoveParticipant) ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
             <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
           </td>
         </tr>
@@ -1935,9 +2000,10 @@ render_event_tabs([
           <td class="px-4 py-3">
             <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
           </td>
-          <?php if ($role === 'admin'): ?>
+          <?php if ($canResetAttendance || $canRemoveParticipant): ?>
             <td class="px-4 py-3 text-right">
               <div class="admin-btns justify-end">
+                <?php if ($canResetAttendance): ?>
                 <button
                   type="button"
                   class="btnResetAttendance"
@@ -1945,6 +2011,8 @@ render_event_tabs([
                   title="<?= htmlspecialchars($resetConfirmMessage) ?>"
                   aria-label="<?= htmlspecialchars($resetButtonLabel) ?>"
                 ><?= htmlspecialchars($resetButtonShort) ?></button>
+                <?php endif; ?>
+                <?php if ($canRemoveParticipant): ?>
                 <button
                   type="button"
                   class="btnRemove"
@@ -1952,6 +2020,7 @@ render_event_tabs([
                   title="Remove participant"
                   aria-label="Remove participant"
                 >✕</button>
+                <?php endif; ?>
               </div>
             </td>
           <?php endif; ?>
@@ -1960,7 +2029,7 @@ render_event_tabs([
 
       <?php if (count($rows) > 0): ?>
         <tr id="participantSearchEmpty" class="pointer-events-none hidden">
-          <td colspan="<?= $role === 'admin' ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+          <td colspan="<?= ($canResetAttendance || $canRemoveParticipant) ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
             <p class="text-zinc-700 font-semibold text-sm">No results match your search</p>
           </td>
         </tr>
@@ -2121,7 +2190,7 @@ render_event_tabs([
 </div>
 <?php endif; ?>
 
-<?php if ($role === 'admin'): ?>
+<?php if ($canResetAttendance || $canRemoveParticipant): ?>
 <script>
   document.querySelectorAll('.btn-view-reason').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2139,6 +2208,7 @@ render_event_tabs([
     });
   });
 
+  <?php if ($canResetAttendance): ?>
   document.querySelectorAll('.btnResetAttendance').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ok = confirm(<?= json_encode($resetConfirmMessage) ?>);
@@ -2161,7 +2231,9 @@ render_event_tabs([
       }
     });
   });
+  <?php endif; ?>
 
+  <?php if ($canRemoveParticipant): ?>
   document.querySelectorAll('.btnRemove').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ok = confirm('Remove this participant?');
@@ -2184,6 +2256,7 @@ render_event_tabs([
       }
     });
   });
+  <?php endif; ?>
 
   // Client-side live search
   const searchInput = document.getElementById('participantSearch');

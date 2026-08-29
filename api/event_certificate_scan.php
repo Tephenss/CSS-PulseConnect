@@ -160,6 +160,8 @@ if ($matchedTemplateId !== '') {
                 // Stamp sample code onto certificate_code for preview.
                 if ($sampleCode !== '' && isset($canvasState['objects']) && is_array($canvasState['objects'])) {
                     $foundCode = false;
+                    $cw = (float) ($canvasState['width'] ?? 1123);
+                    $ch = (float) ($canvasState['height'] ?? 794);
                     foreach ($canvasState['objects'] as $i => $obj) {
                         if (!is_array($obj)) {
                             continue;
@@ -170,6 +172,30 @@ if ($matchedTemplateId !== '') {
                             $canvasState['objects'][$i]['text'] = $sampleCode;
                             $canvasState['objects'][$i]['id'] = 'certificate_code';
                             $canvasState['objects'][$i]['name'] = 'Certificate Code';
+                            $canvasState['objects'][$i]['type'] = 'textbox';
+                            $fit = certificate_pptx_fit_code_box(
+                                (float) ($canvasState['objects'][$i]['left'] ?? $cw * 0.05),
+                                (float) ($canvasState['objects'][$i]['top'] ?? $ch * 0.05),
+                                max(40.0, (float) ($canvasState['objects'][$i]['width'] ?? 120)),
+                                max(14.0, (float) ($canvasState['objects'][$i]['height'] ?? 22)),
+                                $sampleCode,
+                                isset($canvasState['objects'][$i]['fontSize']) && is_numeric($canvasState['objects'][$i]['fontSize'])
+                                    ? (float) $canvasState['objects'][$i]['fontSize']
+                                    : null,
+                                isset($canvasState['objects'][$i]['textAlign']) && is_string($canvasState['objects'][$i]['textAlign'])
+                                    ? (string) $canvasState['objects'][$i]['textAlign']
+                                    : null,
+                                $cw
+                            );
+                            $canvasState['objects'][$i]['left'] = $fit['left'];
+                            $canvasState['objects'][$i]['top'] = $fit['top'];
+                            $canvasState['objects'][$i]['width'] = $fit['width'];
+                            $canvasState['objects'][$i]['height'] = $fit['height'];
+                            $canvasState['objects'][$i]['textAlign'] = $fit['textAlign'];
+                            $canvasState['objects'][$i]['scaleX'] = 1;
+                            $canvasState['objects'][$i]['scaleY'] = 1;
+                            $canvasState['objects'][$i]['originX'] = 'left';
+                            $canvasState['objects'][$i]['originY'] = 'top';
                             $foundCode = true;
                             break;
                         }
@@ -186,20 +212,28 @@ if ($matchedTemplateId !== '') {
                                 break;
                             }
                         }
-                        $cw = (float) ($canvasState['width'] ?? 1123);
-                        $ch = (float) ($canvasState['height'] ?? 794);
-                        $canvasState['objects'][] = certificate_pptx_sync_new_code_object(
+                        $fit = certificate_pptx_fit_code_box(
                             $codeItem ? (float) ($codeItem['left'] ?? $cw * 0.05) : $cw * 0.05,
                             $codeItem ? (float) ($codeItem['top'] ?? $ch * 0.88) : $ch * 0.88,
                             $codeItem ? max(40.0, (float) ($codeItem['width'] ?? 220)) : min(320.0, $cw * 0.35),
                             $codeItem ? max(14.0, (float) ($codeItem['height'] ?? 22)) : 22.0,
                             $sampleCode,
+                            $codeItem && isset($codeItem['fontSize']) && is_numeric($codeItem['fontSize']) ? (float) $codeItem['fontSize'] : null,
+                            $codeItem && isset($codeItem['textAlign']) && is_string($codeItem['textAlign']) ? (string) $codeItem['textAlign'] : 'left',
+                            $cw
+                        );
+                        $canvasState['objects'][] = certificate_pptx_sync_new_code_object(
+                            $fit['left'],
+                            $fit['top'],
+                            $fit['width'],
+                            $fit['height'],
+                            $sampleCode,
                             $codeItem ? [
                                 'fontSize' => isset($codeItem['fontSize']) && is_numeric($codeItem['fontSize']) ? (float) $codeItem['fontSize'] : null,
-                                'textAlign' => isset($codeItem['textAlign']) && is_string($codeItem['textAlign']) ? $codeItem['textAlign'] : 'left',
+                                'textAlign' => $fit['textAlign'],
                                 'fontWeight' => isset($codeItem['fontWeight']) && is_string($codeItem['fontWeight']) ? $codeItem['fontWeight'] : 'bold',
                                 'fontFamily' => isset($codeItem['fontFamily']) && is_string($codeItem['fontFamily']) ? $codeItem['fontFamily'] : 'Arial',
-                            ] : null
+                            ] : ['textAlign' => $fit['textAlign'], 'fontWeight' => 'bold', 'fontFamily' => 'Arial', 'fontSize' => null]
                         );
                     }
                 }

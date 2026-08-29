@@ -26,12 +26,53 @@ function spreadsheet_cell_xml(string $cellRef, string $value, int $styleIndex = 
         . '</t></is></c>';
 }
 
-function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName = 'Registration Access', array $options = []): string
+function spreadsheet_styles_xml(): string
 {
-    if (!class_exists('ZipArchive')) {
-        throw new RuntimeException('ZipArchive is required to export Excel files.');
-    }
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        . '<fonts count="5">'
+        . '<font><sz val="11"/><name val="Calibri"/><color rgb="FF111827"/></font>'
+        . '<font><b/><sz val="18"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>'
+        . '<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF9A3412"/></font>'
+        . '<font><sz val="10"/><name val="Calibri"/><color rgb="FF374151"/></font>'
+        . '<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>'
+        . '</fonts>'
+        . '<fills count="8">'
+        . '<fill><patternFill patternType="none"/></fill>'
+        . '<fill><patternFill patternType="gray125"/></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FFF97316"/><bgColor indexed="64"/></patternFill></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FFFFEDD5"/><bgColor indexed="64"/></patternFill></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FFE0F2FE"/><bgColor indexed="64"/></patternFill></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor indexed="64"/></patternFill></fill>'
+        . '<fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/><bgColor indexed="64"/></patternFill></fill>'
+        . '</fills>'
+        . '<borders count="2">'
+        . '<border><left/><right/><top/><bottom/><diagonal/></border>'
+        . '<border><left style="thin"><color rgb="FFE5E7EB"/></left><right style="thin"><color rgb="FFE5E7EB"/></right><top style="thin"><color rgb="FFE5E7EB"/></top><bottom style="thin"><color rgb="FFE5E7EB"/></bottom><diagonal/></border>'
+        . '</borders>'
+        . '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        . '<cellXfs count="9">'
+        . '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        . '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        . '<xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        . '<xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>'
+        . '<xf numFmtId="0" fontId="4" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
+        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>'
+        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>'
+        . '<xf numFmtId="0" fontId="2" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        . '</cellXfs>'
+        . '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        . '</styleSheet>';
+}
 
+/**
+ * @param list<string> $headerRow
+ * @param list<list<string>> $dataRows
+ */
+function spreadsheet_build_worksheet_xml(array $headerRow, array $dataRows, array $options = []): string
+{
     $columnCount = max(1, count($headerRow));
     $lastColumnLabel = spreadsheet_column_label($columnCount - 1);
     $title = trim((string) ($options['title'] ?? 'PulseConnect Registration Access'));
@@ -111,7 +152,7 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
     $lastDataRow = max(4, count($rows));
     $autoFilterXml = '<autoFilter ref="A4:' . $lastColumnLabel . $lastDataRow . '"/>';
 
-    $sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
         . ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         . '<sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
@@ -121,17 +162,70 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
         . $autoFilterXml
         . $mergeCellsXml
         . '</worksheet>';
+}
+
+function spreadsheet_sanitize_sheet_name(string $name): string
+{
+    $name = trim(preg_replace('/[\\\\\\/\\?\\*\\[\\]:]+/', '-', $name) ?? $name);
+    if ($name === '') {
+        $name = 'Sheet';
+    }
+    if (strlen($name) > 31) {
+        $name = substr($name, 0, 31);
+    }
+    return $name;
+}
+
+/**
+ * @param list<array{name:string,headerRow:list<string>,dataRows:list<list<string>>,options?:array}> $sheets
+ */
+function build_multi_sheet_xlsx(array $sheets, array $workbookOptions = []): string
+{
+    if (!class_exists('ZipArchive')) {
+        throw new RuntimeException('ZipArchive is required to export Excel files.');
+    }
+    if ($sheets === []) {
+        throw new RuntimeException('No worksheets to export.');
+    }
+
+    $sheetCount = count($sheets);
+    $workbookSheetNodes = [];
+    $workbookRels = [];
+    $contentTypeOverrides = [
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>',
+    ];
+    $worksheetXmlByPath = [];
+
+    foreach ($sheets as $index => $sheet) {
+        $sheetId = $index + 1;
+        $relId = 'rId' . $sheetId;
+        $sheetPath = 'xl/worksheets/sheet' . $sheetId . '.xml';
+        $sheetName = spreadsheet_sanitize_sheet_name((string) ($sheet['name'] ?? ('Sheet' . $sheetId)));
+        $headerRow = array_values(is_array($sheet['headerRow'] ?? null) ? $sheet['headerRow'] : []);
+        $dataRows = is_array($sheet['dataRows'] ?? null) ? $sheet['dataRows'] : [];
+        $options = is_array($sheet['options'] ?? null) ? $sheet['options'] : [];
+
+        $workbookSheetNodes[] = '<sheet name="' . spreadsheet_xml_escape($sheetName) . '" sheetId="' . $sheetId . '" r:id="' . $relId . '"/>';
+        $workbookRels[] = '<Relationship Id="' . $relId . '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' . $sheetId . '.xml"/>';
+        $contentTypeOverrides[] = '<Override PartName="/' . $sheetPath . '" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+        $worksheetXmlByPath[$sheetPath] = spreadsheet_build_worksheet_xml($headerRow, $dataRows, $options);
+    }
+
+    $stylesRelId = 'rId' . ($sheetCount + 1);
+    $workbookRels[] = '<Relationship Id="' . $stylesRelId . '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>';
 
     $workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         . '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
         . ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        . '<sheets><sheet name="' . spreadsheet_xml_escape($sheetName) . '" sheetId="1" r:id="rId1"/></sheets>'
+        . '<sheets>' . implode('', $workbookSheetNodes) . '</sheets>'
         . '</workbook>';
 
     $workbookRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
-        . '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        . implode('', $workbookRels)
         . '</Relationships>';
 
     $relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -145,50 +239,8 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
         . '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         . '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         . '<Default Extension="xml" ContentType="application/xml"/>'
-        . '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-        . '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-        . '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-        . '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-        . '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        . implode('', $contentTypeOverrides)
         . '</Types>';
-
-    $stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        . '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        . '<fonts count="5">'
-        . '<font><sz val="11"/><name val="Calibri"/><color rgb="FF111827"/></font>'
-        . '<font><b/><sz val="18"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>'
-        . '<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF9A3412"/></font>'
-        . '<font><sz val="10"/><name val="Calibri"/><color rgb="FF374151"/></font>'
-        . '<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>'
-        . '</fonts>'
-        . '<fills count="8">'
-        . '<fill><patternFill patternType="none"/></fill>'
-        . '<fill><patternFill patternType="gray125"/></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FFF97316"/><bgColor indexed="64"/></patternFill></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FFFFEDD5"/><bgColor indexed="64"/></patternFill></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FFE0F2FE"/><bgColor indexed="64"/></patternFill></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor indexed="64"/></patternFill></fill>'
-        . '<fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/><bgColor indexed="64"/></patternFill></fill>'
-        . '</fills>'
-        . '<borders count="2">'
-        . '<border><left/><right/><top/><bottom/><diagonal/></border>'
-        . '<border><left style="thin"><color rgb="FFE5E7EB"/></left><right style="thin"><color rgb="FFE5E7EB"/></right><top style="thin"><color rgb="FFE5E7EB"/></top><bottom style="thin"><color rgb="FFE5E7EB"/></bottom><diagonal/></border>'
-        . '</borders>'
-        . '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        . '<cellXfs count="9">'
-        . '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-        . '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
-        . '<xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
-        . '<xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>'
-        . '<xf numFmtId="0" fontId="4" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
-        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>'
-        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
-        . '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>'
-        . '<xf numFmtId="0" fontId="2" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
-        . '</cellXfs>'
-        . '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
-        . '</styleSheet>';
 
     $now = gmdate('Y-m-d\TH:i:s\Z');
     $coreXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -232,8 +284,10 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
     $zip->addFromString('docProps/core.xml', $coreXml);
     $zip->addFromString('xl/workbook.xml', $workbookXml);
     $zip->addFromString('xl/_rels/workbook.xml.rels', $workbookRelsXml);
-    $zip->addFromString('xl/styles.xml', $stylesXml);
-    $zip->addFromString('xl/worksheets/sheet1.xml', $sheetXml);
+    $zip->addFromString('xl/styles.xml', spreadsheet_styles_xml());
+    foreach ($worksheetXmlByPath as $path => $xml) {
+        $zip->addFromString($path, $xml);
+    }
     $zip->close();
 
     $binary = (string) file_get_contents($zipFile);
@@ -244,6 +298,18 @@ function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName 
     }
 
     return $binary;
+}
+
+function build_simple_xlsx(array $headerRow, array $dataRows, string $sheetName = 'Registration Access', array $options = []): string
+{
+    return build_multi_sheet_xlsx([
+        [
+            'name' => $sheetName,
+            'headerRow' => $headerRow,
+            'dataRows' => $dataRows,
+            'options' => $options,
+        ],
+    ]);
 }
 
 /**

@@ -43,7 +43,18 @@ function render_header(string $title, ?array $user): void
     echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . $assetVersion('/assets/css/layout.css') . '">';
     $roleClass = $role === 'teacher' ? 'role-teacher' : ($role === 'admin' ? 'role-admin' : 'role-student');
     echo '<link rel="stylesheet" href="/assets/css/auth.css?v=' . $assetVersion('/assets/css/auth.css') . '">';
+    echo '<style>
+      @keyframes skeleton-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+      }
+      .skeleton-pulse {
+        animation: skeleton-pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+    </style>';
     echo '</head><body class="min-h-screen bg-zinc-50 text-zinc-900 ' . $roleClass . '">';
+
+
 
     // Mobile overlay
     echo '<div id="sidebar-overlay" class="fixed inset-0 bg-black/40 z-40 opacity-0 pointer-events-none lg:hidden" onclick="closeMobileSidebar()"></div>';
@@ -143,6 +154,10 @@ function render_header(string $title, ?array $user): void
         echo '<a href="/admin_analytics" data-tooltip="Analytics" class="sidebar-link ' . (str_contains($title, 'Analytics') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>';
         echo '<span class="sidebar-label">Analytics</span></a>';
+
+        echo '<a href="/admin_showcase" data-tooltip="Showcase" class="sidebar-link ' . (str_contains($title, 'Showcase') ? 'active' : '') . '">';
+        echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z"/></svg>';
+        echo '<span class="sidebar-label">Showcase</span></a>';
 
         echo '<a href="/admin_users" data-tooltip="Users &amp; Roles" class="sidebar-link ' . (str_contains($title, 'Users') ? 'active' : '') . '">';
         echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>';
@@ -244,13 +259,13 @@ function render_header(string $title, ?array $user): void
                 </div>
 
                 <button id="notif-trigger" class="notif-trigger relative w-14 h-14 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center transform hover:-translate-y-1 group border-4 border-white/50">
-                    <svg class="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-                    </svg>
-                    <div id="notif-badge" class="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center hidden shadow-sm">
-                        0
-                    </div>
-                </button>
+                <svg class="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                </svg>
+                <div id="notif-badge" class="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center hidden shadow-sm">
+                    0
+                </div>
+            </button>
             </div>
         </div>
 
@@ -396,7 +411,7 @@ function render_header(string $title, ?array $user): void
                     badge.classList.add("hidden");
                 }
             }
-
+            
             function getPreviewDedupeKey(item) {
                 if (!item) return "";
                 if (item.dedupe_key) return String(item.dedupe_key);
@@ -603,72 +618,105 @@ function render_header(string $title, ?array $user): void
             }
             
             let notificationsInFlight = false;
+            let layoutBadgesInFlight = false;
 
-            async function fetchNotifications(isCatchUp) {
-                if (notificationsInFlight) {
+            function applyNotificationsPayload(data, isCatchUp) {
+                if (!data || !data.ok) return;
+                const nextNotifications = data.notifications || [];
+                const nextIds = nextNotifications.map((item) => item.id).filter(Boolean);
+                const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
+
+                if (!notificationsBootstrapped) {
+                    notificationsBootstrapped = true;
+                    polledNotificationIds = loadPolledNotificationIds();
+                    if (polledNotificationIds.length === 0 && nextIds.length > 0) {
+                        rememberPolledNotificationIds(nextIds);
+                    }
+                }
+
+                const freshUnread = nextNotifications.filter((item) => {
+                    if (!item || !item.id) return false;
+                    if (polledNotificationIds.includes(item.id)) return false;
+                    if (readIds.includes(item.id)) return false;
+                    return true;
+                });
+
+                if (freshUnread.length > 0) {
+                    if (document.visibilityState === "hidden") {
+                        freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
+                        maybeShowSystemNotification(freshUnread[0]);
+                    } else if (isCatchUp) {
+                        freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
+                        flushPendingPreviews();
+                    } else {
+                        showNotificationPreview(freshUnread[0]);
+                        freshUnread.slice(1).forEach(function (item) { enqueuePendingPreview(item); });
+                    }
+                    rememberPolledNotificationIds(freshUnread.map((item) => item.id));
+                } else {
+                    const unseenIds = nextIds.filter((id) => !polledNotificationIds.includes(id));
+                    if (unseenIds.length > 0) {
+                        rememberPolledNotificationIds(unseenIds);
+                    }
+                }
+
+                knownNotificationIds = nextIds;
+                loadedNotifications = nextNotifications;
+                        renderNotifications(loadedNotifications);
+                        updateBadge();
+            }
+
+            function applyApplicationsBadge(applications) {
+                var applicationsBadgeEl = document.getElementById("manage-applications-badge");
+                if (!applicationsBadgeEl || !applications || applications.ok !== true) return;
+                var count = Number(applications.count || 0);
+                if (!Number.isFinite(count) || count < 0) count = 0;
+                if (count <= 0) {
+                    applicationsBadgeEl.classList.add("hidden");
                     return;
                 }
+                applicationsBadgeEl.classList.remove("hidden");
+                applicationsBadgeEl.textContent = count > 99 ? "99+" : String(count);
+            }
+
+            function applyManageEventsFromBadges(manage) {
+                if (!manage || manage.ok !== true) return;
+                if (typeof window.PulseApplyManageEventsLite === "function") {
+                    window.PulseApplyManageEventsLite(manage);
+                }
+            }
+
+            async function fetchLayoutBadges(isCatchUp) {
+                if (layoutBadgesInFlight) return;
+                layoutBadgesInFlight = true;
                 notificationsInFlight = true;
                 const controller = new AbortController();
-                const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+                const timeoutId = window.setTimeout(() => controller.abort(), 10000);
                 try {
-                    // Periodic polls use TTL cache; catch-up (focus/visible) can force fresh.
                     const freshParam = isCatchUp ? "&fresh=1" : "";
-                    const res = await fetch("/api/get_notifications.php?limit=10" + freshParam + "&_=" + Date.now(), {
+                    const res = await fetch("/api/layout_badges.php?limit=10" + freshParam + "&_=" + Date.now(), {
                         cache: "no-store",
+                        credentials: "same-origin",
                         signal: controller.signal,
                     });
                     const data = await res.json();
-                    if (data.ok) {
-                        const nextNotifications = data.notifications || [];
-                        const nextIds = nextNotifications.map((item) => item.id).filter(Boolean);
-                        const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
-
-                        if (!notificationsBootstrapped) {
-                            notificationsBootstrapped = true;
-                            polledNotificationIds = loadPolledNotificationIds();
-                            if (polledNotificationIds.length === 0 && nextIds.length > 0) {
-                                rememberPolledNotificationIds(nextIds);
-                            }
-                        }
-
-                        const freshUnread = nextNotifications.filter((item) => {
-                            if (!item || !item.id) return false;
-                            if (polledNotificationIds.includes(item.id)) return false;
-                            if (readIds.includes(item.id)) return false;
-                            return true;
-                        });
-
-                        if (freshUnread.length > 0) {
-                            if (document.visibilityState === "hidden") {
-                                freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
-                                maybeShowSystemNotification(freshUnread[0]);
-                            } else if (isCatchUp) {
-                                freshUnread.forEach(function (item) { enqueuePendingPreview(item); });
-                                flushPendingPreviews();
-                            } else {
-                                showNotificationPreview(freshUnread[0]);
-                                freshUnread.slice(1).forEach(function (item) { enqueuePendingPreview(item); });
-                            }
-                            rememberPolledNotificationIds(freshUnread.map((item) => item.id));
-                        } else {
-                            const unseenIds = nextIds.filter((id) => !polledNotificationIds.includes(id));
-                            if (unseenIds.length > 0) {
-                                rememberPolledNotificationIds(unseenIds);
-                            }
-                        }
-
-                        knownNotificationIds = nextIds;
-                        loadedNotifications = nextNotifications;
-                        renderNotifications(loadedNotifications);
-                        updateBadge();
+                    if (data && data.ok) {
+                        applyNotificationsPayload(data, !!isCatchUp);
+                        applyManageEventsFromBadges(data.manage_events || null);
+                        applyApplicationsBadge(data.applications || null);
                     }
                 } catch (e) {
-                    console.error("Failed to load notifications", e);
+                    console.error("Failed to load layout badges", e);
                 } finally {
                     window.clearTimeout(timeoutId);
+                    layoutBadgesInFlight = false;
                     notificationsInFlight = false;
                 }
+            }
+
+            async function fetchNotifications(isCatchUp) {
+                // Prefer combined badges poll; keep name for existing focus hooks.
+                await fetchLayoutBadges(isCatchUp);
             }
             
             trigger.addEventListener("click", (e) => {
@@ -740,7 +788,142 @@ function render_header(string $title, ?array $user): void
         $emailMasked = mb_substr($localPart, 0, $keep) . '***@' . $domainPart;
     }
     echo '<script>window.CSRF_TOKEN=' . json_encode($csrf) . ';window.PULSE_USER_ID=' . json_encode((string) ($user['id'] ?? '')) . ';window.PULSE_USER_EMAIL_MASKED=' . json_encode($emailMasked) . ';</script>';
-    echo '<main class="flex-1 p-5 lg:p-8 content-area">';
+    echo '<main class="relative flex-1 p-5 lg:p-8 content-area">';
+
+    // Determine skeleton layout category depending on current page filename
+    $currentPage = basename($_SERVER['PHP_SELF'], '.php');
+    $skeletonType = 'dashboard';
+    if (in_array($currentPage, ['admin_users', 'admin_section_students', 'teacher_section_students', 'participants', 'event_document_review', 'admin_archive', 'notifications'], true)) {
+        $skeletonType = 'table';
+    } elseif (in_array($currentPage, ['events', 'admin_sections', 'certificates_library', 'teacher_sections', 'my_certificates', 'my_tickets'], true)) {
+        $skeletonType = 'grid';
+    }
+
+    // Database-Free Content Area Skeleton Loader (does not cover sidebar/topbar)
+    echo '<div id="page-skeleton-loader" style="
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 50;
+      background-color: #f4f4f5;
+      pointer-events: none;
+      transition: opacity 0.22s ease-out;
+      overflow: hidden;
+      padding: inherit;
+    ">';
+
+    if ($skeletonType === 'table') {
+        // 📋 TABLE / LIST SKELETON
+        echo '<div style="display: flex; flex-direction: column; gap: 20px; width: 100%;">
+          <!-- Search filter placeholder -->
+          <div style="height: 56px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 16px; display: flex; align-items: center; padding: 0 16px; gap: 12px;">
+            <div class="skeleton-pulse" style="width: 200px; height: 20px; background-color: #e4e4e7; border-radius: 6px;"></div>
+            <div class="skeleton-pulse" style="width: 80px; height: 28px; background-color: #e4e4e7; border-radius: 14px; margin-left: auto;"></div>
+          </div>
+          <!-- Table frame -->
+          <div style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 20px; padding: 16px; display: flex; flex-direction: column; gap: 4px;">
+            <div style="height: 40px; border-bottom: 1px solid #f4f4f5; display: flex; align-items: center; padding: 0 16px; gap: 16px; margin-bottom: 8px;">
+              <div class="skeleton-pulse" style="width: 30%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 25%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 25%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 10%; height: 16px; background-color: #e4e4e7; border-radius: 4px; margin-left: auto;"></div>
+            </div>';
+        for ($i = 0; $i < 6; $i++) {
+            echo '<div style="height: 56px; display: flex; align-items: center; padding: 0 16px; gap: 16px; border-bottom: 1px solid #f4f4f5;">
+              <div class="skeleton-pulse" style="width: 32px; height: 32px; background-color: #e4e4e7; border-radius: 50%;"></div>
+              <div class="skeleton-pulse" style="width: 25%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 20%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 25%; height: 16px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div class="skeleton-pulse" style="width: 24px; height: 24px; background-color: #e4e4e7; border-radius: 6px; margin-left: auto;"></div>
+            </div>';
+        }
+        echo '</div></div>';
+    } elseif ($skeletonType === 'grid') {
+        // 🎴 CARDS GRID SKELETON
+        echo '<div style="display: flex; flex-direction: column; gap: 24px; width: 100%;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div class="skeleton-pulse" style="width: 150px; height: 24px; background-color: #e4e4e7; border-radius: 6px;"></div>
+            <div class="skeleton-pulse" style="width: 100px; height: 36px; background-color: #e4e4e7; border-radius: 12px;"></div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">';
+        for ($i = 0; $i < 6; $i++) {
+            echo '<div style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 20px; overflow: hidden; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+              <div class="skeleton-pulse" style="width: 100%; height: 140px; background-color: #e4e4e7; border-radius: 12px;"></div>
+              <div class="skeleton-pulse" style="width: 70%; height: 18px; background-color: #e4e4e7; border-radius: 6px;"></div>
+              <div class="skeleton-pulse" style="width: 40%; height: 14px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">
+                <div class="skeleton-pulse" style="width: 80px; height: 28px; background-color: #e4e4e7; border-radius: 8px;"></div>
+                <div class="skeleton-pulse" style="width: 24px; height: 24px; background-color: #e4e4e7; border-radius: 50%;"></div>
+              </div>
+            </div>';
+        }
+        echo '</div></div>';
+    } else {
+        // 📊 DASHBOARD OVERVIEW SKELETON
+        echo '<div style="display: flex; flex-direction: column; gap: 24px; width: 100%;">
+          <!-- Welcome card placeholder -->
+          <div style="height: 120px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 20px; padding: 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px;">
+            <div style="flex: 1;">
+              <div class="skeleton-pulse" style="width: 30%; height: 24px; background-color: #e4e4e7; border-radius: 6px; margin-bottom: 12px;"></div>
+              <div class="skeleton-pulse" style="width: 60%; height: 14px; background-color: #e4e4e7; border-radius: 4px;"></div>
+            </div>
+            <div class="skeleton-pulse" style="width: 100px; height: 70px; background-color: #d4d4d8; border-radius: 12px;"></div>
+          </div>
+          <!-- System stats grid -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">';
+        for ($i = 0; $i < 4; $i++) {
+            echo '<div style="height: 76px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 16px; padding: 16px; display: flex; align-items: center; gap: 12px;">
+              <div class="skeleton-pulse" style="width: 44px; height: 44px; background-color: #e4e4e7; border-radius: 12px;"></div>
+              <div style="flex: 1;">
+                <div class="skeleton-pulse" style="width: 24px; height: 20px; background-color: #e4e4e7; border-radius: 4px; margin-bottom: 6px;"></div>
+                <div class="skeleton-pulse" style="width: 50%; height: 12px; background-color: #e4e4e7; border-radius: 4px;"></div>
+              </div>
+            </div>';
+        }
+        echo '  </div>
+          <!-- Columns -->
+          <div style="flex: 1; display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+            <div style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 20px; padding: 24px;">
+              <div class="skeleton-pulse" style="width: 140px; height: 20px; background-color: #e4e4e7; border-radius: 6px; margin-bottom: 24px;"></div>
+              <div class="skeleton-pulse" style="height: 48px; background-color: #f4f4f5; border-radius: 12px; margin-bottom: 12px;"></div>
+              <div class="skeleton-pulse" style="height: 48px; background-color: #f4f4f5; border-radius: 12px; margin-bottom: 12px;"></div>
+              <div class="skeleton-pulse" style="height: 48px; background-color: #f4f4f5; border-radius: 12px; margin-bottom: 12px;"></div>
+            </div>
+            <div style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 20px; padding: 24px;">
+              <div class="skeleton-pulse" style="width: 100px; height: 20px; background-color: #e4e4e7; border-radius: 6px; margin-bottom: 24px;"></div>
+              <div class="skeleton-pulse" style="height: 160px; background-color: #f4f4f5; border-radius: 16px;"></div>
+            </div>
+          </div>
+        </div>';
+    }
+
+    echo '</div>';
+
+    // Auto-dismiss script (fast fade-out and DOM removal)
+    echo '<script>
+      (function() {
+        var hideSkel = function() {
+          var loader = document.getElementById("page-skeleton-loader");
+          if (loader) {
+            loader.style.opacity = "0";
+            setTimeout(function() {
+              if (loader.parentNode) {
+                loader.parentNode.removeChild(loader);
+              }
+            }, 250);
+          }
+        };
+        if (document.readyState === "complete") {
+          hideSkel();
+        } else {
+          window.addEventListener("load", hideSkel);
+          // Safety timeout of 1.8 seconds in case external resource fetches stall
+          setTimeout(hideSkel, 1800);
+        }
+      })();
+    </script>';
 }
 
 function render_footer(): void
@@ -957,7 +1140,18 @@ function render_footer(): void
             }
         }
 
+        function applyManageEventsLitePayload(data) {
+            if (!data || data.ok !== true) return;
+            handleFreshManageEventsSignals(data.signals || []);
+            updateManageEventsBadgeFromSignals(data.signals || []);
+        }
+        window.PulseApplyManageEventsLite = applyManageEventsLitePayload;
+
         async function refreshManageEventsBadge(forceFresh) {
+            // When layout badges poll is active, only force-refresh on demand (click/focus catch-up).
+            if (!forceFresh && typeof window.PulseFlushPendingNotifications === "function") {
+                return;
+            }
             if (!manageEventsBadgeEl || manageEventsBadgeInFlight) return;
             manageEventsBadgeInFlight = true;
             const controller = new AbortController();
@@ -972,8 +1166,7 @@ function render_footer(): void
                 if (!resp.ok) return;
                 var data = await resp.json();
                 if (!data || data.ok !== true) return;
-                handleFreshManageEventsSignals(data.signals || []);
-                updateManageEventsBadgeFromSignals(data.signals || []);
+                applyManageEventsLitePayload(data);
             } catch (e) {
                 // Keep current badge state on transient network failures.
             } finally {
@@ -985,16 +1178,20 @@ function render_footer(): void
         function initManageEventsBadgePolling() {
             if (!manageEventsBadgeEl) return;
             polledManageEventsSignalIds = loadPolledManageEventsSignalIds();
-            // Initial + periodic polls use API TTL cache; focus/catch-up may force fresh.
-            refreshManageEventsBadge(false);
-            manageEventsBadgePolling = window.setInterval(function () {
-                refreshManageEventsBadge(false);
-            }, 90000);
-            document.addEventListener("visibilitychange", function () {
-                if (document.visibilityState === "visible") {
-                    refreshManageEventsBadge(true);
-                }
-            });
+            // Combined layout_badges poll owns the periodic refresh; only bootstrap mark-seen here.
+            if (isManageEventsPage()) {
+                window.setTimeout(function () {
+                    fetch("/api/manage_events_live.php?lite=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
+                        .then(function (resp) { return resp.json(); })
+                        .then(function (data) {
+                            if (data && data.ok) {
+                                markManageEventsSignalsSeen(data.signals || []);
+                                updateManageEventsBadgeFromSignals(data.signals || []);
+                            }
+                        })
+                        .catch(function () {});
+                }, 200);
+            }
             if (manageEventsLinkEl) {
                 manageEventsLinkEl.addEventListener("click", function () {
                     fetch("/api/manage_events_live.php?lite=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
@@ -1008,24 +1205,14 @@ function render_footer(): void
                         .catch(function () {});
                 });
             }
-            if (isManageEventsPage()) {
-                window.setTimeout(function () {
-                    // Already on manage events page — TTL cache is fine for mark-seen bootstrap.
-                    fetch("/api/manage_events_live.php?lite=1&_=" + Date.now(), { cache: "no-store", credentials: "same-origin" })
-                        .then(function (resp) { return resp.json(); })
-                        .then(function (data) {
-                            if (data && data.ok) {
-                                markManageEventsSignalsSeen(data.signals || []);
-                                updateManageEventsBadgeFromSignals(data.signals || []);
-                            }
-                        })
-                        .catch(function () {});
-                }, 200);
-            }
-            window.addEventListener("beforeunload", function () {
-                if (manageEventsBadgePolling) {
-                    window.clearInterval(manageEventsBadgePolling);
-                    manageEventsBadgePolling = null;
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    // Catch-up via combined badges when available.
+                    if (typeof window.PulseFlushPendingNotifications === "function") {
+                        window.PulseFlushPendingNotifications();
+                    } else {
+                        refreshManageEventsBadge(true);
+                    }
                 }
             });
         }
@@ -1038,52 +1225,26 @@ function render_footer(): void
             }
         }
 
-        // Keep Manage Application pending badge updated without refresh.
+        // Applications badge is refreshed by combined /api/layout_badges.php poll.
+        // Keep a one-shot bootstrap only when notification script is absent (students).
         var applicationsBadgeEl = document.getElementById("manage-applications-badge");
-        var applicationsBadgePolling = null;
-        var applicationsBadgeInFlight = false;
-        async function refreshManageApplicationsBadge() {
-            if (!applicationsBadgeEl || applicationsBadgeInFlight) return;
-            applicationsBadgeInFlight = true;
-            const controller = new AbortController();
-            const timeoutId = window.setTimeout(() => controller.abort(), 8000);
-            try {
-                var resp = await fetch("/api/manage_applications_pending_count.php", {
-                    cache: "no-store",
-                    signal: controller.signal,
-                });
-                if (!resp.ok) return;
-                var data = await resp.json();
-                if (!data || data.ok !== true) return;
-                var count = Number(data.count || 0);
-                if (!Number.isFinite(count) || count < 0) count = 0;
-                if (count <= 0) {
-                    applicationsBadgeEl.classList.add("hidden");
-                    return;
-                }
-                applicationsBadgeEl.classList.remove("hidden");
-                applicationsBadgeEl.textContent = count > 99 ? "99+" : String(count);
-            } catch (e) {
-                // Keep current badge state on transient network failures.
-            } finally {
-                window.clearTimeout(timeoutId);
-                applicationsBadgeInFlight = false;
-            }
-        }
-        if (applicationsBadgeEl) {
-            refreshManageApplicationsBadge();
-            applicationsBadgePolling = window.setInterval(refreshManageApplicationsBadge, 60000);
-            document.addEventListener("visibilitychange", function () {
-                if (document.visibilityState === "visible") {
-                    refreshManageApplicationsBadge();
-                }
-            });
-            window.addEventListener("beforeunload", function () {
-                if (applicationsBadgePolling) {
-                    window.clearInterval(applicationsBadgePolling);
-                    applicationsBadgePolling = null;
-                }
-            });
+        if (applicationsBadgeEl && typeof window.PulseFlushPendingNotifications !== "function") {
+            (async function refreshManageApplicationsBadgeOnce() {
+                try {
+                    var resp = await fetch("/api/manage_applications_pending_count.php", { cache: "no-store" });
+                    if (!resp.ok) return;
+                    var data = await resp.json();
+                    if (!data || data.ok !== true) return;
+                    var count = Number(data.count || 0);
+                    if (!Number.isFinite(count) || count < 0) count = 0;
+                    if (count <= 0) {
+                        applicationsBadgeEl.classList.add("hidden");
+                        return;
+                    }
+                    applicationsBadgeEl.classList.remove("hidden");
+                    applicationsBadgeEl.textContent = count > 99 ? "99+" : String(count);
+                } catch (e) {}
+            })();
         }
 
         // ── Password Modal Logic (OTP first, then new + confirm) ──
@@ -1246,7 +1407,7 @@ function render_footer(): void
                 pwSetLoading(false);
             }
         };
-
+        
         window.confirmPasswordChange = async function() {
             pwShowMsg("", "");
             if (pwStep === 0) {
@@ -1328,7 +1489,7 @@ function render_footer(): void
                 var updateRes = await pwApi({
                     action: "update",
                     change_token: pwChangeToken,
-                    new_password: np
+                        new_password: np
                 });
                 if (!updateRes.ok) {
                     pwShowMsg("err", (updateRes.data && updateRes.data.error) || "Update failed.");
@@ -1366,23 +1527,23 @@ function render_footer(): void
         <form id="pform" class="space-y-4" onsubmit="event.preventDefault(); window.confirmPasswordChange();">
             <div id="pref-step-send"></div>
             <div id="pref-step-otp" class="hidden space-y-3">
-                <div>
+            <div>
                     <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirmation Code</label>
                     <input type="text" id="p-otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30 tracking-[0.3em]">
-                </div>
+            </div>
                 <div class="flex justify-end">
                     <button type="button" id="pref-resend" onclick="window.resendPasswordOtp()" class="text-xs font-semibold text-indigo-600 hover:text-indigo-500 disabled:text-zinc-400">Resend Code</button>
                 </div>
             </div>
             <div id="pref-step-pass" class="hidden space-y-4">
-                <div>
-                    <label class="block text-xs font-semibold text-zinc-700 mb-1">New Password</label>
+            <div>
+                <label class="block text-xs font-semibold text-zinc-700 mb-1">New Password</label>
                     <input type="password" id="p-new" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirm New Password</label>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirm New Password</label>
                     <input type="password" id="p-cnew" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
-                </div>
+            </div>
             </div>
             <button id="pref-btn" type="submit" class="mt-2 flex w-full justify-center items-center rounded-xl bg-indigo-600 px-3 py-3 text-sm font-semibold text-white shadow-md hover:bg-indigo-500 hover:shadow-lg transition disabled:opacity-60">
                 <span id="pref-btn-lbl">Send Code</span>

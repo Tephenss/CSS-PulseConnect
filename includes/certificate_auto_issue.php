@@ -379,6 +379,311 @@ function certificate_auto_session_eval_is_complete(string $sessionId, string $st
 }
 
 /**
+ * Prefetch checked-out session ids for many students (1–2 queries).
+ *
+ * @param list<array<string,mixed>> $sessions
+ * @param list<string> $studentIds
+ * @return array<string,list<string>> student_id => session_ids
+ */
+function certificate_auto_prefetch_checked_out_sessions(array $sessions, array $studentIds, array $headers): array
+{
+    $out = [];
+    foreach ($studentIds as $sid) {
+        $sid = trim((string) $sid);
+        if ($sid !== '') {
+            $out[$sid] = [];
+        }
+    }
+    $sessionIds = [];
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $id = trim((string) ($session['id'] ?? ''));
+        if ($id !== '') {
+            $sessionIds[] = $id;
+        }
+    }
+    if ($sessionIds === [] || $out === []) {
+        return $out;
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+        . '?select=session_id,check_out_at,registration:event_registrations(student_id)'
+        . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+        . '&check_out_at=not.is.null'
+        . '&limit=5000';
+    $res = supabase_request('GET', $url, $headers);
+    if (!($res['ok'] ?? false)) {
+        return $out;
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    if (!is_array($rows)) {
+        return $out;
+    }
+
+    foreach ($rows as $row) {
+        if (!is_array($row) || trim((string) ($row['check_out_at'] ?? '')) === '') {
+            continue;
+        }
+        $reg = $row['registration'] ?? null;
+        if (is_array($reg) && isset($reg[0]) && is_array($reg[0])) {
+            $reg = $reg[0];
+        }
+        if (!is_array($reg)) {
+            continue;
+        }
+        $studentId = trim((string) ($reg['student_id'] ?? ''));
+        $sessId = trim((string) ($row['session_id'] ?? ''));
+        if ($studentId === '' || $sessId === '' || !isset($out[$studentId])) {
+            continue;
+        }
+        if (!in_array($sessId, $out[$studentId], true)) {
+            $out[$studentId][] = $sessId;
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Prefetch event-eval completion for many students.
+ *
+ * @param list<string> $studentIds
+ * @return array<string,bool>
+ */
+function certificate_auto_prefetch_event_eval_complete(string $eventId, array $studentIds, array $headers): array
+{
+    $result = [];
+    foreach ($studentIds as $sid) {
+        $sid = trim((string) $sid);
+        if ($sid !== '') {
+            $result[$sid] = false;
+        }
+    }
+    if ($result === []) {
+        return $result;
+    }
+
+    $eventQUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions'
+        . '?select=id,required&event_id=eq.' . rawurlencode($eventId);
+    $eventQRes = supabase_request('GET', $eventQUrl, $headers);
+    $eventQuestions = $eventQRes['ok'] ? json_decode((string) ($eventQRes['body'] ?? ''), true) : [];
+    $eventQuestions = is_array($eventQuestions) ? $eventQuestions : [];
+
+    if ($eventQuestions === []) {
+        foreach ($result as $sid => $_) {
+            $result[$sid] = true;
+        }
+        return $result;
+    }
+
+    /** @var array<string,list<array<string,mixed>>> $answersByStudent */
+    $answersByStudent = [];
+    $ids = array_keys($result);
+    foreach (array_chunk($ids, 80) as $chunk) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers'
+            . '?select=student_id,question_id,answer_text'
+            . '&event_id=eq.' . rawurlencode($eventId)
+            . '&student_id=in.(' . implode(',', array_map('rawurlencode', $chunk)) . ')'
+            . '&limit=5000';
+        $res = supabase_request('GET', $url, $headers);
+        $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $sid = trim((string) ($row['student_id'] ?? ''));
+            if ($sid === '') {
+                continue;
+            }
+            $answersByStudent[$sid][] = $row;
+        }
+    }
+
+    foreach ($result as $sid => $_) {
+        $result[$sid] = certificate_auto_answers_complete($eventQuestions, $answersByStudent[$sid] ?? []);
+    }
+    return $result;
+}
+
+/**
+ * Prefetch per-session eval completion.
+ *
+ * @param list<string> $sessionIds
+ * @param list<string> $studentIds
+ * @return array<string,bool> key = studentId|sessionId
+ */
+function certificate_auto_prefetch_session_eval_complete(array $sessionIds, array $studentIds, array $headers): array
+{
+    $result = [];
+    $sessionIds = array_values(array_filter(array_map('trim', $sessionIds)));
+    $studentIds = array_values(array_filter(array_map('trim', $studentIds)));
+    if ($sessionIds === [] || $studentIds === []) {
+        return $result;
+    }
+
+    /** @var array<string,list<array<string,mixed>>> $questionsBySession */
+    $questionsBySession = [];
+    $qUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_questions'
+        . '?select=id,required,session_id'
+        . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+        . '&limit=5000';
+    $qRes = supabase_request('GET', $qUrl, $headers);
+    $qRows = ($qRes['ok'] ?? false) ? json_decode((string) ($qRes['body'] ?? ''), true) : [];
+    if (is_array($qRows)) {
+        foreach ($qRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $sess = trim((string) ($row['session_id'] ?? ''));
+            if ($sess !== '') {
+                $questionsBySession[$sess][] = $row;
+            }
+        }
+    }
+
+    /** @var array<string,list<array<string,mixed>>> $answersByKey */
+    $answersByKey = [];
+    foreach (array_chunk($studentIds, 60) as $chunk) {
+        $aUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_answers'
+            . '?select=student_id,session_id,question_id,answer_text'
+            . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+            . '&student_id=in.(' . implode(',', array_map('rawurlencode', $chunk)) . ')'
+            . '&limit=5000';
+        $aRes = supabase_request('GET', $aUrl, $headers);
+        $aRows = ($aRes['ok'] ?? false) ? json_decode((string) ($aRes['body'] ?? ''), true) : [];
+        if (!is_array($aRows)) {
+            continue;
+        }
+        foreach ($aRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $sid = trim((string) ($row['student_id'] ?? ''));
+            $sess = trim((string) ($row['session_id'] ?? ''));
+            if ($sid === '' || $sess === '') {
+                continue;
+            }
+            $answersByKey[$sid . '|' . $sess][] = $row;
+        }
+    }
+
+    foreach ($studentIds as $sid) {
+        foreach ($sessionIds as $sess) {
+            $key = $sid . '|' . $sess;
+            $qs = $questionsBySession[$sess] ?? [];
+            if ($qs === []) {
+                $result[$key] = true;
+                continue;
+            }
+            $result[$key] = certificate_auto_answers_complete($qs, $answersByKey[$key] ?? []);
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * Prefetch simple (non-session) checkout presence.
+ *
+ * @param list<string> $studentIds
+ * @return array<string,bool>
+ */
+function certificate_auto_prefetch_simple_checkouts(string $eventId, array $studentIds, array $headers): array
+{
+    $result = [];
+    foreach ($studentIds as $sid) {
+        $sid = trim((string) $sid);
+        if ($sid !== '') {
+            $result[$sid] = false;
+        }
+    }
+    if ($result === []) {
+        return $result;
+    }
+
+    // Match certificate_auto_student_has_checkout_simple: attendance via tickets/registrations.
+    $regUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=id,student_id'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&student_id=in.(' . implode(',', array_map('rawurlencode', array_keys($result))) . ')'
+        . '&limit=2000';
+    $regRes = supabase_request('GET', $regUrl, $headers);
+    $regRows = ($regRes['ok'] ?? false) ? json_decode((string) ($regRes['body'] ?? ''), true) : [];
+    if (!is_array($regRows) || $regRows === []) {
+        return $result;
+    }
+
+    $regToStudent = [];
+    foreach ($regRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $rid = trim((string) ($row['id'] ?? ''));
+        $sid = trim((string) ($row['student_id'] ?? ''));
+        if ($rid !== '' && $sid !== '') {
+            $regToStudent[$rid] = $sid;
+        }
+    }
+    if ($regToStudent === []) {
+        return $result;
+    }
+
+    $ticketUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets'
+        . '?select=id,registration_id'
+        . '&registration_id=in.(' . implode(',', array_map('rawurlencode', array_keys($regToStudent))) . ')'
+        . '&limit=2000';
+    $ticketRes = supabase_request('GET', $ticketUrl, $headers);
+    $ticketRows = ($ticketRes['ok'] ?? false) ? json_decode((string) ($ticketRes['body'] ?? ''), true) : [];
+    if (!is_array($ticketRows) || $ticketRows === []) {
+        return $result;
+    }
+
+    $ticketToStudent = [];
+    foreach ($ticketRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $tid = trim((string) ($row['id'] ?? ''));
+        $rid = trim((string) ($row['registration_id'] ?? ''));
+        $sid = $regToStudent[$rid] ?? '';
+        if ($tid !== '' && $sid !== '') {
+            $ticketToStudent[$tid] = $sid;
+        }
+    }
+    if ($ticketToStudent === []) {
+        return $result;
+    }
+
+    $attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+        . '?select=ticket_id,check_out_at'
+        . '&ticket_id=in.(' . implode(',', array_map('rawurlencode', array_keys($ticketToStudent))) . ')'
+        . '&check_out_at=not.is.null'
+        . '&limit=2000';
+    $attRes = supabase_request('GET', $attUrl, $headers);
+    $attRows = ($attRes['ok'] ?? false) ? json_decode((string) ($attRes['body'] ?? ''), true) : [];
+    if (!is_array($attRows)) {
+        return $result;
+    }
+    foreach ($attRows as $row) {
+        if (!is_array($row) || trim((string) ($row['check_out_at'] ?? '')) === '') {
+            continue;
+        }
+        $tid = trim((string) ($row['ticket_id'] ?? ''));
+        $sid = $ticketToStudent[$tid] ?? '';
+        if ($sid !== '' && isset($result[$sid])) {
+            $result[$sid] = true;
+        }
+    }
+
+    return $result;
+}
+
+/**
  * @return array{ok:bool,complete:bool,reason?:string}
  */
 function certificate_auto_eval_is_complete(
@@ -810,18 +1115,20 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
             }
         }
 
+        $checkedOutByStudent = certificate_auto_prefetch_checked_out_sessions($sessions, $ids, $headers);
+        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete($eventId, $ids, $headers);
+        $sessionEvalByKey = certificate_auto_prefetch_session_eval_complete($sessionIds, $ids, $headers);
+
         foreach ($ids as $studentId) {
-            $checkedOut = certificate_auto_checked_out_session_ids($sessions, $studentId, $headers);
-            $eventEval = certificate_auto_event_eval_is_complete($eventId, $studentId, $headers);
-            $eventEvalOk = ($eventEval['complete'] ?? false) === true;
+            $checkedOut = $checkedOutByStudent[$studentId] ?? [];
+            $eventEvalOk = ($eventEvalByStudent[$studentId] ?? false) === true;
 
             $hasAnyCert = false;
             $missingSessions = [];
             $receivedSessions = [];
 
             foreach ($checkedOut as $sessId) {
-                $sessEval = certificate_auto_session_eval_is_complete($sessId, $studentId, $headers);
-                $sessEvalOk = ($sessEval['complete'] ?? false) === true;
+                $sessEvalOk = ($sessionEvalByKey[$studentId . '|' . $sessId] ?? false) === true;
                 $hasCert = isset($certsByStudentSession[$studentId][$sessId]);
                 if ($hasCert) {
                     $hasAnyCert = true;
@@ -891,6 +1198,9 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
             }
         }
 
+        $checkoutByStudent = certificate_auto_prefetch_simple_checkouts($eventId, $ids, $headers);
+        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete($eventId, $ids, $headers);
+
         foreach ($ids as $studentId) {
             $profile = $namesById[$studentId] ?? ['name' => 'Student', 'email' => ''];
             if (isset($certsByStudent[$studentId])) {
@@ -906,11 +1216,10 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                 continue;
             }
 
-            if (!certificate_auto_student_has_checkout_simple($eventId, $studentId, $headers)) {
+            if (!($checkoutByStudent[$studentId] ?? false)) {
                 continue;
             }
-            $eval = certificate_auto_event_eval_is_complete($eventId, $studentId, $headers);
-            if (($eval['complete'] ?? false) !== true) {
+            if (($eventEvalByStudent[$studentId] ?? false) !== true) {
                 continue;
             }
             $missing[] = [

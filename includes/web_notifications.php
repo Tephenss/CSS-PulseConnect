@@ -209,15 +209,40 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         return [];
     }
 
-    $proposalUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,title,status,description,updated_at,proposal_stage,requirements_requested_at,requirements_submitted_at'
-        . '&created_by=eq.' . rawurlencode($teacherId)
-        . '&status=in.(pending,approved,published,draft,archived)'
+    // One query: own proposals + recent peer-published (split in PHP).
+    $eventsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=id,title,status,description,updated_at,created_by,proposal_stage,requirements_requested_at,requirements_submitted_at'
+        . '&or=(created_by.eq.' . rawurlencode($teacherId) . ',and(status.eq.published,created_by.neq.' . rawurlencode($teacherId) . '))'
         . '&order=updated_at.desc'
-        . '&limit=25';
-    $proposalRes = supabase_request('GET', $proposalUrl, $headers);
-    $events = $proposalRes['ok'] ? json_decode((string) $proposalRes['body'], true) : [];
-    $events = is_array($events) ? $events : [];
+        . '&limit=50';
+    $eventsRes = supabase_request('GET', $eventsUrl, $headers);
+    $allEvents = $eventsRes['ok'] ? json_decode((string) $eventsRes['body'], true) : [];
+    $allEvents = is_array($allEvents) ? $allEvents : [];
+
+    $events = [];
+    $peerPublishedEvents = [];
+    foreach ($allEvents as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+        $createdBy = trim((string) ($event['created_by'] ?? ''));
+        $status = strtolower(trim((string) ($event['status'] ?? '')));
+        if ($createdBy === $teacherId) {
+            if (in_array($status, ['pending', 'approved', 'published', 'draft', 'archived'], true)) {
+                $events[] = $event;
+            }
+            continue;
+        }
+        if ($status === 'published') {
+            $peerPublishedEvents[] = $event;
+        }
+    }
+    if (count($events) > 25) {
+        $events = array_slice($events, 0, 25);
+    }
+    if (count($peerPublishedEvents) > 25) {
+        $peerPublishedEvents = array_slice($peerPublishedEvents, 0, 25);
+    }
 
     foreach ($events as $event) {
         if (!is_array($event)) {
@@ -310,16 +335,6 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         }
     }
 
-    $peerPublishedUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=id,title,updated_at,created_by'
-        . '&status=eq.published'
-        . '&created_by=neq.' . rawurlencode($teacherId)
-        . '&order=updated_at.desc'
-        . '&limit=25';
-    $peerPublishedRes = supabase_request('GET', $peerPublishedUrl, $headers);
-    $peerPublishedEvents = $peerPublishedRes['ok'] ? json_decode((string) ($peerPublishedRes['body'] ?? ''), true) : [];
-    $peerPublishedEvents = is_array($peerPublishedEvents) ? $peerPublishedEvents : [];
-
     foreach ($peerPublishedEvents as $event) {
         if (!is_array($event)) {
             continue;
@@ -355,19 +370,15 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         }
     }
 
+    // Assignments + embedded event fields (no second events round-trip).
     $assignmentUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_teacher_assignments'
-        . '?select=event_id,can_scan,assigned_at'
+        . '?select=event_id,can_scan,assigned_at,events(id,title,status,updated_at)'
         . '&teacher_id=eq.' . rawurlencode($teacherId)
         . '&order=assigned_at.desc'
         . '&limit=40';
     $assignmentRes = supabase_request('GET', $assignmentUrl, $headers);
     $assignmentRows = $assignmentRes['ok'] ? json_decode((string) $assignmentRes['body'], true) : [];
     $assignmentRows = is_array($assignmentRows) ? $assignmentRows : [];
-
-    $eventMap = web_notification_event_map(array_map(
-        static fn($row): string => is_array($row) ? (string) ($row['event_id'] ?? '') : '',
-        $assignmentRows
-    ), $headers);
 
     foreach ($assignmentRows as $assignment) {
         if (!is_array($assignment)) {
@@ -378,7 +389,11 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
         if ($eventId === '') {
             continue;
         }
-        $event = $eventMap[$eventId] ?? [];
+        $embedded = $assignment['events'] ?? null;
+        if (is_array($embedded) && isset($embedded[0]) && is_array($embedded[0])) {
+            $embedded = $embedded[0];
+        }
+        $event = is_array($embedded) ? $embedded : [];
         $title = trim((string) ($event['title'] ?? 'Event'));
         $link = '/event_view.php?id=' . rawurlencode($eventId);
         $eventStatus = strtolower(trim((string) ($event['status'] ?? '')));

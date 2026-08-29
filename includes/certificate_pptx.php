@@ -6,6 +6,8 @@ declare(strict_types=1);
  * remain real PowerPoint objects (not a flat screenshot).
  */
 
+require_once __DIR__ . '/certificate_code_extract.php';
+
 function certificate_pptx_normalize_png(string $imageBinary): string
 {
     if ($imageBinary === '') {
@@ -556,12 +558,50 @@ XML;
             $exportedCertificateCode = true;
         }
         $box = certificate_pptx_fabric_box($obj);
+        $alignForClamp = 'left';
+        if (in_array($type, ['i-text', 'text', 'textbox'], true)) {
+            $rawTextEarly = (string) ($obj['text'] ?? '');
+            $fontSizePxEarly = (float) ($obj['fontSize'] ?? 24) * (float) ($obj['scaleY'] ?? 1);
+            $alignForClamp = strtolower((string) ($obj['textAlign'] ?? 'left'));
+            if (!in_array($alignForClamp, ['left', 'center', 'right', 'justify'], true)) {
+                $alignForClamp = 'left';
+            }
+            // Shrink oversized cert-code textboxes before slide-edge clamp so Import
+            // doesn't get a sliver frame parked on the right (clipped "LU-AA-…").
+            if ($isCertCode && $rawTextEarly !== '' && function_exists('certificate_pptx_fit_code_box')) {
+                $fit = certificate_pptx_fit_code_box(
+                    (float) $box['left'],
+                    (float) $box['top'],
+                    (float) $box['width'],
+                    (float) $box['height'],
+                    $rawTextEarly,
+                    $fontSizePxEarly,
+                    $alignForClamp,
+                    $canvasW
+                );
+                $box['left'] = $fit['left'];
+                $box['top'] = $fit['top'];
+                $box['width'] = $fit['width'];
+                $box['height'] = $fit['height'];
+                $alignForClamp = $fit['textAlign'];
+            }
+        }
         $x = max(0, $pxToEmu($box['left']));
         $y = max(0, $pxToEmu($box['top']));
         $w = max(1, $pxToEmu($box['width']));
         $h = max(1, $pxToEmu($box['height']));
         if ($x + $w > $slideW) {
-            $w = max(1, $slideW - $x);
+            $origRight = $x + $w;
+            $origCenter = $x + (int) round($w / 2);
+            if ($alignForClamp === 'right') {
+                $w = max(1, min($w, $slideW));
+                $x = max(0, ($origRight <= $slideW ? $origRight : $slideW) - $w);
+            } elseif ($alignForClamp === 'center') {
+                $w = max(1, min($w, $slideW));
+                $x = max(0, min($slideW - $w, $origCenter - (int) round($w / 2)));
+            } else {
+                $w = max(1, $slideW - $x);
+            }
         }
         if ($y + $h > $slideH) {
             $h = max(1, $slideH - $y);
@@ -585,7 +625,7 @@ XML;
             $underline = !empty($obj['underline']);
             $fill = certificate_pptx_color_hex(isset($obj['fill']) ? (string) $obj['fill'] : '#111827');
             $font = certificate_pptx_font_family((string) ($obj['fontFamily'] ?? 'Arial'));
-            $align = strtolower((string) ($obj['textAlign'] ?? 'left'));
+            $align = $alignForClamp;
             if (!in_array($align, ['left', 'center', 'right', 'justify'], true)) {
                 $align = 'left';
             }

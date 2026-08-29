@@ -15,15 +15,17 @@ function ai_improve_system_prompt(string $kind = 'description'): string
             . 'Return ONLY the improved title as plain text — no quotes, no markdown, no commentary.';
     }
 
+    // Core expand/polish rules (from preferred CCS prompt) + no invented logistics.
     return 'You are an expert event copywriter and AI editor for the College of Computer Studies (CCS). Your job is to POLISH and EXPAND the user\'s raw notes into an engaging event description while STRICTLY PRESERVING their identity and specific context. '
         . "REQUIREMENTS:\n"
         . "1. IDENTITY PRESERVATION: If the user provides their name or introduces themselves (e.g., 'Hi, I am Mark...'), you MUST retain this in the final output. Polish it into a professional opening (e.g., 'Greetings! I am Mark Stephen Espinosa, and I am pleased to announce...') but NEVER remove the name.\n"
         . "2. DO NOT MENTION PULSECONNECT: You are writing a description for an event. Do NOT mention the system/platform 'PulseConnect' anywhere in your response unless the user explicitly types it in their raw text. Just focus purely on the event itself.\n"
-        . "3. INTELLIGENT EXPANSION: Analyze the user's core idea and expand it significantly into a professional, engaging announcement (typically 2–4 short paragraphs plus a short bullet list). Add relevant highlights, goals, or 'what to expect' if they fit the context of a university IT/CCS event. Do not just lightly rephrase one sentence.\n"
-        . "4. FIX & POLISH: Correct typos, mixed Taglish, and grammar. Make the tone sophisticated and exciting but grounded in the user's original intent.\n"
-        . "5. CRITICAL LAYOUT: Format the output nicely using multiple short paragraphs. Use standard bullet symbol '•' or dashes '-' for key highlights. Ensure it looks clean and readable.\n"
-        . "6. CRITICAL RAW TEXT CONSTRAINT: DO NOT use any Markdown formatting! NO asterisks (**), NO markdown bolding, NO markdown italics. The text will be displayed in a basic HTML textarea, so it must be 100% plain text.\n"
-        . "7. Output ONLY the final polished text with no introductory polite phrases (like 'Here is the improved text:').";
+        . "3. INTELLIGENT EXPANSION: Analyze the user's core idea and expand it significantly into a professional, engaging announcement (typically 2–4 short paragraphs plus a short bullet list). Develop the theme, purpose, and energy of the event from what they wrote (e.g. a short 'CSS Summit' note can become a warm CCS summit invitation about computing/community learning). Do not just lightly rephrase one sentence.\n"
+        . "4. NO INVENTED LOGISTICS (CRITICAL): Never invent specific dates, times, room numbers, building names, city addresses, named speakers/guests, sponsors, fees, or registration deadlines unless they appear in the RAW TEXT. If schedule/venue/speakers are missing, simply omit them — do not invent placeholders like 'March 28' or 'Dr. Maria Santos'. Generic thematic bullets (learning, networking, CCS community) are OK; fake people/places/dates are NOT.\n"
+        . "5. FIX & POLISH: Correct typos, mixed Taglish, and grammar. Make the tone sophisticated and exciting but grounded in the user's original intent.\n"
+        . "6. CRITICAL LAYOUT: Use 2–4 short paragraphs separated by a blank line. Put EACH bullet on its own line starting with '• ' (never inline bullets in the same sentence). After a line like 'Key highlights include:', add a blank line, then one bullet per line. Ensure it looks clean and readable like a professional event announcement.\n"
+        . "7. CRITICAL RAW TEXT CONSTRAINT: DO NOT use any Markdown formatting! NO asterisks (**), NO markdown bolding, NO markdown italics. The text will be displayed in a basic HTML textarea, so it must be 100% plain text.\n"
+        . "8. Output ONLY the final polished text with no introductory polite phrases (like 'Here is the improved text:').";
 }
 
 function ai_improve_clean_output(string $text): string
@@ -35,6 +37,35 @@ function ai_improve_clean_output(string $text): string
     $text = preg_replace('/\*\*(.*?)\*\*/u', '$1', $text) ?? $text;
     $text = preg_replace('/__(.*?)__/u', '$1', $text) ?? $text;
     $text = preg_replace('/^\s*#{1,6}\s+/mu', '', $text) ?? $text;
+    return ai_improve_format_layout(trim($text));
+}
+
+function ai_improve_format_layout(string $text): string
+{
+    $text = str_replace(["\r\n", "\r"], "\n", trim($text));
+    if ($text === '') {
+        return '';
+    }
+
+    // Inline bullets → one highlight per line.
+    $text = preg_replace('/\h*•\h*/u', "\n• ", $text) ?? $text;
+    $text = preg_replace('/\n+•\s*/u', "\n• ", $text) ?? $text;
+
+    // Dash bullets when used as list markers (not hyphenated words).
+    $text = preg_replace('/\h+-\s+(?=[A-Z"\'(])/u', "\n- ", $text) ?? $text;
+
+    // Intro line before a bullet list (e.g. "Key highlights include:").
+    $text = preg_replace('/([.:!?])\n•\s*/u', "$1\n\n• ", $text) ?? $text;
+    $text = preg_replace('/([.:!?])\n-\s*/u', "$1\n\n- ", $text) ?? $text;
+
+    // If the model returned one long block, split paragraphs at sentence boundaries.
+    if (!str_contains($text, "\n\n") && mb_strlen($text) > 220) {
+        $text = preg_replace('/([.!?])\s+(?=[A-Z"\'(])/u', "$1\n\n", $text) ?? $text;
+    }
+
+    $text = preg_replace("/\n{3,}/", "\n\n", $text) ?? $text;
+    $text = preg_replace('/[^\S\n]{2,}/u', ' ', $text) ?? $text;
+
     return trim($text);
 }
 
@@ -94,7 +125,7 @@ function ai_improve_call_gemini(string $apiKey, string $systemPrompt, string $ra
             'parts' => [['text' => $systemPrompt . "\n\nRAW TEXT TO FORMAT:\n" . $rawText]],
         ]],
         'generationConfig' => [
-            'temperature' => 0.45,
+            'temperature' => 0.4,
             'maxOutputTokens' => 2048,
         ],
     ];
@@ -191,7 +222,7 @@ function ai_improve_call_groq(string $apiKey, string $systemPrompt, string $rawT
         $lastModel = $tryModel;
         $payload = [
             'model' => $tryModel,
-            'temperature' => 0.45,
+            'temperature' => 0.4,
             'max_tokens' => 2048,
             'messages' => [
                 ['role' => 'system', 'content' => $systemPrompt],

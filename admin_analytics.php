@@ -26,6 +26,8 @@ $headers = [
 $tz = new DateTimeZone('Asia/Manila');
 $nowManila = new DateTimeImmutable('now', $tz);
 $currentYear = (int) $nowManila->format('Y');
+// System launched in 2026 — year filter never lists earlier calendars.
+$systemStartYear = 2026;
 
 $yearRaw = trim((string) ($_GET['year'] ?? ''));
 $dateFromRaw = trim((string) ($_GET['from'] ?? ''));
@@ -56,13 +58,54 @@ if ($preset === 'last_3_months') {
     $dateToRaw = '';
 }
 
+$latestYear = max($currentYear, $systemStartYear);
+$systemMinBound = sprintf('%04d-01-01', $systemStartYear);
+$systemMaxBound = sprintf('%04d-12-31', $latestYear);
+$systemMinDt = new DateTimeImmutable($systemMinBound . ' 00:00:00', $tz);
+$systemMaxDt = new DateTimeImmutable($systemMaxBound . ' 23:59:59', $tz);
+
+$clampDateRaw = static function (string $raw, DateTimeImmutable $minDt, DateTimeImmutable $maxDt, DateTimeZone $tz): string {
+    $raw = trim($raw);
+    if ($raw === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+        return '';
+    }
+    try {
+        $d = new DateTimeImmutable($raw . ' 12:00:00', $tz);
+    } catch (Throwable $e) {
+        return '';
+    }
+    if ($d < $minDt) {
+        return $minDt->format('Y-m-d');
+    }
+    if ($d > $maxDt) {
+        return $maxDt->format('Y-m-d');
+    }
+    return $d->format('Y-m-d');
+};
+
 $selectedYear = null;
 if ($yearRaw !== '' && ctype_digit($yearRaw)) {
     $y = (int) $yearRaw;
-    if ($y >= 2018 && $y <= ($currentYear + 1)) {
+    if ($y >= $systemStartYear && $y <= $latestYear) {
         $selectedYear = $y;
     }
 }
+
+// Date picker bounds: selected year only, or full Year-list window when All.
+if ($selectedYear !== null) {
+    $dateMinBound = sprintf('%04d-01-01', $selectedYear);
+    $dateMaxBound = sprintf('%04d-12-31', $selectedYear);
+    $dateMinDt = new DateTimeImmutable($dateMinBound . ' 00:00:00', $tz);
+    $dateMaxDt = new DateTimeImmutable($dateMaxBound . ' 23:59:59', $tz);
+} else {
+    $dateMinBound = $systemMinBound;
+    $dateMaxBound = $systemMaxBound;
+    $dateMinDt = $systemMinDt;
+    $dateMaxDt = $systemMaxDt;
+}
+
+$dateFromRaw = $clampDateRaw($dateFromRaw, $dateMinDt, $dateMaxDt, $tz);
+$dateToRaw = $clampDateRaw($dateToRaw, $dateMinDt, $dateMaxDt, $tz);
 
 $rangeStart = null;
 $rangeEnd = null;
@@ -78,23 +121,57 @@ try {
     $rangeEnd = null;
 }
 
-// Year filter when no explicit date range.
+// No dates → full selected year (or current year default).
 if ($rangeStart === null && $rangeEnd === null) {
     if ($selectedYear === null) {
-        $selectedYear = $currentYear;
+        $selectedYear = min($currentYear, $latestYear);
+        if ($selectedYear < $systemStartYear) {
+            $selectedYear = $systemStartYear;
+        }
+        $dateMinBound = sprintf('%04d-01-01', $selectedYear);
+        $dateMaxBound = sprintf('%04d-12-31', $selectedYear);
+        $dateMinDt = new DateTimeImmutable($dateMinBound . ' 00:00:00', $tz);
+        $dateMaxDt = new DateTimeImmutable($dateMaxBound . ' 23:59:59', $tz);
     }
     $rangeStart = new DateTimeImmutable(sprintf('%04d-01-01 00:00:00', $selectedYear), $tz);
     $rangeEnd = new DateTimeImmutable(sprintf('%04d-12-31 23:59:59', $selectedYear), $tz);
 } elseif ($rangeStart === null && $rangeEnd instanceof DateTimeImmutable) {
-    $rangeStart = $rangeEnd->modify('-1 year')->setTime(0, 0, 0);
+    $rangeStart = $dateMinDt;
 } elseif ($rangeEnd === null && $rangeStart instanceof DateTimeImmutable) {
-    $rangeEnd = $nowManila->setTime(23, 59, 59);
+    $rangeEnd = $dateMaxDt;
 }
 
-if ($rangeStart instanceof DateTimeImmutable && $rangeEnd instanceof DateTimeImmutable && $rangeStart > $rangeEnd) {
-    $tmp = $rangeStart;
-    $rangeStart = $rangeEnd->setTime(0, 0, 0);
-    $rangeEnd = $tmp->setTime(23, 59, 59);
+if ($rangeStart instanceof DateTimeImmutable && $rangeStart < $dateMinDt) {
+    $rangeStart = $dateMinDt;
+}
+if ($rangeEnd instanceof DateTimeImmutable && $rangeEnd > $dateMaxDt) {
+    $rangeEnd = $dateMaxDt;
+}
+if ($rangeStart instanceof DateTimeImmutable && $rangeEnd instanceof DateTimeImmutable) {
+    $startDay = $rangeStart->setTime(0, 0, 0);
+    $endDay = $rangeEnd->setTime(0, 0, 0);
+    // To must be after From (same calendar day is not a valid end).
+    if ($endDay <= $startDay) {
+        $rangeEnd = $startDay->modify('+1 day')->setTime(23, 59, 59);
+        if ($rangeEnd > $dateMaxDt) {
+            // No later day in scope — keep a single-day window on From.
+            $rangeEnd = $startDay->setTime(23, 59, 59);
+        }
+    }
+}
+if ($rangeStart instanceof DateTimeImmutable && $rangeStart < $dateMinDt) {
+    $rangeStart = $dateMinDt;
+}
+if ($rangeEnd instanceof DateTimeImmutable && $rangeEnd > $dateMaxDt) {
+    $rangeEnd = $dateMaxDt;
+}
+
+// Keep Year dropdown on the chosen year even when From/To are filled.
+$yearSelectValue = '';
+if ($yearRaw !== '' && $selectedYear !== null) {
+    $yearSelectValue = (string) $selectedYear;
+} elseif ($dateFromRaw === '' && $dateToRaw === '') {
+    $yearSelectValue = (string) ($selectedYear ?? $latestYear);
 }
 
 /**
@@ -130,6 +207,8 @@ function analytics_load_events(
 }
 
 /**
+ * Flat batch counts — avoids nested tickets(attendance) embeds.
+ *
  * @param list<string> $eventIds
  * @return array{regs: array<string,int>, checked_in: array<string,int>}
  */
@@ -146,66 +225,105 @@ function analytics_participant_counts(array $headers, array $eventIds): array
         $checkedIn[$id] = 0;
     }
 
+    /** @var array<string,string> $regToEvent */
+    $regToEvent = [];
+    /** @var array<string,true> $checkedRegIds */
+    $checkedRegIds = [];
+
     foreach (array_chunk($eventIds, 40) as $chunk) {
         $inList = implode(',', array_map(
             static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
             $chunk
         ));
-
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-            . '?select=' . rawurlencode('event_id,tickets(attendance(check_in_at))')
+            . '?select=id,event_id'
             . '&event_id=in.(' . $inList . ')'
             . '&limit=5000';
         $res = supabase_request('GET', $url, $headers);
-        if (!($res['ok'] ?? false)) {
-            // Fallback: registration ids only.
-            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-                . '?select=event_id'
-                . '&event_id=in.(' . $inList . ')'
-                . '&limit=5000';
-            $res = supabase_request('GET', $url, $headers);
-        }
-
         $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
         if (!is_array($rows)) {
             continue;
         }
-
         foreach ($rows as $row) {
             if (!is_array($row)) {
                 continue;
             }
             $eid = trim((string) ($row['event_id'] ?? ''));
+            $rid = trim((string) ($row['id'] ?? ''));
             if ($eid === '' || !isset($regs[$eid])) {
                 continue;
             }
             $regs[$eid]++;
-
-            $hasCheckIn = false;
-            $tickets = $row['tickets'] ?? null;
-            if (is_array($tickets)) {
-                $ticketRows = isset($tickets[0]) || $tickets === [] ? $tickets : [$tickets];
-                foreach ($ticketRows as $ticket) {
-                    if (!is_array($ticket)) {
-                        continue;
-                    }
-                    $atts = $ticket['attendance'] ?? null;
-                    if (!is_array($atts)) {
-                        continue;
-                    }
-                    $attRows = isset($atts[0]) || $atts === [] ? $atts : [$atts];
-                    foreach ($attRows as $att) {
-                        if (!is_array($att)) {
-                            continue;
-                        }
-                        if (trim((string) ($att['check_in_at'] ?? '')) !== '') {
-                            $hasCheckIn = true;
-                            break 2;
-                        }
-                    }
-                }
+            if ($rid !== '') {
+                $regToEvent[$rid] = $eid;
             }
-            if ($hasCheckIn) {
+        }
+    }
+
+    $regIds = array_keys($regToEvent);
+    if ($regIds === []) {
+        return ['regs' => $regs, 'checked_in' => $checkedIn];
+    }
+
+    /** @var array<string,string> $ticketToReg */
+    $ticketToReg = [];
+    foreach (array_chunk($regIds, 80) as $chunk) {
+        $inList = implode(',', array_map(
+            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+            $chunk
+        ));
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets'
+            . '?select=id,registration_id'
+            . '&registration_id=in.(' . $inList . ')'
+            . '&limit=5000';
+        $res = supabase_request('GET', $url, $headers);
+        $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $tid = trim((string) ($row['id'] ?? ''));
+            $rid = trim((string) ($row['registration_id'] ?? ''));
+            if ($tid !== '' && $rid !== '' && isset($regToEvent[$rid])) {
+                $ticketToReg[$tid] = $rid;
+            }
+        }
+    }
+
+    $ticketIds = array_keys($ticketToReg);
+    foreach (array_chunk($ticketIds, 80) as $chunk) {
+        if ($chunk === []) {
+            continue;
+        }
+        $inList = implode(',', array_map(
+            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+            $chunk
+        ));
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+            . '?select=ticket_id,check_in_at'
+            . '&ticket_id=in.(' . $inList . ')'
+            . '&check_in_at=not.is.null'
+            . '&limit=5000';
+        $res = supabase_request('GET', $url, $headers);
+        $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row) || trim((string) ($row['check_in_at'] ?? '')) === '') {
+                continue;
+            }
+            $tid = trim((string) ($row['ticket_id'] ?? ''));
+            $rid = $ticketToReg[$tid] ?? '';
+            if ($rid === '' || isset($checkedRegIds[$rid])) {
+                continue;
+            }
+            $checkedRegIds[$rid] = true;
+            $eid = $regToEvent[$rid] ?? '';
+            if ($eid !== '' && isset($checkedIn[$eid])) {
                 $checkedIn[$eid]++;
             }
         }
@@ -255,7 +373,7 @@ foreach ($events as $ev) {
 }
 
 $yearOptions = [];
-for ($y = $currentYear; $y >= $currentYear - 6; $y--) {
+for ($y = $latestYear; $y >= $systemStartYear; $y--) {
     $yearOptions[] = $y;
 }
 
@@ -303,11 +421,11 @@ render_header('Analytics', $user);
     <span class="text-[11px] font-black uppercase tracking-widest text-zinc-400 mr-1">Quick</span>
     <a href="<?= htmlspecialchars($qsBase(['preset' => 'this_year', 'from' => '', 'to' => '', 'year' => (string) $currentYear])) ?>"
       class="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-800">This year</a>
-    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_3_months', 'year' => '', 'from' => $nowManila->modify('-3 months')->format('Y-m-d'), 'to' => $nowManila->format('Y-m-d')])) ?>"
+    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_3_months', 'year' => '', 'from' => $clampDateRaw($nowManila->modify('-3 months')->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz), 'to' => $clampDateRaw($nowManila->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz)])) ?>"
       class="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-800">Last 3 months</a>
-    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_6_months', 'year' => '', 'from' => $nowManila->modify('-6 months')->format('Y-m-d'), 'to' => $nowManila->format('Y-m-d')])) ?>"
+    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_6_months', 'year' => '', 'from' => $clampDateRaw($nowManila->modify('-6 months')->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz), 'to' => $clampDateRaw($nowManila->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz)])) ?>"
       class="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-800">Last 6 months</a>
-    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_12_months', 'year' => '', 'from' => $nowManila->modify('-12 months')->format('Y-m-d'), 'to' => $nowManila->format('Y-m-d')])) ?>"
+    <a href="<?= htmlspecialchars($qsBase(['preset' => 'last_12_months', 'year' => '', 'from' => $clampDateRaw($nowManila->modify('-12 months')->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz), 'to' => $clampDateRaw($nowManila->format('Y-m-d'), $systemMinDt, $systemMaxDt, $tz)])) ?>"
       class="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-bold text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-800">Last 12 months</a>
   </div>
 
@@ -316,20 +434,23 @@ render_header('Analytics', $user);
       <label for="year" class="block text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">Year</label>
       <select id="year" name="year"
         class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400">
-        <option value="" <?= ($dateFromRaw !== '' || $dateToRaw !== '') ? 'selected' : '' ?>>All (use dates)</option>
+        <option value="" <?= $yearSelectValue === '' ? 'selected' : '' ?>>All (use dates)</option>
         <?php foreach ($yearOptions as $y): ?>
-          <option value="<?= $y ?>" <?= $dateFromRaw === '' && $dateToRaw === '' && $selectedYear === $y ? 'selected' : '' ?>><?= $y ?></option>
+          <option value="<?= $y ?>" <?= $yearSelectValue === (string) $y ? 'selected' : '' ?>><?= $y ?></option>
         <?php endforeach; ?>
       </select>
     </div>
     <div>
       <label for="from" class="block text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">From</label>
       <input type="date" id="from" name="from" value="<?= htmlspecialchars($dateFromRaw !== '' ? $dateFromRaw : '') ?>"
+        min="<?= htmlspecialchars($dateMinBound) ?>" max="<?= htmlspecialchars($dateMaxBound) ?>"
+        data-system-min="<?= htmlspecialchars($systemMinBound) ?>" data-system-max="<?= htmlspecialchars($systemMaxBound) ?>"
         class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400">
     </div>
     <div>
       <label for="to" class="block text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">To</label>
       <input type="date" id="to" name="to" value="<?= htmlspecialchars($dateToRaw !== '' ? $dateToRaw : '') ?>"
+        min="<?= htmlspecialchars($dateMinBound) ?>" max="<?= htmlspecialchars($dateMaxBound) ?>"
         class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400">
     </div>
     <div>
@@ -343,7 +464,7 @@ render_header('Analytics', $user);
         <option value="approved" <?= $statusFilter === 'approved' ? 'selected' : '' ?>>Approved</option>
         <option value="archived" <?= $statusFilter === 'archived' ? 'selected' : '' ?>>Archived</option>
       </select>
-    </div>
+     </div>
     <div class="flex gap-2">
       <button type="submit"
         class="flex-1 rounded-xl bg-orange-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-orange-700 shadow-sm">
@@ -353,10 +474,10 @@ render_header('Analytics', $user);
         class="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm font-bold text-zinc-600 hover:bg-zinc-50">
         Reset
       </a>
-    </div>
+     </div>
   </div>
   <p class="text-[11px] text-zinc-500 mt-3 font-medium">
-    Tip: set <span class="font-bold text-zinc-700">From / To</span> for a custom range (overrides year). Leave dates empty and pick a year for a full calendar year.
+    Tip: pick a <span class="font-bold text-zinc-700">Year</span> then narrow with From/To inside that year. Use <span class="font-bold text-zinc-700">All</span> for a custom range within <?= (int) $systemStartYear ?>–<?= (int) $latestYear ?>.
   </p>
 </form>
 
@@ -366,19 +487,19 @@ render_header('Analytics', $user);
     <div class="text-2xl font-black text-zinc-900"><?= count($events) ?></div>
     <div class="text-[11px] text-zinc-500 font-medium mt-1">
       <?= (int) $statusBuckets['published'] ?> published · <?= (int) $statusBuckets['finished'] ?> finished
-    </div>
+     </div>
   </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-orange-500 shadow-sm">
     <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Registrations</div>
     <div class="text-2xl font-black text-zinc-900"><?= $sumRegs ?></div>
     <div class="text-[11px] text-zinc-500 font-medium mt-1">Participants across listed events</div>
-  </div>
+     </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-emerald-500 shadow-sm">
     <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Checked in</div>
     <div class="text-2xl font-black text-zinc-900"><?= $sumCheckIns ?></div>
     <div class="text-[11px] text-zinc-500 font-medium mt-1">
       <?= $sumRegs > 0 ? (int) round($sumCheckIns / $sumRegs * 100) : 0 ?>% of registrations
-    </div>
+     </div>
   </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-violet-500 shadow-sm">
     <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Avg / event</div>
@@ -391,7 +512,7 @@ render_header('Analytics', $user);
 
 <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
   <div class="px-5 py-4 border-b border-zinc-100 bg-zinc-50/80 flex flex-wrap items-center justify-between gap-3">
-    <div>
+      <div>
       <h3 class="text-base font-bold text-zinc-900">Events</h3>
       <p class="text-[11px] text-zinc-500 font-medium mt-0.5">Newest first · click a row to open event details</p>
     </div>
@@ -422,7 +543,7 @@ render_header('Analytics', $user);
         </thead>
         <tbody class="divide-y divide-zinc-100">
           <?php foreach ($events as $ev): ?>
-            <?php
+    <?php
             if (!is_array($ev)) {
                 continue;
             }
@@ -474,7 +595,7 @@ render_header('Analytics', $user);
           <?php endforeach; ?>
         </tbody>
       </table>
-    </div>
+  </div>
   <?php endif; ?>
 </div>
 
@@ -484,19 +605,92 @@ render_header('Analytics', $user);
   var from = document.getElementById('from');
   var to = document.getElementById('to');
   if (!year || !from || !to) return;
+  var systemMin = from.getAttribute('data-system-min') || from.getAttribute('min') || '';
+  var systemMax = from.getAttribute('data-system-max') || from.getAttribute('max') || '';
+
+  function pad(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function addDays(ymd, delta) {
+    if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return '';
+    var parts = ymd.split('-');
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    d.setDate(d.getDate() + delta);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function clampYmd(value, minB, maxB) {
+    if (!value) return value;
+    if (minB && value < minB) return minB;
+    if (maxB && value > maxB) return maxB;
+    return value;
+  }
+
+  function yearBounds() {
+    var y = String(year.value || '').trim();
+    if (y) {
+      return { min: y + '-01-01', max: y + '-12-31' };
+    }
+    return { min: systemMin, max: systemMax };
+  }
+
+  function syncDateBounds() {
+    var bounds = yearBounds();
+    var fromMin = bounds.min;
+    var fromMax = bounds.max;
+    var toMin = bounds.min;
+    var toMax = bounds.max;
+
+    // From cannot be after To; To cannot be on/before From → To starts the next day.
+    if (to.value) {
+      var maxForFrom = addDays(to.value, -1);
+      if (maxForFrom && (!fromMax || maxForFrom < fromMax)) {
+        fromMax = maxForFrom;
+      }
+      if (fromMin && fromMax && fromMin > fromMax) {
+        fromMax = fromMin;
+      }
+    }
+    if (from.value) {
+      var minForTo = addDays(from.value, 1);
+      if (minForTo && (!toMin || minForTo > toMin)) {
+        toMin = minForTo;
+      }
+      if (toMin && toMax && toMin > toMax) {
+        toMin = toMax;
+      }
+    }
+
+    from.min = fromMin || '';
+    from.max = fromMax || '';
+    to.min = toMin || '';
+    to.max = toMax || '';
+
+    if (from.value) {
+      from.value = clampYmd(from.value, from.min, from.max);
+    }
+    if (to.value) {
+      to.value = clampYmd(to.value, to.min, to.max);
+      // If To collapsed onto/before From, clear it so the user picks a later day.
+      if (from.value && to.value && to.value <= from.value) {
+        to.value = '';
+        syncDateBounds();
+        return;
+      }
+    }
+  }
+
   year.addEventListener('change', function () {
     if (year.value) {
       from.value = '';
       to.value = '';
     }
+    syncDateBounds();
   });
-  function onDateInput() {
-    if (from.value || to.value) {
-      year.value = '';
-    }
-  }
-  from.addEventListener('change', onDateInput);
-  to.addEventListener('change', onDateInput);
+  from.addEventListener('change', syncDateBounds);
+  to.addEventListener('change', syncDateBounds);
+  syncDateBounds();
 })();
 </script>
 

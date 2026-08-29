@@ -31,7 +31,7 @@ function user_notification_type_from_payload(array $data): string
 {
     $type = strtolower(trim((string) ($data['type'] ?? 'info')));
     return match ($type) {
-        'event_published', 'reg_open', 'proposal-documents', 'proposal_requirements_requested' => 'info',
+        'event_published', 'reg_open', 'reg_extended', 'proposal-documents', 'proposal_requirements_requested' => 'info',
         'reg_approved', 'certificate_ready', 'certificate' => 'success',
         'proposal-rejected', 'proposal_rejected', 'eval_open' => 'warning',
         default => 'info',

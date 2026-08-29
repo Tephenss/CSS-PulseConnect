@@ -10,6 +10,15 @@ require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/device_trust.php';
 
+function mobile_email_otp_normalize_purpose(string $raw): string
+{
+    $p = strtolower(trim($raw));
+    if (in_array($p, ['signup', 'register', 'registration', 'create'], true)) {
+        return 'signup';
+    }
+    return 'login';
+}
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
@@ -19,11 +28,16 @@ $userIdClaim = trim((string) ($data['user_id'] ?? ''));
 $deviceKey = strtolower(trim((string) ($data['device_key'] ?? '')));
 $platform = trim((string) ($data['platform'] ?? 'android'));
 $deviceLabel = trim((string) ($data['device_label'] ?? ''));
+$purpose = mobile_email_otp_normalize_purpose((string) ($data['purpose'] ?? 'login'));
 
-// Prefer session when present (daily re-verify); allow user_id for first-time signup verify.
+// Prefer session when present (daily re-verify / login OTP).
+// Signup OTP must use claimed user_id only — a leftover session from another
+// account would otherwise fail with "user_id does not match mobile session."
 $sessionToken = mobile_session_extract_token($data);
 $userId = '';
-if ($sessionToken !== '') {
+if ($purpose === 'signup') {
+    $userId = $userIdClaim;
+} elseif ($sessionToken !== '') {
     $sessionUser = mobile_api_require_user($data);
     $userId = (string) ($sessionUser['id'] ?? '');
     $email = strtolower(trim((string) ($sessionUser['email'] ?? $email)));
@@ -32,7 +46,7 @@ if ($sessionToken !== '') {
 }
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-if (!api_rate_limit_allow('mobile_email_verify_code:' . $clientIp, 20, 300)) {
+if (!api_rate_limit_allow('mobile_email_verify_code:' . $purpose . ':' . $clientIp, 20, 300)) {
     json_response(['ok' => false, 'error' => 'Too many attempts. Please wait.'], 429);
 }
 
@@ -45,18 +59,33 @@ if (!preg_match('/^\d{6}$/', $code)) {
 
 $headers = mobile_api_supabase_headers();
 $codeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
-    . '?select=user_id,code,expires_at'
+    . '?select=user_id,code,expires_at,purpose'
     . '&user_id=eq.' . rawurlencode($userId)
+    . '&purpose=eq.' . rawurlencode($purpose)
     . '&order=last_sent_at.desc'
     . '&limit=1';
 $codeRes = supabase_request('GET', $codeUrl, $headers);
-if (!$codeRes['ok']) {
+$purposeFilterOk = ($codeRes['ok'] ?? false);
+if (!$purposeFilterOk) {
+    $codeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+        . '?select=user_id,code,expires_at'
+        . '&user_id=eq.' . rawurlencode($userId)
+        . '&order=last_sent_at.desc'
+        . '&limit=1';
+    $codeRes = supabase_request('GET', $codeUrl, $headers);
+}
+if (!($codeRes['ok'] ?? false)) {
     json_response(['ok' => false, 'error' => 'Failed to look up verification code.'], 500);
 }
 $codeRows = json_decode((string) $codeRes['body'], true);
 $row = is_array($codeRows) && isset($codeRows[0]) && is_array($codeRows[0]) ? $codeRows[0] : null;
 if (!$row) {
-    json_response(['ok' => false, 'error' => 'No verification code found. Please request a new code.'], 400);
+    json_response([
+        'ok' => false,
+        'error' => $purpose === 'signup'
+            ? 'No signup verification code found. Please request a new code.'
+            : 'No login verification code found. Please request a new code.',
+    ], 400);
 }
 
 $storedCode = trim((string) ($row['code'] ?? ''));
@@ -115,11 +144,13 @@ if (!$userRes['ok']) {
     json_response(['ok' => false, 'error' => 'Failed to update verification status.'], 500);
 }
 
-supabase_request(
-    'DELETE',
-    rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes?user_id=eq.' . rawurlencode($userId),
-    $headers
-);
+// Delete only this purpose's code so signup/login stay independent.
+$deleteUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+    . '?user_id=eq.' . rawurlencode($userId);
+if ($purposeFilterOk) {
+    $deleteUrl .= '&purpose=eq.' . rawurlencode($purpose);
+}
+supabase_request('DELETE', $deleteUrl, $headers);
 
 $userRows = json_decode((string) $userRes['body'], true);
 $user = is_array($userRows) && isset($userRows[0]) && is_array($userRows[0])
@@ -154,6 +185,7 @@ if ($deviceKey !== '') {
 json_response([
     'ok' => true,
     'message' => 'Email verified.',
+    'purpose' => $purpose,
     'user' => $user,
     'device_trusted' => $trustedDevice,
 ], 200);

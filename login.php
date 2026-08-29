@@ -34,6 +34,7 @@ csrf_ensure_token();
 
 $error = null;
 $info = null;
+$loginRetryAfter = 0;
 $old = [
     'email' => '',
 ];
@@ -323,8 +324,27 @@ function admin_login_store_code(string $userId, string $code): bool
         'expires_at' => $expiresAt,
         'created_at' => $now,
         'last_sent_at' => $now,
+        'purpose' => 'login',
     ];
 
+    $res = supabase_request(
+        'POST',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes?on_conflict=user_id,purpose',
+        [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+            'Prefer: resolution=merge-duplicates,return=representation',
+        ],
+        json_encode($payload, JSON_UNESCAPED_SLASHES)
+    );
+    if ($res['ok'] === true) {
+        return true;
+    }
+
+    // Legacy table without purpose column.
+    unset($payload['purpose']);
     $res = supabase_request(
         'POST',
         rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes',
@@ -348,9 +368,21 @@ function admin_login_fetch_code_row(string $userId): ?array
         rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
             . '?select=user_id,code,expires_at'
             . '&user_id=eq.' . rawurlencode($userId)
+            . '&purpose=eq.login'
             . '&limit=1',
         admin_login_headers()
     );
+
+    if (!$res['ok']) {
+        $res = supabase_request(
+            'GET',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+                . '?select=user_id,code,expires_at'
+                . '&user_id=eq.' . rawurlencode($userId)
+                . '&limit=1',
+            admin_login_headers()
+        );
+    }
 
     if (!$res['ok']) {
         return null;
@@ -362,12 +394,21 @@ function admin_login_fetch_code_row(string $userId): ?array
 
 function admin_login_delete_code(string $userId): void
 {
-    supabase_request(
+    $res = supabase_request(
         'DELETE',
         rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
-            . '?user_id=eq.' . rawurlencode($userId),
+            . '?user_id=eq.' . rawurlencode($userId)
+            . '&purpose=eq.login',
         admin_login_headers()
     );
+    if (!($res['ok'] ?? false)) {
+        supabase_request(
+            'DELETE',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+                . '?user_id=eq.' . rawurlencode($userId),
+            admin_login_headers()
+        );
+    }
 }
 
 function admin_login_issue_challenge(
@@ -574,18 +615,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             require_once __DIR__ . '/includes/api_rate_limit.php';
             $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-            if (!api_rate_limit_allow('web_login:' . $clientIp, 8, 900)) {
-                $error = 'Too many login attempts. Try again in a few minutes.';
-            } else {
             $email = isset($_POST['email']) ? strtolower(clean_string((string) $_POST['email'])) : '';
             $password = isset($_POST['password']) ? (string) $_POST['password'] : '';
-
             $old['email'] = $email;
 
-            if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            // Per-email lockout so admin failures don't block a teacher account.
+            // Soft IP cap only stops spraying many different emails from one IP.
+            $loginWindow = 900; // 15 minutes
+            $emailMaxFails = 8;
+            $ipMaxFails = 40;
+            $emailBucket = $email !== '' ? ('web_login:email:' . $email) : '';
+            $ipBucket = 'web_login:ip:' . $clientIp;
+
+            $retryEmail = ($emailBucket !== '' && filter_var($email, FILTER_VALIDATE_EMAIL))
+                ? api_rate_limit_retry_after($emailBucket, $emailMaxFails, $loginWindow)
+                : 0;
+            $retryIp = api_rate_limit_retry_after($ipBucket, $ipMaxFails, $loginWindow);
+            $loginRetryAfter = max($retryEmail, $retryIp);
+
+            if ($loginRetryAfter > 0) {
+                $waitLabel = api_rate_limit_format_wait($loginRetryAfter);
+                if ($retryEmail > 0 && $retryEmail >= $retryIp) {
+                    $error = 'Too many login attempts for this account. Try again in ' . $waitLabel . '.';
+                } else {
+                    $error = 'Too many login attempts from this network. Try again in ' . $waitLabel . '.';
+                }
+            } elseif ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 $error = 'Invalid email or password.';
+                api_rate_limit_record($ipBucket, $loginWindow);
             } elseif ($password === '') {
                 $error = 'Invalid email or password.';
+                if ($emailBucket !== '') {
+                    api_rate_limit_record($emailBucket, $loginWindow);
+                }
+                api_rate_limit_record($ipBucket, $loginWindow);
             } else {
                 $filterEmail = rawurlencode($email);
                 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
@@ -602,12 +665,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (count($rows) < 1 || !isset($rows[0]['password'])) {
                         $error = 'Invalid email or password.';
+                        api_rate_limit_record($emailBucket, $loginWindow);
+                        api_rate_limit_record($ipBucket, $loginWindow);
+                        $loginRetryAfter = api_rate_limit_retry_after($emailBucket, $emailMaxFails, $loginWindow);
+                        if ($loginRetryAfter > 0) {
+                            $error = 'Too many login attempts for this account. Try again in '
+                                . api_rate_limit_format_wait($loginRetryAfter) . '.';
+                        }
                     } else {
                         $user = $rows[0];
                         $storedHash = (string) $user['password'];
 
                         if (!password_verify($password, $storedHash)) {
                             $error = 'Invalid email or password.';
+                            api_rate_limit_record($emailBucket, $loginWindow);
+                            api_rate_limit_record($ipBucket, $loginWindow);
+                            $loginRetryAfter = api_rate_limit_retry_after($emailBucket, $emailMaxFails, $loginWindow);
+                            if ($loginRetryAfter > 0) {
+                                $error = 'Too many login attempts for this account. Try again in '
+                                    . api_rate_limit_format_wait($loginRetryAfter) . '.';
+                            }
                         } else {
                             $role = admin_login_normalize_staff_role((string) ($user['role'] ?? ''));
 
@@ -641,7 +718,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
-            } // rate-limit allow
         }
     } catch (Throwable $e) {
         error_log(
@@ -748,7 +824,13 @@ if ($isVerificationMode && is_array($challenge)) {
 
                 <?php if ($error): ?>
                     <div class="mb-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-200">
-                        <?= htmlspecialchars($error) ?>
+                        <div><?= htmlspecialchars($error) ?></div>
+                        <?php if ($loginRetryAfter > 0): ?>
+                            <div class="mt-2 text-xs text-red-300/90" data-login-retry="<?= (int) $loginRetryAfter ?>">
+                                Available again in
+                                <strong id="loginRetryCountdown"><?= htmlspecialchars(api_rate_limit_format_wait($loginRetryAfter)) ?></strong>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
 
@@ -1034,6 +1116,34 @@ if ($isVerificationMode && is_array($challenge)) {
                 btn.disabled = true;
                 btn.textContent = 'Resend in ' + left + 's';
                 if (hint) hint.classList.remove('hidden');
+                left -= 1;
+                window.setTimeout(tick, 1000);
+            }
+            tick();
+        })();
+
+        (function () {
+            var wrap = document.querySelector('[data-login-retry]');
+            var el = document.getElementById('loginRetryCountdown');
+            if (!wrap || !el) return;
+            var left = parseInt(wrap.getAttribute('data-login-retry') || '0', 10);
+            if (!Number.isFinite(left) || left <= 0) return;
+
+            function fmt(sec) {
+                sec = Math.max(0, sec | 0);
+                var m = Math.floor(sec / 60);
+                var s = sec % 60;
+                if (m <= 0) return s + ' second' + (s === 1 ? '' : 's');
+                if (s <= 0) return m + ' minute' + (m === 1 ? '' : 's');
+                return m + ' minute' + (m === 1 ? '' : 's') + ' ' + s + ' second' + (s === 1 ? '' : 's');
+            }
+
+            function tick() {
+                if (left <= 0) {
+                    el.textContent = 'now — refresh to try again';
+                    return;
+                }
+                el.textContent = fmt(left);
                 left -= 1;
                 window.setTimeout(tick, 1000);
             }

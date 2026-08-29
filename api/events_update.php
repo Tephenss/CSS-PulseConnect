@@ -51,9 +51,16 @@ $readHeaders = [
 ];
 
 $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-    . '&select=id,status,created_by,start_at'
+    . '&select=id,status,created_by,title,event_for,start_at,registration_close_weeks,registration_close_extend_days,allow_registration'
     . '&limit=1';
 $checkRes = supabase_request('GET', $checkUrl, $readHeaders);
+if (!$checkRes['ok']) {
+    // Older DBs without extend column — still need weeks for extend math.
+    $checkUrlFb = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
+        . '&select=id,status,created_by,title,event_for,start_at,registration_close_weeks,allow_registration'
+        . '&limit=1';
+    $checkRes = supabase_request('GET', $checkUrlFb, $readHeaders);
+}
 if (!$checkRes['ok']) {
     json_response(['ok' => false, 'error' => 'Event lookup failed'], 500);
 }
@@ -86,6 +93,10 @@ if (isset($data['location'])) {
 }
 if (isset($data['description'])) {
     $desc = clean_text((string) $data['description']);
+    $descriptionError = validate_event_description_words($desc);
+    if ($descriptionError !== null) {
+        json_response(['ok' => false, 'error' => $descriptionError], 400);
+    }
     $fields['description'] = $desc !== '' ? $desc : null;
 }
 if (isset($data['start_at']) && isset($data['end_at']) && $data['start_at'] !== '' && $data['end_at'] !== '') {
@@ -116,7 +127,7 @@ if (array_key_exists('event_fee', $data)) {
     } else {
         $fee = normalize_event_fee($data['event_fee']);
         if ($fee === null || $fee <= 0) {
-            json_response(['ok' => false, 'error' => 'Enter a valid event fee greater than 0.'], 400);
+            json_response(['ok' => false, 'error' => 'Settlement amount must be between 1 and ' . (int) EVENT_FEE_MAX . '.'], 400);
         }
         $fields['event_fee'] = $fee;
     }
@@ -178,6 +189,7 @@ if (array_key_exists('registration_close_weeks', $data)) {
     }
     $fields['registration_close_weeks'] = $registrationCloseWeeks;
 }
+$registrationExtendNotify = null;
 if (array_key_exists('registration_close_extend_days', $data)) {
     // Client sends user-facing days from anchor (base close, or today if already past).
     $eventForExtend = $currentEvent;
@@ -197,7 +209,31 @@ if (array_key_exists('registration_close_extend_days', $data)) {
             'error' => (string) ($resolved['error'] ?? 'Invalid registration close extension.'),
         ], 400);
     }
-    $fields['registration_close_extend_days'] = (int) ($resolved['extend_days'] ?? 0);
+    $previousExtendDays = event_registration_close_extend_days($currentEvent);
+    $newExtendDays = (int) ($resolved['extend_days'] ?? 0);
+    $fields['registration_close_extend_days'] = $newExtendDays;
+
+    // Extending the close window after auto-close must turn Allow Registration
+    // back ON — otherwise students still see "registration closed".
+    $eventForExtend['registration_close_extend_days'] = $newExtendDays;
+    $windowOpenAfterExtend = !is_event_registration_window_closed($eventForExtend)
+        && event_registration_close_weeks($eventForExtend) !== null;
+    if ($windowOpenAfterExtend) {
+        $fields['allow_registration'] = true;
+    }
+
+    // Notify target students when the close deadline is pushed further.
+    if (
+        $newExtendDays > $previousExtendDays
+        && $windowOpenAfterExtend
+        && strtolower(trim((string) ($currentEvent['status'] ?? ''))) === 'published'
+    ) {
+        $registrationExtendNotify = [
+            'last_day' => (string) ($resolved['last_day'] ?? ''),
+            'title' => trim((string) ($fields['title'] ?? $currentEvent['title'] ?? 'this event')),
+            'event_for' => (string) ($fields['event_for'] ?? $currentEvent['event_for'] ?? 'All'),
+        ];
+    }
 }
 $shouldUpdateMode = isset($data['event_mode']) || $eventMode !== $currentEventMode;
 if ($shouldUpdateMode) {
@@ -221,16 +257,18 @@ if (count($fields) === 0) {
     json_response(['ok' => false, 'error' => 'No fields to update'], 400);
 }
 
-// Teacher can only update pending events they created.
+// Teacher can only update events they created.
 $role = (string) ($user['role'] ?? 'student');
 if ($role === 'teacher') {
     if ((string) ($currentEvent['created_by'] ?? '') !== (string) ($user['id'] ?? '')) {
         json_response(['ok' => false, 'error' => 'Forbidden'], 403);
     }
-    
+
     $currentStatus = (string) ($currentEvent['status'] ?? '');
-    if (!in_array($currentStatus, ['pending', 'archived'], true)) {
-        json_response(['ok' => false, 'error' => 'Only pending or rejected events can be edited'], 409);
+    // pending/archived: full edit for resubmit.
+    // published: allow event_view edits (details + registration close extend).
+    if (!in_array($currentStatus, ['pending', 'archived', 'published'], true)) {
+        json_response(['ok' => false, 'error' => 'Only pending, published, or rejected events can be edited'], 409);
     }
 
     // If it was archived (rejected), move it back to pending for review
@@ -375,5 +413,55 @@ if ($role === 'teacher' && $studentRequirementsProvided) {
 require_once __DIR__ . '/../includes/api_cache.php';
 api_cache_bump_generation('manage_events');
 
-json_response(['ok' => true, 'event' => $event], 200);
+$push = null;
+if (is_array($registrationExtendNotify)) {
+    try {
+        $notifyEvent = [
+            'id' => $eventId,
+            'title' => (string) ($registrationExtendNotify['title'] ?? 'Event'),
+            'event_for' => (string) ($registrationExtendNotify['event_for'] ?? 'All'),
+        ];
+        $targetStudents = fetch_target_students_for_event($notifyEvent, $readHeaders);
+        $targetIds = array_values(array_filter(array_map(
+            static fn (array $row): string => trim((string) ($row['id'] ?? '')),
+            $targetStudents
+        )));
+        if ($targetIds !== []) {
+            $eventTitle = trim((string) ($notifyEvent['title'] ?? 'this event'));
+            if ($eventTitle === '') {
+                $eventTitle = 'this event';
+            }
+            $lastDayRaw = trim((string) ($registrationExtendNotify['last_day'] ?? ''));
+            $untilText = '';
+            if ($lastDayRaw !== '') {
+                try {
+                    $untilText = (new DateTimeImmutable($lastDayRaw . ' 00:00:00', new DateTimeZone('Asia/Manila')))
+                        ->format('M j, Y');
+                } catch (Throwable $e) {
+                    $untilText = $lastDayRaw;
+                }
+            }
+            $body = $untilText !== ''
+                ? 'Registration for "' . $eventTitle . '" was extended. You can still register until ' . $untilText . '.'
+                : 'Registration for "' . $eventTitle . '" was extended. You can register again.';
+            notify_users_for_registration_access(
+                $targetIds,
+                'Registration Extended',
+                $body,
+                [
+                    'event_id' => $eventId,
+                    'type' => 'reg_extended',
+                ]
+            );
+            $push = [
+                'type' => 'reg_extended',
+                'targets' => count($targetIds),
+            ];
+        }
+    } catch (Throwable $e) {
+        error_log('events_update registration extend push: ' . $e->getMessage());
+    }
+}
+
+json_response(['ok' => true, 'event' => $event, 'push' => $push], 200);
 

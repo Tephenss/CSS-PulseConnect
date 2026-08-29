@@ -128,22 +128,22 @@ if ($totalRegistered > 0 && $completedCount === 0) {
     $probeRes = supabase_request('GET', $probeUrl, $headers);
     $probeRows = $probeRes['ok'] ? json_decode((string) $probeRes['body'], true) : null;
     if (is_array($probeRows)) {
-        $completedCount = 0;
+$completedCount = 0;
         foreach ($probeRows as $p) {
             if (!is_array($p)) {
                 continue;
             }
-            $statusStr = '';
-            $tickets = $p['tickets'] ?? null;
+        $statusStr = '';
+        $tickets = $p['tickets'] ?? null;
             if (is_array($tickets) && isset($tickets[0]) && is_array($tickets[0])) {
-                $atts = $tickets[0]['attendance'] ?? null;
-                if (is_array($atts)) {
+            $atts = $tickets[0]['attendance'] ?? null;
+            if (is_array($atts)) {
                     $firstAtt = isset($atts[0]) && is_array($atts[0]) ? $atts[0] : $atts;
                     $statusStr = (string) ($firstAtt['status'] ?? '');
                 }
             }
-            if ($statusStr !== '' && $statusStr !== 'unscanned') {
-                $completedCount++;
+        if ($statusStr !== '' && $statusStr !== 'unscanned') {
+            $completedCount++;
             }
         }
     }
@@ -184,7 +184,7 @@ if ($isEventCreatorTeacherEarly) {
     ];
     foreach ($eventTemplateSelects as $selectQuery) {
         $eventTemplateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificate_templates' . $selectQuery;
-        $eventTemplateRes = supabase_request('GET', $eventTemplateUrl, $headers);
+    $eventTemplateRes = supabase_request('GET', $eventTemplateUrl, $headers);
         if (!$eventTemplateRes['ok']) {
             continue;
         }
@@ -208,15 +208,14 @@ if ($isEventCreatorTeacherEarly) {
             $row['thumbnail_url'] = (string) ($row['thumbnail_url'] ?? '');
             $row['created_at'] = (string) ($row['created_at'] ?? '');
             $row['updated_at'] = (string) ($row['updated_at'] ?? $row['created_at'] ?? '');
-            $certificateTemplates[] = [
-                ...$row,
+            $certificateTemplates[] = array_merge($row, [
                 'template_scope' => 'event',
                 'scope_session_id' => '',
                 'scope_label' => $rowEventId === $id ? 'Linked to event' : 'Saved template',
                 'linked_event_label' => $rowEventId === $id
                     ? (string) ($event['title'] ?? 'Current Event')
                     : 'Template Library',
-            ];
+            ]);
         }
     }
 
@@ -232,11 +231,11 @@ if ($isEventCreatorTeacherEarly) {
             ['query' => '?select=id,title,session_id', 'order' => '&order=id.desc'],
         ];
         foreach ($sessionSelects as $selectConfig) {
-            $sessionTemplateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificate_templates'
+        $sessionTemplateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificate_templates'
                 . (string) ($selectConfig['query'] ?? '')
-                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+            . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
                 . (string) ($selectConfig['order'] ?? '');
-            $sessionTemplateRes = supabase_request('GET', $sessionTemplateUrl, $headers);
+        $sessionTemplateRes = supabase_request('GET', $sessionTemplateUrl, $headers);
             if (!$sessionTemplateRes['ok']) {
                 continue;
             }
@@ -254,13 +253,12 @@ if ($isEventCreatorTeacherEarly) {
                 $row['thumbnail_url'] = (string) ($row['thumbnail_url'] ?? '');
                 $row['created_at'] = (string) ($row['created_at'] ?? '');
                 $sessionMeta = $sessionLookup[(string) ($row['session_id'] ?? '')] ?? [];
-                $certificateTemplates[] = [
-                    ...$row,
+                $certificateTemplates[] = array_merge($row, [
                     'template_scope' => 'session',
                     'scope_session_id' => (string) ($row['session_id'] ?? ''),
                     'scope_label' => build_session_display_name($sessionMeta),
                     'linked_event_label' => (string) ($event['title'] ?? 'Current Event'),
-                ];
+                ]);
             }
         }
     }
@@ -382,17 +380,17 @@ render_header('Event Details', $user);
 
     <?php
     if ($role === 'admin' || $role === 'teacher') {
-        render_event_tabs([
-            'event_id' => $id,
-            'current_tab' => 'details',
-            'role' => $role,
-            'uses_sessions' => count($sessions) > 0,
-            'event_status' => $status,
+    render_event_tabs([
+        'event_id' => $id,
+        'current_tab' => 'details',
+        'role' => $role,
+        'uses_sessions' => count($sessions) > 0,
+        'event_status' => $status,
             'return_to' => $returnTo,
             'has_student_requirements' => $hasStudentRequirements,
             'is_event_creator' => $isEventCreatorTeacher || $role === 'admin',
             'is_paid_event' => $isPaidEvent,
-        ]);
+    ]);
     }
 
     $coverImageUrl = trim((string) ($event['cover_image_url'] ?? ''));
@@ -515,7 +513,7 @@ render_header('Event Details', $user);
                             class="<?= htmlspecialchars($studentButtonClasses) ?>"
                             <?= $studentCanRegister ? '' : 'disabled' ?>>
                             <?= htmlspecialchars($studentButtonLabel) ?>
-                        </button>
+                            </button>
                         <a href="/my_tickets.php" class="rounded-xl border border-zinc-300 bg-zinc-50 px-5 py-3 text-sm font-bold text-zinc-800 hover:bg-white transition shadow-sm">
                             My Tickets
                         </a>
@@ -579,7 +577,7 @@ render_header('Event Details', $user);
             </div>
             <?php endif; ?>
             <?php endif; ?>
-
+            
             <!-- Cards from manual -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm hover:border-emerald-300 transition-all group flex items-center gap-4">
                 <div class="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0 text-emerald-600">
@@ -1393,21 +1391,21 @@ window.IMPORT_LINKED_CERT = <?= json_encode($linkedImportJson, JSON_UNESCAPED_SL
             <div class="text-[11px] text-amber-700 mt-1">incomplete</div>
           </div>
           <button id="btnCloseTemplateCertModal" class="text-zinc-500 hover:text-zinc-800 focus:outline-none mt-1">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
       </div>
     </div>
+        </div>
     <div class="p-6 overflow-y-auto flex-1">
       <div class="grid grid-cols-1 xl:grid-cols-[280px,minmax(0,1fr)] gap-5 items-start">
         <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 space-y-3 xl:sticky xl:top-0">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <div class="text-sm font-black text-zinc-900 uppercase tracking-widest">Saved Templates</div>
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-black text-zinc-900 uppercase tracking-widest">Saved Templates</div>
               <div class="text-xs text-zinc-500 mt-1">Drag from here, or click then assign on center board.</div>
-            </div>
-            <a href="/certificate_editor?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-[11px] font-bold text-zinc-700 hover:bg-zinc-50 transition">Editor</a>
           </div>
+            <a href="/certificate_editor?event_id=<?= htmlspecialchars($id) ?>" class="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-[11px] font-bold text-zinc-700 hover:bg-zinc-50 transition">Editor</a>
+        </div>
 
           <div id="templateCertGrid" class="max-h-[64vh] overflow-y-auto pr-1 grid grid-cols-1 gap-3">
           <?php if (count($certificateTemplates) === 0): ?>
@@ -3684,6 +3682,70 @@ function mapLayoutBoxToCanvas(layout, canvasW, canvasH, box) {
   };
 }
 
+/**
+ * Grow/reposition certificate code so the full string stays on-canvas.
+ * Mirrors PHP certificate_pptx_fit_code_box — preserves PPT left edge / align.
+ */
+function fitCertificateCodeBox(left, top, width, height, text, fontSize, textAlign, canvasW) {
+  const raw = String(text || '').trim();
+  let align = String(textAlign || '').toLowerCase().trim();
+  if (!['left', 'center', 'right', 'justify'].includes(align)) align = 'left';
+  if (align === 'justify') align = 'left';
+  const font = (fontSize != null && Number(fontSize) >= 6)
+    ? Number(fontSize)
+    : Math.max(10, Math.min(28, Math.max(14, Number(height) * 0.55 || 14)));
+  const edgePad = Math.max(2, Math.min(8, canvasW * 0.004));
+  const maxRight = Math.max(edgePad + 40, canvasW - edgePad);
+  const minLeft = edgePad;
+  const isPlaceholder = !raw
+    || /CERTIFICATE-CODE/i.test(raw)
+    || /^\{\{\s*certificate_code\s*\}\}$/i.test(raw);
+  const sample = isPlaceholder ? 'SAMPLE-CODE-01' : raw;
+  const chars = Math.max(1, sample.length);
+  const needed = Math.max(40, (chars * font * 0.62) + (font * 0.4));
+  let w = Math.max(1, Number(width) || 1);
+  let l = Number(left) || 0;
+  let t = Number(top) || 0;
+  let h = Math.max(Number(height) || 1, font * 1.25);
+  const right = l + w;
+  const center = l + (w / 2);
+
+  if (align === 'right') {
+    let anchorRight = Math.min(maxRight, Math.max(right, minLeft + 40));
+    if (right > canvasW + 1) anchorRight = maxRight;
+    w = Math.max(w, needed);
+    l = anchorRight - w;
+    if (l < minLeft) {
+      l = minLeft;
+      w = Math.max(40, anchorRight - l);
+    }
+  } else if (align === 'center') {
+    w = Math.max(w, needed);
+    l = center - (w / 2);
+    if (l < minLeft) l = minLeft;
+    if ((l + w) > maxRight) {
+      w = Math.max(40, maxRight - l);
+      l = Math.max(minLeft, center - (w / 2));
+      if ((l + w) > maxRight) l = Math.max(minLeft, maxRight - w);
+    }
+  } else {
+    // left — keep PPT shape left (where PowerPoint starts the glyphs).
+    if (l < -edgePad) l = minLeft;
+    const avail = Math.max(40, maxRight - l);
+    if ((l + w) > maxRight + 1) w = avail;
+    if (needed > w && needed <= avail) w = needed;
+    else if (needed > avail) w = avail;
+  }
+
+  return {
+    left: Math.round(l * 100) / 100,
+    top: Math.round(t * 100) / 100,
+    width: Math.round(Math.max(1, w) * 100) / 100,
+    height: Math.round(Math.max(1, h) * 100) / 100,
+    textAlign: align,
+  };
+}
+
 function looksLikeSignatoryName(text) {
   let t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t || t.includes('{{') || t.length > 48) return false;
@@ -3871,16 +3933,26 @@ function applyImportLayoutToCanvas(canvasState, layout) {
         && !/^\{\{\s*certificate_code\s*\}\}$/i.test(itemText)
         ? itemText
         : '';
+      const fit = fitCertificateCodeBox(
+        mapped.left,
+        mapped.top,
+        Math.max(40, mapped.width),
+        Math.max(14, mapped.height),
+        codeText || '{{certificate_code}}',
+        mapped.fontSize != null ? mapped.fontSize : Math.max(10, mapped.height * 0.55),
+        mapped.textAlign || 'left',
+        cw
+      );
       if (idx == null) {
         state.objects.push({
           type: 'textbox',
           id: 'certificate_code',
           name: 'Certificate Code',
           text: codeText || '{{certificate_code}}',
-          left: mapped.left,
-          top: mapped.top,
-          width: Math.max(40, mapped.width),
-          height: Math.max(14, mapped.height),
+          left: fit.left,
+          top: fit.top,
+          width: fit.width,
+          height: fit.height,
           scaleX: 1,
           scaleY: 1,
           originX: 'left',
@@ -3889,25 +3961,26 @@ function applyImportLayoutToCanvas(canvasState, layout) {
           fontFamily: mapped.fontFamily || 'Arial',
           fontWeight: mapped.fontWeight || 'bold',
           fill: '#111827',
-          textAlign: mapped.textAlign || 'left',
+          textAlign: fit.textAlign || mapped.textAlign || 'left',
         });
         byId.certificate_code = state.objects.length - 1;
         used[state.objects.length - 1] = true;
       } else {
         const obj = state.objects[idx];
+        obj.type = 'textbox';
         obj.id = 'certificate_code';
         obj.name = 'Certificate Code';
         obj.originX = 'left';
         obj.originY = 'top';
-        obj.left = mapped.left;
-        obj.top = mapped.top;
-        obj.width = Math.max(40, mapped.width);
-        obj.height = Math.max(14, mapped.height);
+        obj.left = fit.left;
+        obj.top = fit.top;
+        obj.width = fit.width;
+        obj.height = fit.height;
         obj.scaleX = 1;
         obj.scaleY = 1;
         obj.angle = 0;
         if (mapped.fontSize != null) obj.fontSize = mapped.fontSize;
-        if (mapped.textAlign) obj.textAlign = mapped.textAlign;
+        obj.textAlign = fit.textAlign || mapped.textAlign || obj.textAlign || 'left';
         if (mapped.fontWeight) obj.fontWeight = mapped.fontWeight;
         if (mapped.fontFamily) obj.fontFamily = mapped.fontFamily;
         if (codeText) obj.text = codeText;
@@ -4139,22 +4212,27 @@ function stampImportPreviewCode(canvasState, sampleCode, layout, stampOpts = {})
 
   if (idx < 0) {
     if (!allowInjectCode) return state;
-    const left = mappedCode ? mappedCode.left : canvasW * 0.05;
-    const top = mappedCode ? mappedCode.top : canvasH * 0.88;
-    const width = mappedCode ? Math.max(60, mappedCode.width) : Math.min(320, canvasW * 0.35);
-    const height = mappedCode ? Math.max(16, mappedCode.height) : 22;
+    const left0 = mappedCode ? mappedCode.left : canvasW * 0.05;
+    const top0 = mappedCode ? mappedCode.top : canvasH * 0.88;
+    const width0 = mappedCode ? Math.max(60, mappedCode.width) : Math.min(320, canvasW * 0.35);
+    const height0 = mappedCode ? Math.max(16, mappedCode.height) : 22;
     const fontSize = mappedCode && mappedCode.fontSize != null
       ? Math.max(8, Math.min(72, mappedCode.fontSize))
-      : Math.max(10, Math.min(28, height * 0.55));
+      : Math.max(10, Math.min(28, height0 * 0.55));
+    const fit = fitCertificateCodeBox(
+      left0, top0, width0, height0, code, fontSize,
+      (mappedCode && mappedCode.textAlign) || 'left',
+      canvasW
+    );
     state.objects.push({
       type: 'textbox',
       id: 'certificate_code',
       name: 'Certificate Code',
       text: code,
-      left,
-      top,
-      width,
-      height,
+      left: fit.left,
+      top: fit.top,
+      width: fit.width,
+      height: fit.height,
       scaleX: 1,
       scaleY: 1,
       originX: 'left',
@@ -4163,12 +4241,13 @@ function stampImportPreviewCode(canvasState, sampleCode, layout, stampOpts = {})
       fontFamily: (mappedCode && mappedCode.fontFamily) || 'Arial',
       fontWeight: (mappedCode && mappedCode.fontWeight) || 'bold',
       fill: '#111827',
-      textAlign: (mappedCode && mappedCode.textAlign) || 'left',
+      textAlign: fit.textAlign || (mappedCode && mappedCode.textAlign) || 'left',
       selectable: false,
       evented: false,
     });
   } else {
     const obj = state.objects[idx];
+    obj.type = 'textbox';
     obj.id = 'certificate_code';
     obj.name = 'Certificate Code';
     obj.text = code;
@@ -4177,27 +4256,60 @@ function stampImportPreviewCode(canvasState, sampleCode, layout, stampOpts = {})
       obj.fill = '#111827';
     }
     // Geometry already applied by applyImportLayoutToCanvas when layout had a code item.
-    // Only re-pin if we have a mapped box (keeps scale-correct coords).
+    // Re-pin + fit so longer scanned codes are not clipped at the canvas edge.
     if (mappedCode) {
       obj.originX = 'left';
       obj.originY = 'top';
-      obj.left = mappedCode.left;
-      obj.top = mappedCode.top;
-      obj.width = Math.max(40, mappedCode.width);
-      obj.height = Math.max(14, mappedCode.height);
-      obj.scaleX = 1;
-      obj.scaleY = 1;
-      obj.angle = 0;
       if (mappedCode.fontSize != null) {
         obj.fontSize = Math.max(8, Math.min(72, mappedCode.fontSize));
       }
-      if (mappedCode.textAlign) obj.textAlign = mappedCode.textAlign;
       if (mappedCode.fontWeight) obj.fontWeight = mappedCode.fontWeight;
       if (mappedCode.fontFamily) obj.fontFamily = mappedCode.fontFamily;
+      const fit = fitCertificateCodeBox(
+        mappedCode.left,
+        mappedCode.top,
+        Math.max(40, mappedCode.width),
+        Math.max(14, mappedCode.height),
+        code,
+        obj.fontSize,
+        mappedCode.textAlign || obj.textAlign || 'left',
+        canvasW
+      );
+      obj.left = fit.left;
+      obj.top = fit.top;
+      obj.width = fit.width;
+      obj.height = fit.height;
+      obj.scaleX = 1;
+      obj.scaleY = 1;
+      obj.angle = 0;
+      obj.textAlign = fit.textAlign || mappedCode.textAlign || 'left';
       delete obj.aCoords;
       delete obj.oCoords;
-    } else if (!obj.fontSize || Number(obj.fontSize) < 10) {
-      obj.fontSize = 14;
+    } else {
+      const fit = fitCertificateCodeBox(
+        Number(obj.left) || canvasW * 0.05,
+        Number(obj.top) || canvasH * 0.88,
+        Math.max(40, Number(obj.width) || 120),
+        Math.max(14, Number(obj.height) || 22),
+        code,
+        obj.fontSize || 14,
+        obj.textAlign || 'left',
+        canvasW
+      );
+      obj.originX = 'left';
+      obj.originY = 'top';
+      obj.left = fit.left;
+      obj.top = fit.top;
+      obj.width = fit.width;
+      obj.height = fit.height;
+      obj.scaleX = 1;
+      obj.scaleY = 1;
+      obj.textAlign = fit.textAlign || obj.textAlign || 'left';
+      if (!obj.fontSize || Number(obj.fontSize) < 10) {
+        obj.fontSize = 14;
+      }
+      delete obj.aCoords;
+      delete obj.oCoords;
     }
     state.objects[idx] = obj;
   }
@@ -4887,7 +4999,7 @@ function getTemplateCardById(templateId) {
 
 function canAssignTemplateToTarget(card, targetKind, targetSessionId) {
     if (!card) return false;
-    const scope = card.dataset.templateScope || 'event';
+            const scope = card.dataset.templateScope || 'event';
     const cardSessionId = card.dataset.templateSessionId || '';
     if (targetKind === 'event') {
         return scope === 'event';
@@ -5033,8 +5145,8 @@ function bindAssignmentRowInteractions(targetRow) {
     const assignFromArmedCard = () => {
         if (!armedAssignmentTemplateId) {
             alert('Click a template card first, then click this target to assign.');
-            return;
-        }
+        return;
+    }
         assignTemplateToTarget(targetRow, armedAssignmentTemplateId);
     };
 
@@ -5174,7 +5286,7 @@ function showTemplateSelectionPreview(data) {
     }
     renderTemplatePendingStudents(data?.pending_students || []);
     renderSeminarTemplateAssignments(Array.isArray(data?.session_summary) ? data.session_summary : []);
-    updateSelectedTemplateCard();
+        updateSelectedTemplateCard();
 
     if (previewMode === 'seminar_based') {
         templateCertSelectedWrap?.classList.add('hidden');
@@ -5695,18 +5807,49 @@ if (mainAiBtn && mainDesc && mainAiStatus) {
       updateCounts();
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        var preferredTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/mp4'
+        ];
+        var recMime = '';
+        for (var i = 0; i < preferredTypes.length; i++) {
+          if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredTypes[i])) {
+            recMime = preferredTypes[i];
+            break;
+          }
+        }
+        var recOpts = { audioBitsPerSecond: 128000 };
+        if (recMime) recOpts.mimeType = recMime;
+        try {
+          mediaRecorder = new MediaRecorder(stream, recOpts);
+        } catch (recErr) {
         mediaRecorder = new MediaRecorder(stream);
+        }
         audioChunks = [];
+        var blobMime = (mediaRecorder.mimeType || recMime || 'audio/webm').split(';')[0] || 'audio/webm';
         mediaRecorder.ondataavailable = function(e) {
-          if (e.data.size > 0) audioChunks.push(e.data);
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
         };
         mediaRecorder.onstop = async function() {
           clearInterval(recordingTimer);
           modalStatus.innerHTML = '⏳ Uploading and processing audio... Please wait';
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          const audioBlob = new Blob(audioChunks, { type: blobMime });
+          var ext = 'webm';
+          if (blobMime.indexOf('ogg') !== -1) ext = 'ogg';
+          else if (blobMime.indexOf('mp4') !== -1 || blobMime.indexOf('m4a') !== -1) ext = 'm4a';
+          else if (blobMime.indexOf('wav') !== -1) ext = 'wav';
           const formData = new FormData();
-          formData.append('audio', audioBlob, 'audio.webm');
+          formData.append('audio', audioBlob, 'audio.' + ext);
           formData.append('csrf_token', window.CSRF_TOKEN || '');
           try {
             const res = await fetch('api/speech_to_text.php', { method: 'POST', body: formData });
@@ -5722,7 +5865,7 @@ if (mainAiBtn && mainDesc && mainAiStatus) {
           }
           finalizeStop();
         };
-        mediaRecorder.start();
+        mediaRecorder.start(1000);
       } catch (err) {
         clearInterval(recordingTimer);
         modalStatus.textContent = '🚫 Mic blocked or none found — allow access in browser';

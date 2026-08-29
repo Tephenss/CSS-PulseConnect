@@ -230,17 +230,19 @@ function manage_events_live_revision(array $event, array $summary, array $requir
     return substr(sha1(implode('|', $parts)), 0, 16);
 }
 
-function manage_events_live_fetch_events(array $user, array $headers): array
+function manage_events_live_fetch_events(array $user, array $headers, bool $lite = false): array
 {
     $role = strtolower(trim((string) ($user['role'] ?? '')));
     $userId = trim((string) ($user['id'] ?? ''));
     $select = 'id,title,description,status,created_by,created_at,updated_at,proposal_stage,requirements_requested_at,requirements_submitted_at';
+    // Badge/lite polls only need recent rows for signals + pending counts.
+    $limit = $lite ? 40 : 120;
 
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . rawurlencode($select);
     if ($role === 'admin') {
-        $url .= '&status=neq.archived&order=updated_at.desc&limit=120';
+        $url .= '&status=neq.archived&order=updated_at.desc&limit=' . $limit;
     } elseif ($role === 'teacher' && $userId !== '') {
-        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc&limit=120';
+        $url .= '&or=(created_by.eq.' . rawurlencode($userId) . ',status.eq.published)&order=updated_at.desc&limit=' . $limit;
     } else {
         return [];
     }
@@ -353,7 +355,7 @@ function manage_events_live_payload(array $user, bool $lite = false): array
 {
     $headers = manage_events_live_headers();
     $role = strtolower(trim((string) ($user['role'] ?? '')));
-    $events = manage_events_live_fetch_events($user, $headers);
+    $events = manage_events_live_fetch_events($user, $headers, $lite);
     $signals = manage_events_live_build_signals($user, $events);
     $pendingCount = count(array_filter(
         $events,

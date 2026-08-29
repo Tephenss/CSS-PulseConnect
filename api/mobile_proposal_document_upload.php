@@ -85,16 +85,13 @@ if ($finfo) {
     finfo_close($finfo);
 }
 
-$allowedMimeTypes = [
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-];
+$reqCode = trim((string) ($requirement['code'] ?? ''));
+$allowedMimeTypes = proposal_document_allowed_mime_types($reqCode);
 if (!in_array($mimeType, $allowedMimeTypes, true)) {
-    json_response(['ok' => false, 'error' => 'Only PDF, DOC, DOCX, JPG, PNG, or WEBP files are allowed.'], 400);
+    $err = proposal_requirement_is_pdf_only($reqCode)
+        ? 'This requirement accepts PDF files only.'
+        : 'Only PDF, DOC, DOCX, JPG, PNG, or WEBP files are allowed.';
+    json_response(['ok' => false, 'error' => $err], 400);
 }
 
 $maxBytes = 10 * 1024 * 1024;

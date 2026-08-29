@@ -63,10 +63,6 @@ function assist_person_name(array $profile): string
 
 function assist_student_number(array $profile): string
 {
-    $id = trim((string) ($profile['id_number'] ?? ''));
-    if ($id !== '' && strtolower($id) !== 'null') {
-        return $id;
-    }
     $sid = trim((string) ($profile['student_id'] ?? ''));
     if ($sid !== '' && strtolower($sid) !== 'null') {
         return $sid;
@@ -106,14 +102,14 @@ function load_event_assistants(string $eventId, array $headers): array
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_assistants'
         . '?select=' . rawurlencode(
             'id,event_id,student_id,allow_scan,assigned_by_teacher_id,assigned_at,'
-            . 'users:student_id(first_name,middle_name,last_name,suffix,email,student_id,id_number)'
+            . 'users:student_id(first_name,middle_name,last_name,suffix,email,student_id)'
         )
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&order=assigned_at.desc'
         . '&limit=200';
     $res = supabase_request('GET', $url, $headers);
     if (!$res['ok']) {
-        // Legacy select without id_number / assigned_at.
+        // Legacy select without assigned_at.
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_assistants'
             . '?select=' . rawurlencode(
                 'id,event_id,student_id,allow_scan,assigned_by_teacher_id,'
@@ -133,23 +129,12 @@ function load_registered_participants(string $eventId, array $headers): array
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
         . '?select=' . rawurlencode(
             'id,student_id,registered_at,'
-            . 'users:student_id(first_name,middle_name,last_name,suffix,email,student_id,id_number)'
+            . 'users:student_id(first_name,middle_name,last_name,suffix,email,student_id)'
         )
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&order=registered_at.desc'
         . '&limit=500';
     $res = supabase_request('GET', $url, $headers);
-    if (!$res['ok']) {
-        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-            . '?select=' . rawurlencode(
-                'id,student_id,registered_at,'
-                . 'users:student_id(first_name,middle_name,last_name,suffix,email,student_id)'
-            )
-            . '&event_id=eq.' . rawurlencode($eventId)
-            . '&order=registered_at.desc'
-            . '&limit=500';
-        $res = supabase_request('GET', $url, $headers);
-    }
     $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
     return is_array($rows) ? $rows : [];
 }
@@ -322,9 +307,14 @@ if (!is_array($event)) {
 }
 
 $status = strtolower(trim((string) ($event['status'] ?? '')));
-$isFinished = in_array($status, ['finished', 'expired'], true);
+$isFinished = $status === 'finished';
+$isExpired = $status === 'expired';
 $isPublished = $status === 'published';
-if (!$isPublished && !$isFinished) {
+if ($isFinished) {
+    header('Location: /event_view?id=' . rawurlencode($eventId) . '&return_to=' . rawurlencode($returnTo));
+    exit;
+}
+if (!$isPublished && !$isExpired) {
     header('Location: /event_view?id=' . rawurlencode($eventId) . '&return_to=' . rawurlencode($returnTo));
     exit;
 }
@@ -339,7 +329,7 @@ if (!$isStaff) {
 }
 
 $canManage = $isAdmin || mobile_secure_can_manage_assistants($eventId, $userId, $headers);
-$managementLocked = !$canManage || $isFinished;
+$managementLocked = !$canManage || $isExpired;
 
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = count($sessions) > 0;
@@ -380,8 +370,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = trim((string) ($_POST['action'] ?? ''));
 
     if ($managementLocked) {
-        $_SESSION['flash_error'] = $isFinished
-            ? 'This event is finished. Assistant management is disabled.'
+        $_SESSION['flash_error'] = $isExpired
+            ? 'This event has ended. Assistant management is disabled.'
             : 'Only teachers assigned by admin (QR scanner access) can manage assistants for this event.';
         header('Location: ' . $redirectBase);
         exit;
@@ -656,8 +646,8 @@ render_header('Assist Student', $user);
           <div>
             <h3 class="text-lg font-bold text-zinc-900 leading-none">Authorized Scanners</h3>
             <p class="text-xs text-zinc-500 font-medium mt-1">
-              <?php if ($isFinished): ?>
-                This event is finished. Assistant management is disabled.
+              <?php if ($isExpired): ?>
+                This event has ended. Assistant management is disabled.
               <?php elseif ($canManage): ?>
                 These students can scan tickets on your behalf (same as the mobile Assist Student feature).
               <?php else: ?>
@@ -685,12 +675,12 @@ render_header('Assist Student', $user);
                 </svg>
               </div>
               <h4 class="text-zinc-900 font-black text-base mb-1">
-                <?= $managementLocked && !$isFinished
+                <?= $managementLocked && !$isExpired
                   ? 'Only assigned teachers can manage assistants'
                   : 'No assistants assigned yet' ?>
               </h4>
               <p class="text-xs text-zinc-500 font-medium max-w-sm mx-auto">
-                <?= $isFinished
+                <?= $isExpired
                   ? 'No assistants were assigned to this event.'
                   : ($canManage
                     ? 'Assign registered participants who can scan tickets for this event.'

@@ -22,28 +22,28 @@ $userId = (string) ($user['id'] ?? '');
 
 function events_missing_column_error(array $response): bool
 {
-  $body = strtolower((string) ($response['body'] ?? ''));
-  if ($body === '') {
-    return false;
-  }
+    $body = strtolower((string) ($response['body'] ?? ''));
+    if ($body === '') {
+        return false;
+    }
 
-  return str_contains($body, 'events')
-    && str_contains($body, 'column')
-    && (
-      str_contains($body, 'does not exist')
-      || str_contains($body, 'schema cache')
-      || str_contains($body, 'could not find')
-    );
+    return str_contains($body, 'events')
+        && str_contains($body, 'column')
+        && (
+            str_contains($body, 'does not exist')
+            || str_contains($body, 'schema cache')
+            || str_contains($body, 'could not find')
+        );
 }
 
 function build_manage_events_url(string $selectColumns, string $role, string $userId): string
 {
-  $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $selectColumns;
-  if ($role === 'admin') {
+    $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=' . $selectColumns;
+    if ($role === 'admin') {
     return $base . '&status=neq.archived&order=created_at.desc&limit=120';
-  }
+    }
 
-  // Teacher sees their own events OR any published events.
+    // Teacher sees their own events OR any published events.
   return $base . '&or=(created_by.eq.' . $userId . ',status.eq.published)&order=created_at.desc&limit=120';
 }
 
@@ -98,9 +98,9 @@ function manage_events_enrichment_ids(array $events, string $role, string $userI
 }
 
 $headers = [
-  'Accept: application/json',
-  'apikey: ' . SUPABASE_KEY,
-  'Authorization: Bearer ' . SUPABASE_KEY,
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
 // Auto-finish events that have already ended (throttled to reduce DB writes).
@@ -113,17 +113,17 @@ $listCacheKey = 'manage_events_list_v3_g' . $listGen . '_' . $role . '_' . subst
 $listCached = api_cache_remember($listCacheKey, 25, static function () use ($headers, $role, $userId): array {
   $workingSelect = manage_events_production_select();
   $eventsUrl = build_manage_events_url($workingSelect, $role, $userId);
-  $res = supabase_request('GET', $eventsUrl, $headers);
+    $res = supabase_request('GET', $eventsUrl, $headers);
   $events = [];
-  if ($res['ok']) {
-    $decoded = json_decode((string) $res['body'], true);
-    $events = is_array($decoded) ? $decoded : [];
+    if ($res['ok']) {
+        $decoded = json_decode((string) $res['body'], true);
+        $events = is_array($decoded) ? $decoded : [];
   } else {
     error_log('manage_events list select failed: ' . substr((string) ($res['body'] ?? ''), 0, 300));
     $workingSelect = '';
-  }
+    }
 
-  if (!empty($events)) {
+if (!empty($events)) {
     $events = attach_event_sessions_to_events($events, $headers);
   }
 
@@ -169,14 +169,14 @@ $teacherAccounts = [];
 if ($role === 'admin') {
   $teacherCache = api_cache_remember('manage_events_teachers', 120, static function () use ($headers): array {
     $teachersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
-      . '?select=id,first_name,middle_name,last_name,suffix,email'
-      . '&role=eq.teacher'
-      . '&order=last_name.asc,first_name.asc';
+        . '?select=id,first_name,middle_name,last_name,suffix,email'
+        . '&role=eq.teacher'
+        . '&order=last_name.asc,first_name.asc';
     $teachersRes = supabase_request('GET', $teachersUrl, $headers);
     if (!$teachersRes['ok']) {
       return ['rows' => []];
     }
-    $teacherRows = json_decode((string) $teachersRes['body'], true);
+        $teacherRows = json_decode((string) $teachersRes['body'], true);
     return ['rows' => is_array($teacherRows) ? $teacherRows : []];
   });
   $teacherAccounts = is_array($teacherCache['rows'] ?? null) ? $teacherCache['rows'] : [];
@@ -693,7 +693,7 @@ render_header('Manage Events', $user);
                 placeholder="e.g. CCS Auditorium" />
             </div>
           </div>
-
+          
           <!-- NEW: Event Type & Target -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
@@ -774,11 +774,11 @@ render_header('Manage Events', $user);
               <label for="event_fee" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Settlement Amount (₱)</label>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">₱</span>
-                <input type="number" id="event_fee" name="event_fee" min="1" step="0.01" inputmode="decimal"
+                <input type="text" id="event_fee" name="event_fee" inputmode="numeric" pattern="[0-9]*" autocomplete="off"
                   class="w-full rounded-xl bg-white border border-zinc-200 py-3 pl-8 pr-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition"
-                  placeholder="e.g. 250.00" />
+                  placeholder="e.g. 2500 (max 4 digits)" />
               </div>
-              <p class="mt-1 text-[11px] text-zinc-500">Full amount students must settle for this event. Shown in the app and used on the Payments tab.</p>
+              <p class="mt-1 text-[11px] text-zinc-500">Full amount students must settle for this event. Maximum 4 digits (₱5,000). Shown in the app and used on the Payments tab.</p>
             </div>
 
             <div class="mt-3">
@@ -789,7 +789,7 @@ render_header('Manage Events', $user);
               <p class="mt-1 text-[11px] text-zinc-500">Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).</p>
             </div>
           </div>
-
+          
           <div class="pt-2">
             <label class="block text-xs text-zinc-600 mb-2 font-medium tracking-wide field-req">Event Structure</label>
             <div class="grid grid-cols-1 gap-3">
@@ -837,7 +837,10 @@ render_header('Manage Events', $user);
             <label
               class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide flex items-center justify-between">
               <span class="field-req">Description</span>
+              <span class="flex items-center gap-2">
+                <span id="descriptionWordCount" class="text-[10px] text-zinc-400 font-normal">0 / 200 words</span>
               <span class="text-[10px] text-zinc-400 font-normal">Click the mic to dictate</span>
+              </span>
             </label>
             <div class="stt-wrapper">
               <textarea id="description" name="description" rows="5"
@@ -850,7 +853,7 @@ render_header('Manage Events', $user);
                 </svg>
               </button>
             </div>
-
+            
             <!-- Main Textarea Toolbelt -->
             <div class="flex items-center justify-between mt-1.5 px-1">
               <span id="mainAiStatus" class="hidden text-[11px] text-orange-600 font-medium whitespace-nowrap"></span>
@@ -952,7 +955,7 @@ render_header('Manage Events', $user);
 
             <div id="seminar2Editor" class="hidden rounded-xl border border-orange-200 bg-white p-4 space-y-3">
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
+              <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 2</div>
                 <p id="seminar2LockHint" class="hidden text-[11px] font-medium text-amber-700">
                   Fill Seminar 1 title, start, and end first. Dates before Seminar 1 end are disabled.
                 </p>
@@ -1014,8 +1017,8 @@ render_header('Manage Events', $user);
                 </div>
                 <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
               </div>
-              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload Image File</label>
-              <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload PDF File</label>
+              <input type="file" accept=".pdf,application/pdf"
                 class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
             </div>
 
@@ -1030,8 +1033,8 @@ render_header('Manage Events', $user);
                 </div>
                 <span class="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Default</span>
               </div>
-              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload Image File</label>
-              <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+              <label class="mt-3 block text-xs font-medium text-zinc-600 field-req">Upload PDF File</label>
+              <input type="file" accept=".pdf,application/pdf"
                 class="proposal-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
             </div>
           </div>
@@ -1195,7 +1198,7 @@ render_header('Manage Events', $user);
     <!-- Content -->
     <div class="px-5 py-3">
       <div id="sttModalStatus" class="text-xs font-semibold text-red-600 mb-2 hidden items-center gap-1.5"></div>
-
+      
       <!-- Voice Recording Spectrum Animation -->
       <style>
         @keyframes stt-bar-bounce {
@@ -1272,7 +1275,7 @@ render_header('Manage Events', $user);
 </div>
 
 <?php
-// Compute stats
+  // Compute stats
 $liveListHash = manage_events_live_list_hash($user, $events);
 ?>
 
@@ -1300,8 +1303,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   class="mb-14 lg:mb-16 w-full relative overflow-visible mt-2 rounded-[1.5rem] bg-gradient-to-br from-[#450a0a] via-[#7f1d1d] to-[#450a0a] px-8 lg:px-14 py-6 lg:py-0 shadow-xl border border-red-500/30 flex flex-col lg:flex-row items-center justify-between lg:h-[260px]">
   <div
     class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjZmZmIiBmaWxsLW9wYWNpdHk9IjAuMDUiLz4KPC9zdmc+')] opacity-20 rounded-[1.5rem] mix-blend-overlay pointer-events-none">
-  </div>
-
+</div>
+  
   <!-- LEFT: Text Content -->
   <div class="relative z-20 flex-1 w-full text-center lg:text-left my-6 lg:my-0 pointer-events-none">
     <div class="flex items-center justify-center lg:justify-start gap-3 mb-3">
@@ -1330,14 +1333,14 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       /* Collapse natural height */
     }
 
-    .laptop-wrapper {
+    .laptop-wrapper { 
       transform: scale(0.65);
       transform-origin: center center;
       margin-bottom: 25px;
       /* Adjust optical center */
     }
 
-    @media (min-width: 1024px) {
+    @media (min-width: 1024px) { 
       .laptop-wrapper {
         transform-origin: right center;
         right: 20px;
@@ -1348,12 +1351,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       }
     }
 
-    @media (max-width: 768px) {
+    @media (max-width: 768px) { 
       .laptop-wrapper {
         transform: scale(0.45);
       }
     }
-
+    
     .laptop {
       transform: scale(0.8);
     }
@@ -1376,7 +1379,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       animation: openLaptop 4s cubic-bezier(0.4, 0.0, 0.2, 1) infinite alternate;
       z-index: 5;
     }
-
+    
     @keyframes openLaptop {
       0% {
         transform: perspective(1900px) rotateX(-89deg);
@@ -1397,11 +1400,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       background-size: cover;
       background-position: center;
       background-image: url('assets/sample summit/image1.jpg');
-      z-index: 10;
+      z-index: 10; 
       box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6);
       transition: none;
     }
-
+    
     .screen-bg::after {
       content: "";
       position: absolute;
@@ -1514,26 +1517,63 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
 <script>
   (function () {
-    const showcaseSlides = [
-      { img: 'assets/sample summit/image1.jpg', label: 'CCS Summit' },
-      { img: 'assets/sample GA/image1.jpg', label: 'General Assembly' },
-      { img: 'assets/sample exhibit/image1.jpg', label: 'CCS Exhibit' },
-      { img: 'assets/sample CV/image1.jpg', label: 'Company Visit' }
-    ];
-    let currentSlide = 0;
-    const screenBg = document.querySelector('.screen-bg');
-    const laptopLabel = document.getElementById('laptopLabel');
-    const screenEl = document.querySelector('.screen');
-    if (!screenBg || !laptopLabel || !screenEl) return;
+  const showcaseFallback = [
+    { img: 'assets/sample summit/image1.jpg', label: 'CCS Summit' },
+    { img: 'assets/sample GA/image1.jpg', label: 'General Assembly' },
+    { img: 'assets/sample exhibit/image1.jpg', label: 'CCS Exhibit' },
+    { img: 'assets/sample CV/image1.jpg', label: 'Company Visit' }
+  ];
+  let showcaseSlides = showcaseFallback.slice();
+  let currentSlide = 0;
+  const screenBg = document.querySelector('.screen-bg');
+  const laptopLabel = document.getElementById('laptopLabel');
+  const screenEl = document.querySelector('.screen');
+  if (!screenBg || !laptopLabel || !screenEl) return;
 
-    // The laptop animation is 4s alternate, so one full open+close = 8s.
-    // Swap the image every 8s (when laptop is closed).
-    setInterval(() => {
-      currentSlide = (currentSlide + 1) % showcaseSlides.length;
-      screenBg.style.backgroundImage = "url('" + showcaseSlides[currentSlide].img + "')";
-      laptopLabel.textContent = showcaseSlides[currentSlide].label;
-    }, 8000);
-  })();
+  function applySlide(index) {
+    const slide = showcaseSlides[index];
+    if (!slide) return;
+    const img = slide.img || slide.image_url || '';
+    const label = slide.label || '';
+    if (img) {
+      screenBg.style.backgroundImage = "url('" + img.replace(/'/g, "\\'") + "')";
+    }
+    laptopLabel.textContent = label;
+  }
+
+  function normalizeSlides(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return showcaseFallback.slice();
+    return rows.map((row) => ({
+      img: (row.image_url || row.img || '').replace(/^\//, ''),
+      label: row.label || '',
+    })).filter((row) => row.img);
+  }
+
+  applySlide(0);
+
+  fetch('/api/showcase_slides.php', { credentials: 'same-origin' })
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && data.ok && Array.isArray(data.slides) && data.slides.length > 0) {
+        const normalized = normalizeSlides(data.slides);
+        showcaseSlides = normalized.length > 0 ? normalized : showcaseFallback.slice();
+        currentSlide = 0;
+        applySlide(currentSlide);
+      }
+    })
+    .catch(() => {
+      showcaseSlides = showcaseFallback.slice();
+      currentSlide = 0;
+      applySlide(0);
+    });
+
+  // The laptop animation is 4s alternate, so one full open+close = 8s.
+  setInterval(() => {
+    if (!showcaseSlides.length) return;
+    currentSlide = (currentSlide + 1) % showcaseSlides.length;
+    applySlide(currentSlide);
+  }, 8000);
+})();
 </script>
 
 <style>
@@ -1559,14 +1599,14 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     background: #e4e4e7;
     border-radius: 10px;
   }
-
+  
   .event-card-animated {
     opacity: 0;
     transform: scale(0.7) translateY(10px);
     transition: all 0.5s cubic-bezier(0.22, 1, 0.36, 1);
     will-change: transform, opacity;
   }
-
+  
   .event-card-animated.in-view {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -1622,7 +1662,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   </div>
 
   <?php if ($role === 'teacher'): ?>
-    <div class="flex border-b border-zinc-200 mb-5 gap-6 mt-3">
+  <div class="flex border-b border-zinc-200 mb-5 gap-6 mt-3">
       <button id="tabActive"
         class="pb-3 border-b-[2.5px] border-sky-500 font-bold text-sky-600 text-[13px] transition-colors">Active</button>
       <button id="tabApproval"
@@ -1657,7 +1697,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         Events</button>
       <button id="tabPending"
         class="pb-3 border-b-[2.5px] border-transparent font-semibold text-zinc-500 hover:text-zinc-800 text-[13px] transition-colors flex items-center gap-1.5 px-2">
-        Pending Proposals
+          Pending Proposals
         <?php $pendingCount = count(array_filter($events, static function (array $event): bool {
           if (($event['status'] ?? '') !== 'pending') {
             return false;
@@ -1668,9 +1708,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         <span id="pendingProposalsTabBadge"
           class="bg-red-100 border border-red-200 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm<?= $pendingCount > 0 ? '' : ' hidden' ?>"><?= $pendingCount ?></span>
       </button>
-    </div>
+  </div>
   <?php else: ?>
-    <div class="mb-5"></div>
+  <div class="mb-5"></div>
   <?php endif; ?>
 
   <!-- Filter & Search Row -->
@@ -1682,8 +1722,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
         </svg>
       </div>
-      <input type="text" id="searchEvents" placeholder="Search events by title, location or teacher..."
-        class="block w-full pl-10 pr-4 py-2.5 border border-zinc-200 rounded-xl text-[13px] placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-orange-500/10 focus:border-orange-500 transition-all bg-white shadow-sm ring-inset">
+      <input type="text" id="searchEvents" placeholder="Search events by title, location or teacher..." 
+             class="block w-full pl-10 pr-4 py-2.5 border border-zinc-200 rounded-xl text-[13px] placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-orange-500/10 focus:border-orange-500 transition-all bg-white shadow-sm ring-inset">
     </div>
     <div class="w-full md:w-56">
       <div class="relative">
@@ -1711,8 +1751,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             }
             $types[] = $type;
           }
-          foreach ($types as $type):
-            ?>
+            foreach ($types as $type):
+          ?>
             <option value="<?= htmlspecialchars($type) ?>"><?= htmlspecialchars($type) ?></option>
           <?php endforeach; ?>
         </select>
@@ -1737,12 +1777,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     <div id="eventScrollContainer" class="event-scroll-container" data-live-list-hash="<?= htmlspecialchars($liveListHash) ?>">
       <div class="space-y-3 pb-24">
         <?php foreach ($events as $e): ?>
-          <?php
+      <?php
           $status = (string) ($e['status'] ?? '');
           $description = (string) ($e['description'] ?? '');
-          $isRejected = strpos($description, '[REJECT_REASON:') !== false;
+        $isRejected = strpos($description, '[REJECT_REASON:') !== false;
 
-          // For teachers: If archived but NOT rejected, skip (it's a manual archive)
+        // For teachers: If archived but NOT rejected, skip (it's a manual archive)
           if ($role === 'teacher' && $status === 'archived' && !$isRejected)
             continue;
 
@@ -1752,11 +1792,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
               continue;
             }
           }
-          ?>
-          <?php
-          $eid = (string) ($e['id'] ?? '');
-          $createdBy = (string) ($e['created_by'] ?? '');
-          $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && ($status === 'pending' || ($status === 'archived' && $isRejected)));
+      ?>
+      <?php
+        $eid = (string) ($e['id'] ?? '');
+        $createdBy = (string) ($e['created_by'] ?? '');
+        $canEdit = $role === 'admin' || ($role === 'teacher' && $createdBy === $userId && ($status === 'pending' || ($status === 'archived' && $isRejected)));
           $proposalStage = strtolower(trim((string) ($e['proposal_stage'] ?? 'pending_requirements')));
           if ($status === 'approved' || $status === 'published') {
             $proposalStage = 'approved';
@@ -1831,17 +1871,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             'archived' => ['bg' => 'bg-rose-100', 'text' => 'text-rose-900', 'border' => 'border-rose-200', 'accent' => 'border-l-rose-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'],
             'draft' => ['bg' => 'bg-orange-100', 'text' => 'text-orange-900', 'border' => 'border-orange-200', 'accent' => 'border-l-orange-500', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"/>'],
             default => ['bg' => 'bg-zinc-100', 'text' => 'text-zinc-800', 'border' => 'border-zinc-200', 'accent' => 'border-l-zinc-400', 'icon' => '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125h-12.75V11.25a9 9 0 00-9-9z"/>'],
-          };
+        };
 
-          // Format date
-          $rawDate = (string) ($e['start_at'] ?? '');
-          $formattedDate = format_date_local($rawDate);
-          ?>
+        // Format date
+        $rawDate = (string) ($e['start_at'] ?? '');
+        $formattedDate = format_date_local($rawDate);
+      ?>
           <div
             class="event-card event-card-animated rounded-xl border border-zinc-200 bg-zinc-50/90 hover:bg-white hover:border-zinc-300 transition-all group border-l-[3px] shadow-sm <?= $statusConfig['accent'] ?>"
-            data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
-            data-type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
-            data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
+           data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+           data-type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
+           data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
             data-teacher="<?= htmlspecialchars($tName ?? '') ?>" data-status="<?= htmlspecialchars($status) ?>"
             data-start-at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
             data-end-at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
@@ -1867,97 +1907,97 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             data-proposal-stage="<?= htmlspecialchars($proposalStage) ?>"
             data-proposal-revision="<?= htmlspecialchars($liveRevision) ?>"
             data-live-updated-at="<?= htmlspecialchars((string) ($e['updated_at'] ?? '')) ?>">
-            <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
+        <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
-              <!-- Event Info -->
-              <div class="flex-1 min-w-0">
-                <div class="flex items-start gap-3">
+          <!-- Event Info -->
+          <div class="flex-1 min-w-0">
+            <div class="flex items-start gap-3">
                   <div
                     class="hidden sm:flex w-10 h-10 rounded-xl <?= $statusConfig['bg'] ?> border <?= $statusConfig['border'] ?> items-center justify-center flex-shrink-0 mt-0.5">
                     <svg class="w-5 h-5 <?= $statusConfig['text'] ?>" fill="none" stroke="currentColor" stroke-width="1.8"
                       viewBox="0 0 24 24"><?= $statusConfig['icon'] ?></svg>
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2 mb-1">
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 mb-1">
                       <h3 class="text-sm font-semibold text-zinc-900 truncate">
                         <?= htmlspecialchars((string) ($e['title'] ?? '')) ?></h3>
                       <span
                         class="event-status-badge text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
-                        <?= ($status === 'archived' && $isRejected) ? 'Rejected' : ucfirst(htmlspecialchars($status)) ?>
-                      </span>
+                    <?= ($status === 'archived' && $isRejected) ? 'Rejected' : ucfirst(htmlspecialchars($status)) ?>
+                  </span>
                       <?php if (in_array($status, ['pending', 'approved'], true)): ?>
                         <span
                           class="proposal-stage-badge text-[10px] font-bold rounded-full border px-2 py-0.5 <?= $proposalStageConfig['bg'] ?> <?= $proposalStageConfig['text'] ?> <?= $proposalStageConfig['border'] ?> flex-shrink-0">
                           <?= htmlspecialchars($proposalStageConfig['label']) ?>
                         </span>
                       <?php endif; ?>
-                      <?php if ($role === 'admin' && !empty($e['users'])): ?>
-                        <?php
-                        $u = $e['users'];
-                        $tName = trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? '') . ' ' . ($u['suffix'] ?? ''));
-                        ?>
-                        <?php if ($tName !== ''): ?>
+                  <?php if ($role === 'admin' && !empty($e['users'])): ?>
+                    <?php 
+                      $u = $e['users'];
+                      $tName = trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? '') . ' ' . ($u['suffix'] ?? ''));
+                    ?>
+                    <?php if ($tName !== ''): ?>
                           <span
                             class="text-[10px] font-bold text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded-full border border-zinc-200">
-                            By: <?= htmlspecialchars($tName) ?>
-                          </span>
-                        <?php endif; ?>
-                      <?php endif; ?>
-                    </div>
+                        By: <?= htmlspecialchars($tName) ?>
+                      </span>
+                    <?php endif; ?>
+                  <?php endif; ?>
+                </div>
 
-                    <?php if ($status === 'archived' && $isRejected): ?>
+                <?php if ($status === 'archived' && $isRejected): ?>
                       <div class="proposal-reject-remark mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm">
-                        <div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">
+                    <div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round"
                               d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008h-.008v-.008z" />
                           </svg>
-                          Admin Remark:
-                        </div>
+                      Admin Remark:
+                    </div>
                         <p class="proposal-reject-remark-text">
-                        <?php
-                        preg_match('/\[REJECT_REASON:\s*(.*?)\]/', $description, $m);
-                        echo htmlspecialchars($m[1] ?? 'Proposal review required.');
-                        ?>
+                    <?php 
+                      preg_match('/\[REJECT_REASON:\s*(.*?)\]/', $description, $m);
+                      echo htmlspecialchars($m[1] ?? 'Proposal review required.');
+                    ?>
                         </p>
-                      </div>
-                    <?php endif; ?>
+                  </div>
+                <?php endif; ?>
 
-                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-600 mt-1">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-600 mt-1">
                       <span
                         class="flex items-center gap-1 font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
-                        <?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>
-                      </span>
-                      <span class="flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded font-medium border border-zinc-200">
+                    <?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>
+                  </span>
+                  <span class="flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded font-medium border border-zinc-200">
                         Target: <?= htmlspecialchars(format_target_participant((string) ($e['event_for'] ?? 'All'))) ?>
-                      </span>
+                  </span>
                       <span
                         class="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-100">
                         Grace: <?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>m
-                      </span>
-                      <span class="flex items-center gap-1">
+                  </span>
+                  <span class="flex items-center gap-1">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round"
                             d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
                         </svg>
-                        <?= htmlspecialchars($formattedDate) ?>
-                      </span>
-                      <?php if (!empty($e['location'])): ?>
-                        <span class="flex items-center gap-1">
+                    <?= htmlspecialchars($formattedDate) ?>
+                  </span>
+                  <?php if (!empty($e['location'])): ?>
+                  <span class="flex items-center gap-1">
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
                             <path stroke-linecap="round" stroke-linejoin="round"
                               d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
                           </svg>
-                          <?= htmlspecialchars((string) ($e['location'] ?? '')) ?>
-                        </span>
-                      <?php endif; ?>
-                    </div>
-                    <?php if (!empty($e['created_at'])): ?>
-                      <p class="text-[11px] text-zinc-400 mt-2 font-medium">
+                    <?= htmlspecialchars((string) ($e['location'] ?? '')) ?>
+                  </span>
+                  <?php endif; ?>
+                </div>
+                <?php if (!empty($e['created_at'])): ?>
+                  <p class="text-[11px] text-zinc-400 mt-2 font-medium">
                         Submitted: <?= (new DateTimeImmutable((string) $e['created_at']))->format('F d, Y') ?>
-                      </p>
-                    <?php endif; ?>
+                  </p>
+                <?php endif; ?>
                     <?php if ($status === 'pending'): ?>
                       <div class="proposal-progress-section mt-3 rounded-xl border border-zinc-200 bg-white/80 px-3 py-2 shadow-sm">
                         <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
@@ -1967,7 +2007,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                           <span class="proposal-upload-count text-zinc-500">
                             <?= (int) ($proposalDisplaySummary['submitted'] ?? 0) ?>/<?= (int) ($proposalDisplaySummary['total'] ?? 0) ?> uploaded
                           </span>
-                        </div>
+              </div>
                         <div class="mt-2 h-2 overflow-hidden rounded-full bg-zinc-200 proposal-progress-track">
                           <div
                             class="proposal-progress-fill h-full rounded-full bg-gradient-to-r from-orange-500 to-emerald-500 transition-all"
@@ -2010,13 +2050,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                       </div>
                     <?php endif; ?>
                   </div>
-                </div>
-              </div>
+            </div>
+          </div>
 
-              <!-- Actions -->
+          <!-- Actions -->
               <div class="event-admin-actions flex gap-1.5 flex-wrap items-center lg:flex-shrink-0 pl-0 sm:pl-[52px] lg:pl-0">
-                <?php if ($role === 'admin'): ?>
-                  <?php if ($status === 'pending'): ?>
+            <?php if ($role === 'admin'): ?>
+              <?php if ($status === 'pending'): ?>
                     <?php $approveReady = $proposalStage === 'under_review'; ?>
                     <button
                       class="btnRequirements rounded-lg border border-orange-200 bg-orange-50 px-4 py-1.5 text-[13px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-sm"
@@ -2032,40 +2072,40 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                         ? 'Send Req'
                         : ($proposalStage === 'under_review' ? 'Review Docs' : 'View') ?>
                     </button>
-                  <?php endif; ?>
-
-                  <?php if ($status === 'approved'): ?>
+              <?php endif; ?>
+              
+              <?php if ($status === 'approved'): ?>
                     <button
                       class="btnPublishEvent rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-[13px] font-bold hover:bg-emerald-500 transition-colors border border-emerald-600 shadow-sm"
-                      data-id="<?= htmlspecialchars($eid) ?>"
-                      data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
-                      data-created_by="<?= htmlspecialchars($createdBy) ?>">
-                      Publish
-                    </button>
-                  <?php endif; ?>
+                        data-id="<?= htmlspecialchars($eid) ?>"
+                        data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+                        data-created_by="<?= htmlspecialchars($createdBy) ?>">
+                  Publish
+                </button>
+              <?php endif; ?>
 
-                  <?php if ($status !== 'pending'): ?>
+              <?php if ($status !== 'pending'): ?>
                     <button
                       class="btnArchive rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100 transition"
                       data-id="<?= htmlspecialchars($eid) ?>"
                       data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">Archive</button>
-                  <?php endif; ?>
-                <?php endif; ?>
-                <?php if ($canEdit): ?>
+              <?php endif; ?>
+            <?php endif; ?>
+            <?php if ($canEdit): ?>
                   <button
                     class="btnEdit rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50 transition font-medium"
-                    data-id="<?= htmlspecialchars($eid) ?>"
+                      data-id="<?= htmlspecialchars($eid) ?>"
                     data-status="<?= htmlspecialchars($status) ?>"
-                    data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
-                    data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
+                      data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
+                      data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
                     data-location-full="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
-                    data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
-                    data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
-                    data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
-                    data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
-                    data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
-                    data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
-                    data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
+                      data-description="<?= htmlspecialchars((string) ($e['description'] ?? '')) ?>"
+                      data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
+                      data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
+                      data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
+                      data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
+                      data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
+                      data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
                     data-grace_time="<?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>"
                     data-is_free_event="<?= (($e['is_free_event'] ?? true) ? '1' : '0') ?>"
                     data-event_fee="<?= htmlspecialchars((string) ($e['event_fee'] ?? '')) ?>"
@@ -2074,15 +2114,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                     data-proposal_stage="<?= htmlspecialchars($proposalStage) ?>"
                     data-proposal_requirements="<?= htmlspecialchars((string) json_encode($proposalRequirements, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
                     data-proposal_submissions="<?= htmlspecialchars((string) json_encode(array_values($proposalSubmissions), JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES) ?>"
-                    data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
+                      data-cover_image_url="<?= htmlspecialchars((string) ($e['cover_image_url'] ?? '')) ?>"
                     data-student_requirements="<?= htmlspecialchars((string) (json_encode($studentRequirementsPayload, JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>">View/Edit</button>
-                <?php endif; ?>
+            <?php endif; ?>
 
-              </div>
-
-            </div>
           </div>
-        <?php endforeach; ?>
+
+        </div>
+      </div>
+    <?php endforeach; ?>
 
         <div id="eventListEmptyState" class="text-center py-16 text-zinc-600 <?= count($events) === 0 ? '' : 'hidden' ?>">
             <div
@@ -2091,13 +2131,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
               </svg>
-            </div>
-            <h3 class="text-zinc-800 font-medium mb-1">No events yet</h3>
+        </div>
+        <h3 class="text-zinc-800 font-medium mb-1">No events yet</h3>
             <?php if ($role === 'teacher'): ?>
-            <p class="text-sm">Click <span class="text-orange-700 font-medium">"Create Event"</span> to get started.</p>
+        <p class="text-sm">Click <span class="text-orange-700 font-medium">"Create Event"</span> to get started.</p>
             <?php else: ?>
             <p class="text-sm">Teacher proposals will appear here once submitted.</p>
-            <?php endif; ?>
+    <?php endif; ?>
         </div>
       </div>
     </div>
@@ -2105,78 +2145,78 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 </div>
 
 <?php if ($role === 'admin'): ?>
-  <div id="publishTeacherModal" class="modal-backdrop">
+<div id="publishTeacherModal" class="modal-backdrop">
     <div
       class="relative w-full max-w-2xl mx-4 bg-white border border-zinc-200 rounded-3xl shadow-xl overflow-hidden scale-95 transition-transform duration-300"
       id="publishTeacherPanel" style="transform: translateY(100%);">
-      <div class="px-6 py-5 border-b border-zinc-200 bg-zinc-50">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <div class="flex items-center gap-3 mb-1">
+    <div class="px-6 py-5 border-b border-zinc-200 bg-zinc-50">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
               <div
                 class="w-10 h-10 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
-              </div>
-              <div>
-                <h3 class="text-xl font-bold text-zinc-900 tracking-tight">Assign Event Teachers</h3>
-                <p class="text-sm text-zinc-500">Pick the teachers included in this event or batch before publishing.</p>
-              </div>
+            </div>
+            <div>
+              <h3 class="text-xl font-bold text-zinc-900 tracking-tight">Assign Event Teachers</h3>
+              <p class="text-sm text-zinc-500">Pick the teachers included in this event or batch before publishing.</p>
             </div>
           </div>
+        </div>
           <button type="button" id="btnClosePublishTeacherModal"
             class="p-2 rounded-xl text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
-          </button>
-        </div>
+        </button>
       </div>
+    </div>
 
-      <div class="px-6 py-5 max-h-[65vh] overflow-y-auto">
-        <input type="hidden" id="publishTeacherEventId" value="">
-        <input type="hidden" id="publishTeacherCreatorId" value="">
+    <div class="px-6 py-5 max-h-[65vh] overflow-y-auto">
+      <input type="hidden" id="publishTeacherEventId" value="">
+      <input type="hidden" id="publishTeacherCreatorId" value="">
 
-        <div class="rounded-2xl border border-orange-100 bg-orange-50/80 px-4 py-4 mb-5 text-sm text-orange-900">
-          <div class="font-bold mb-1">Publishing <span id="publishTeacherEventTitle">this event</span></div>
+      <div class="rounded-2xl border border-orange-100 bg-orange-50/80 px-4 py-4 mb-5 text-sm text-orange-900">
+        <div class="font-bold mb-1">Publishing <span id="publishTeacherEventTitle">this event</span></div>
           <div>Selected teachers will be part of this specific event or batch. QR scanner assignment will be managed
             separately after publishing.</div>
-        </div>
+      </div>
 
-        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div class="text-sm text-zinc-500">
-            <span id="publishTeacherCount" class="font-bold text-zinc-900">0</span> teacher(s) selected
-          </div>
-          <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div class="text-sm text-zinc-500">
+          <span id="publishTeacherCount" class="font-bold text-zinc-900">0</span> teacher(s) selected
+        </div>
+        <div class="flex items-center gap-2">
             <button type="button" id="btnPublishSelectAllTeachers"
               class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 hover:bg-sky-100 transition">All
               Teachers</button>
             <button type="button" id="btnPublishClearTeachers"
               class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-50 transition">Clear</button>
-          </div>
         </div>
+      </div>
 
-        <?php if (empty($teacherAccounts)): ?>
-          <div class="rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50 px-6 py-12 text-center text-zinc-500">
-            No teacher accounts found yet.
-          </div>
-        <?php else: ?>
-          <div class="space-y-3" id="publishTeacherList">
-            <?php foreach ($teacherAccounts as $teacher): ?>
-              <?php
+      <?php if (empty($teacherAccounts)): ?>
+        <div class="rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50 px-6 py-12 text-center text-zinc-500">
+          No teacher accounts found yet.
+        </div>
+      <?php else: ?>
+        <div class="space-y-3" id="publishTeacherList">
+          <?php foreach ($teacherAccounts as $teacher): ?>
+            <?php
               $teacherId = (string) ($teacher['id'] ?? '');
               $fullName = trim((string) (($teacher['first_name'] ?? '') . ' ' . ($teacher['last_name'] ?? '') . ' ' . ($teacher['suffix'] ?? '')));
               $email = (string) ($teacher['email'] ?? '');
               $initialsParts = preg_split('/\s+/', trim($fullName)) ?: [];
               $initials = '';
               foreach ($initialsParts as $part) {
-                if ($part !== '') {
-                  $initials .= strtoupper($part[0]);
-                }
-                if (strlen($initials) >= 2) {
-                  break;
-                }
+                  if ($part !== '') {
+                      $initials .= strtoupper($part[0]);
+                  }
+                  if (strlen($initials) >= 2) {
+                      break;
+                  }
               }
               if ($initials === '')
                 $initials = 'T';
@@ -2187,39 +2227,39 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                   class="publish-teacher-checkbox h-5 w-5 rounded border-zinc-300 text-orange-600 focus:ring-orange-500">
                 <div
                   class="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500 to-red-600 text-white flex items-center justify-center font-black text-sm shadow-sm">
-                  <?= htmlspecialchars($initials) ?>
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2 flex-wrap">
+                <?= htmlspecialchars($initials) ?>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 flex-wrap">
                     <div class="text-sm font-bold text-zinc-900 truncate">
                       <?= htmlspecialchars($fullName !== '' ? $fullName : 'Unnamed Teacher') ?></div>
                     <span
                       class="creator-badge hidden text-[10px] font-bold uppercase tracking-widest rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                      Creator
-                    </span>
-                  </div>
-                  <div class="text-xs text-zinc-500 mt-1"><?= htmlspecialchars($email) ?></div>
+                    Creator
+                  </span>
                 </div>
-              </label>
-            <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
-      </div>
+                <div class="text-xs text-zinc-500 mt-1"><?= htmlspecialchars($email) ?></div>
+              </div>
+            </label>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </div>
 
       <div
         class="px-6 py-5 border-t border-zinc-200 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <p class="text-xs text-zinc-500">Students and selected teachers will receive notifications once publishing
           succeeds.</p>
-        <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2">
           <button type="button" id="btnCancelPublishTeachers"
             class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-50 transition">Cancel</button>
           <button type="button" id="btnConfirmPublishTeachers"
             class="rounded-xl border border-emerald-600 bg-emerald-600 px-5 py-2 text-sm font-bold text-white hover:bg-emerald-700 transition shadow-sm">Publish
             Event</button>
-        </div>
       </div>
     </div>
   </div>
+</div>
 <?php endif; ?>
 
 <!-- ═══════════  PROPOSAL REQUIREMENTS MODAL  ═══════════ -->
@@ -2400,17 +2440,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             <path stroke-linecap="round" stroke-linejoin="round"
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
-        </div>
-        <div>
-          <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none">Reject Proposal?</h3>
-          <p class="text-sm text-zinc-500 mt-1 font-medium">This action cannot be undone.</p>
-        </div>
+         </div>
+         <div>
+             <h3 class="text-xl font-bold text-zinc-900 tracking-tight leading-none">Reject Proposal?</h3>
+             <p class="text-sm text-zinc-500 mt-1 font-medium">This action cannot be undone.</p>
+         </div>
       </div>
-
+      
       <p class="text-[13px] text-zinc-600 mb-3 px-1 leading-relaxed">Are you sure you want to reject the proposal for
         <span id="rejectEventName" class="font-bold text-zinc-900"></span>? Please provide a reason to notify the event
         coordinator.</p>
-
+      
       <div class="mt-2">
         <label class="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-1.5 px-1">Reason for
           refusing</label>
@@ -2957,7 +2997,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   });
 
   // Wizard initialization (simple + seminar based)
-  let step = 1;
+    let step = 1;
   let eventModalReadOnly = false;
   const teacherProposalMode = <?= $role === 'teacher' ? 'true' : 'false' ?>;
   const maxWizardStep = teacherProposalMode ? 4 : 3;
@@ -3568,10 +3608,14 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const fileName = String(submission?.file_name || '').trim();
       const mimeType = String(submission?.mime_type || '').trim();
       const hasFile = fileUrl !== '' || filePath !== '';
+      const pdfOnly = isProposalPdfOnlyCode(code);
+      const acceptAttr = pdfOnly ? '.pdf,application/pdf' : '.pdf,.doc,.docx,image/jpeg,image/png,image/webp';
+      const replaceLabel = pdfOnly ? 'Replace PDF (optional)' : 'Replace file (optional)';
 
       const row = document.createElement('div');
       row.className = 'rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm';
       row.dataset.requirementId = requirementId;
+      row.dataset.requirementCode = code;
       row.innerHTML = `
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
@@ -3597,8 +3641,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
                 class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">Open file</button>`
             : `<span class="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-500">Missing upload</span>`}
         </div>
-        <label class="mt-3 block text-xs font-medium text-zinc-600">Replace file (optional)</label>
-        <input type="file" accept=".pdf,.doc,.docx,image/jpeg,image/png,image/webp"
+        <label class="mt-3 block text-xs font-medium text-zinc-600">${replaceLabel}</label>
+        <input type="file" accept="${acceptAttr}"
           class="proposal-edit-file-input mt-1 block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-orange-700 hover:file:bg-orange-100" />
       `;
       teacherProposalEditRequirementsList.appendChild(row);
@@ -3646,7 +3690,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       if (!file) {
         throw new Error(`Upload the file for "${label}".`);
       }
-      validateProposalFile(file, label);
+      validateProposalFile(file, label, code);
 
       requirements.push({
         code: code === 'ADDITIONAL' ? `DOC${index + 1}` : code,
@@ -3671,7 +3715,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       const file = input?.files?.[0] || null;
       if (requirementId && file) {
         const label = String(row.querySelector('.text-sm.font-bold')?.textContent || 'requirement').trim();
-        validateProposalFile(file, label);
+        const code = String(row.dataset.requirementCode || '').trim();
+        validateProposalFile(file, label, code);
         replacements.push({ requirementId, file });
       }
     });
@@ -4044,7 +4089,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const cleanedDescription = String(rawDescription)
       .replace(/\[REJECT_REASON:[^\]]*\]\s*/gi, '')
       .trim();
-    document.getElementById('description').value = cleanedDescription;
+    setDescriptionFieldValue(document.getElementById('description'), cleanedDescription);
 
     setEventTypeValue(ds('event_type') || 'Event');
     const decodedTarget = decodeTargetParticipant(ds('event_for') || 'All');
@@ -4054,7 +4099,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     setRegistrationType((ds('is_free_event') || '1') !== '0' ? 'free' : 'paid');
     const feeInput = document.getElementById('event_fee');
     if (feeInput) {
-      feeInput.value = String(ds('event_fee') || '').trim();
+      feeInput.value = normalizeEventFeeInputValue(String(ds('event_fee') || '').trim());
     }
     syncEventFeeVisibility();
     const registrationLimitInput = document.getElementById('registration_limit');
@@ -4383,6 +4428,311 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }, 180);
   }
 
+  const DESCRIPTION_MAX_WORDS = 200;
+  const EVENT_FEE_MAX = 5000;
+  const EVENT_FEE_MAX_DIGITS = 4;
+  let descriptionSnapshot = '';
+
+  function countWords(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return 0;
+    return trimmed.split(/\s+/).filter(Boolean).length;
+  }
+
+  function truncateToWordLimit(text, maxWords) {
+    const raw = String(text ?? '');
+    if (countWords(raw) <= maxWords) return raw;
+
+    let result = '';
+    let words = 0;
+    let inWord = false;
+
+    for (let i = 0; i < raw.length; i++) {
+      const char = raw[i];
+      const isWhitespace = /\s/.test(char);
+      if (!isWhitespace) {
+        if (!inWord) {
+          words += 1;
+          if (words > maxWords) break;
+          inWord = true;
+        }
+        result += char;
+      } else {
+        inWord = false;
+        result += char;
+      }
+    }
+
+    return result.trimEnd();
+  }
+
+  function syncDescriptionWordLock(textarea) {
+    const el = textarea || document.getElementById('description');
+    if (!el) return;
+    const words = countWords(el.value);
+    const atLimit = words >= DESCRIPTION_MAX_WORDS;
+    const counter = document.getElementById('descriptionWordCount');
+
+    if (atLimit) {
+      el.maxLength = el.value.length;
+      el.classList.add('bg-zinc-50');
+      el.dataset.wordLimitReached = '1';
+    } else {
+      el.removeAttribute('maxLength');
+      el.classList.remove('bg-zinc-50');
+      delete el.dataset.wordLimitReached;
+    }
+
+    if (counter) {
+      counter.textContent = atLimit
+        ? `${DESCRIPTION_MAX_WORDS} / ${DESCRIPTION_MAX_WORDS} words · limit reached`
+        : `${words} / ${DESCRIPTION_MAX_WORDS} words`;
+      counter.classList.toggle('text-rose-500', atLimit);
+      counter.classList.toggle('text-zinc-400', !atLimit);
+    }
+  }
+
+  function updateDescriptionWordCount() {
+    syncDescriptionWordLock(document.getElementById('description'));
+  }
+
+  function setDescriptionFieldValue(textarea, value) {
+    if (!textarea) return;
+    textarea.value = truncateToWordLimit(String(value ?? ''), DESCRIPTION_MAX_WORDS);
+    descriptionSnapshot = textarea.value;
+    syncDescriptionWordLock(textarea);
+  }
+
+  function enforceDescriptionWordLimit(textarea) {
+    if (!textarea) return '';
+
+    let current = textarea.value;
+    if (countWords(current) > DESCRIPTION_MAX_WORDS) {
+      current = truncateToWordLimit(current, DESCRIPTION_MAX_WORDS);
+      textarea.value = current;
+    }
+
+    descriptionSnapshot = current;
+    syncDescriptionWordLock(textarea);
+    return current.trim();
+  }
+
+  function normalizeEventFeeInputValue(raw) {
+    const digitsOnly = String(raw ?? '').replace(/\D+/g, '').slice(0, EVENT_FEE_MAX_DIGITS);
+    if (!digitsOnly) return '';
+    const num = Number.parseInt(digitsOnly, 10);
+    if (!Number.isFinite(num)) return '';
+    if (num > EVENT_FEE_MAX) return String(EVENT_FEE_MAX);
+    return digitsOnly;
+  }
+
+  function enforceEventFeeInputLimit(input) {
+    if (!input) return;
+    const normalized = normalizeEventFeeInputValue(input.value);
+    if (normalized !== input.value) input.value = normalized;
+  }
+
+  function insertFieldErrorElement(errEl, fieldId, el) {
+    if (fieldId === 'target_year_group') {
+      el.parentElement?.appendChild(errEl);
+      return;
+    }
+    if (fieldId === 'description') {
+      el.closest('#step2 > div')?.appendChild(errEl);
+      return;
+    }
+    if (fieldId === 'event_fee') {
+      document.getElementById('event_fee_wrap')?.appendChild(errEl);
+      return;
+    }
+    const parentWrap = el.closest('.relative, .field-icon-wrap');
+    if (parentWrap?.parentElement) {
+      parentWrap.parentElement.appendChild(errEl);
+      return;
+    }
+    el.parentElement?.appendChild(errEl);
+  }
+
+  function clearFieldError(fieldId) {
+    const el = document.getElementById(fieldId);
+    if (el) {
+      el.classList.remove('border-rose-400', 'focus:border-rose-400', 'focus:ring-rose-200');
+      el.classList.add('border-zinc-200');
+      el.removeAttribute('aria-invalid');
+    }
+    const errEl = document.getElementById(`${fieldId}_error`);
+    if (errEl) errEl.remove();
+    if (fieldId === 'target_year_group') {
+      document.getElementById('target_year_group')?.classList.remove('border-rose-400', 'ring-1', 'ring-rose-200');
+    }
+  }
+
+  function clearAllFieldErrors() {
+    document.querySelectorAll('.wizard-field-error').forEach((node) => node.remove());
+    document.querySelectorAll('[aria-invalid="true"]').forEach((el) => {
+      el.classList.remove('border-rose-400', 'focus:border-rose-400', 'focus:ring-rose-200', 'ring-1', 'ring-rose-200');
+      el.classList.add('border-zinc-200');
+      el.removeAttribute('aria-invalid');
+    });
+  }
+
+  function showFieldError(fieldId, message) {
+    const el = document.getElementById(fieldId);
+    if (!el || !message) return;
+
+    el.classList.add('border-rose-400', 'focus:border-rose-400', 'focus:ring-rose-200');
+    el.classList.remove('border-zinc-200');
+    el.setAttribute('aria-invalid', 'true');
+
+    if (fieldId === 'target_year_group') {
+      el.classList.add('ring-1', 'ring-rose-200');
+    }
+
+    let errEl = document.getElementById(`${fieldId}_error`);
+    if (!errEl) {
+      errEl = document.createElement('p');
+      errEl.id = `${fieldId}_error`;
+      errEl.className = 'wizard-field-error mt-1 text-[11px] text-rose-600 font-medium';
+      errEl.setAttribute('role', 'alert');
+      insertFieldErrorElement(errEl, fieldId, el);
+    }
+    errEl.textContent = message;
+  }
+
+  function validateFieldById(fieldId) {
+    const fail = (message) => ({ message, focusId: fieldId });
+
+    if (fieldId === 'title') {
+      const title = (document.getElementById('title')?.value || '').trim();
+      if (!title) return fail('Event title is required.');
+      if (title.length > 150) return fail('Event title must be 150 characters or less.');
+      return null;
+    }
+
+    if (fieldId === 'location') {
+      const location = (document.getElementById('location')?.value || '').trim();
+      if (!location) return fail('Location is required.');
+      return null;
+    }
+
+    if (fieldId === 'event_type_other') {
+      const selectedType = String(document.getElementById('event_type')?.value || '').trim();
+      if (selectedType !== 'Other') return null;
+      const customType = String(document.getElementById('event_type_other')?.value || '').trim();
+      if (!customType) return fail('Specify what this Other event type is.');
+      if (customType.length > 80) return fail('Custom event type must be 80 characters or less.');
+      return null;
+    }
+
+    if (fieldId === 'event_fee') {
+      if (!(teacherProposalMode || document.getElementById('registration_type_paid'))) return null;
+      if (getRegistrationType() !== 'paid') return null;
+      const feeRaw = String(document.getElementById('event_fee')?.value || '').trim();
+      const feeNum = Number.parseFloat(feeRaw);
+      if (!Number.isFinite(feeNum) || feeNum <= 0) {
+        return fail('Enter the settlement amount for this paid event.');
+      }
+      if (feeNum > EVENT_FEE_MAX) {
+        return fail(`Settlement amount cannot exceed ₱${EVENT_FEE_MAX.toLocaleString('en-PH')}.`);
+      }
+      return null;
+    }
+
+    if (fieldId === 'registration_limit') {
+      const limitRaw = String(document.getElementById('registration_limit')?.value || '').trim();
+      if (limitRaw === '') return null;
+      const limitNum = Number.parseInt(limitRaw, 10);
+      if (!Number.isFinite(limitNum) || limitNum < 1) {
+        return fail('Student limit must be a positive whole number.');
+      }
+      if (limitNum > REGISTRATION_LIMIT_MAX) {
+        return fail('Student limit cannot exceed 9999.');
+      }
+      return null;
+    }
+
+    if (fieldId === 'description') {
+      const description = enforceDescriptionWordLimit(document.getElementById('description'));
+      if (!description) return fail('Event description is required.');
+      if (countWords(description) > DESCRIPTION_MAX_WORDS) {
+        return fail(`Description must be ${DESCRIPTION_MAX_WORDS} words or less.`);
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  function refreshFieldValidation(fieldId, { showIfInvalid = true } = {}) {
+    const err = validateFieldById(fieldId);
+    if (err) {
+      if (showIfInvalid) showFieldError(fieldId, err.message);
+      return err;
+    }
+    clearFieldError(fieldId);
+    return null;
+  }
+
+  function bindWizardFieldValidation() {
+    const liveFields = ['title', 'location', 'event_type_other', 'event_fee', 'registration_limit'];
+    liveFields.forEach((fieldId) => {
+      const el = document.getElementById(fieldId);
+      if (!el) return;
+      const run = () => refreshFieldValidation(fieldId, { showIfInvalid: true });
+      el.addEventListener('input', run);
+      el.addEventListener('blur', run);
+      el.addEventListener('change', run);
+    });
+
+    document.getElementById('event_type')?.addEventListener('change', () => {
+      refreshFieldValidation('event_type_other', { showIfInvalid: true });
+    });
+
+    document.querySelectorAll('.target-year-checkbox').forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        const targetYears = typeof getSelectedTargetYears === 'function' ? getSelectedTargetYears() : [];
+        if (Array.isArray(targetYears) && targetYears.length > 0) {
+          clearFieldError('target_year_group');
+        }
+      });
+    });
+
+    const descriptionEl = document.getElementById('description');
+    if (descriptionEl) {
+      const runDescriptionValidation = () => {
+        enforceDescriptionWordLimit(descriptionEl);
+        refreshFieldValidation('description', { showIfInvalid: true });
+      };
+
+      descriptionEl.addEventListener('beforeinput', (e) => {
+        const words = countWords(descriptionEl.value);
+        if (words < DESCRIPTION_MAX_WORDS) return;
+
+        const inputType = String(e.inputType || '');
+        const isDelete = inputType.startsWith('delete') || inputType === 'deleteByCut';
+        if (isDelete) return;
+
+        const start = descriptionEl.selectionStart ?? 0;
+        const end = descriptionEl.selectionEnd ?? 0;
+        const selectedLen = end - start;
+        const insertLen = e.data?.length ?? 0;
+        if (insertLen > selectedLen) {
+          e.preventDefault();
+        }
+      });
+
+      descriptionEl.addEventListener('input', runDescriptionValidation);
+      descriptionEl.addEventListener('blur', runDescriptionValidation);
+    }
+
+    document.getElementById('registration_type_free')?.addEventListener('change', () => {
+      clearFieldError('event_fee');
+    });
+    document.getElementById('registration_type_paid')?.addEventListener('change', () => {
+      refreshFieldValidation('event_fee', { showIfInvalid: true });
+    });
+  }
+
   function showWizardFooterStatus(message, tone = 'error', focusId = null) {
     const box = document.getElementById('wizardFooterStatus');
     const formMsg = document.getElementById('formMsg');
@@ -4423,6 +4773,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   }
 
   function showWizardStepError(message, focusId) {
+    clearAllFieldErrors();
+    if (focusId && message) showFieldError(focusId, message);
     showWizardFooterStatus(message, 'error', focusId);
   }
 
@@ -4431,6 +4783,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   }
 
   function clearWizardStepError() {
+    clearAllFieldErrors();
     showWizardFooterStatus('');
   }
 
@@ -4471,6 +4824,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           if (!Number.isFinite(feeNum) || feeNum <= 0) {
             return fail('Enter the settlement amount for this paid event.', 'event_fee');
           }
+          if (feeNum > EVENT_FEE_MAX) {
+            return fail(`Settlement amount cannot exceed ₱${EVENT_FEE_MAX.toLocaleString('en-PH')}.`, 'event_fee');
+          }
         }
 
         const limitRaw = String(document.getElementById('registration_limit')?.value || '').trim();
@@ -4489,8 +4845,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
 
     if (currentStep === 2) {
-      const description = (document.getElementById('description')?.value || '').trim();
+      const description = enforceDescriptionWordLimit(document.getElementById('description'));
       if (!description) return fail('Event description is required.', 'description');
+      if (countWords(description) > DESCRIPTION_MAX_WORDS) {
+        return fail(`Description must be ${DESCRIPTION_MAX_WORDS} words or less.`, 'description');
+      }
       return null;
     }
 
@@ -4601,6 +4960,39 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return null;
   }
 
+  function validateAllWizardSteps() {
+    for (let currentStep = 1; currentStep <= maxWizardStep; currentStep += 1) {
+      const error = validateWizardStep(currentStep);
+      if (error) return { ...error, step: currentStep };
+    }
+    return null;
+  }
+
+  function mapWizardSubmitError(message) {
+    const msg = String(message || '').toLowerCase();
+    if (msg.includes('title')) return { focusId: 'title', step: 1 };
+    if (msg.includes('location')) return { focusId: 'location', step: 1 };
+    if (msg.includes('settlement') || msg.includes('event fee')) return { focusId: 'event_fee', step: 1 };
+    if (msg.includes('student limit')) return { focusId: 'registration_limit', step: 1 };
+    if (msg.includes('description')) return { focusId: 'description', step: 2 };
+    if (msg.includes('grace time')) return { focusId: 'grace_time', step: 3 };
+    if (msg.includes('seminar 2')) {
+      if (msg.includes('title')) return { focusId: 'seminar2_title', step: 3 };
+      if (msg.includes('end')) return { focusId: 'seminar2_end_local', step: 3 };
+      return { focusId: 'seminar2_start_local', step: 3 };
+    }
+    if (msg.includes('seminar 1')) {
+      if (msg.includes('title')) return { focusId: 'seminar1_title', step: 3 };
+      if (msg.includes('end')) return { focusId: 'seminar1_end_local', step: 3 };
+      return { focusId: 'seminar1_start_local', step: 3 };
+    }
+    if (msg.includes('registration close')) return { focusId: 'registration_close_weeks', step: 3 };
+    if (msg.includes('start') || msg.includes('end schedule') || msg.includes('schedule')) {
+      return { focusId: 'start_at_local', step: 3 };
+    }
+    return null;
+  }
+
   function syncEventFeeVisibility() {
     const wrap = document.getElementById('event_fee_wrap');
     const feeInput = document.getElementById('event_fee');
@@ -4654,11 +5046,25 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   const REGISTRATION_LIMIT_MAX = 9999;
   const PROPOSAL_FILE_MAX_BYTES = 10 * 1024 * 1024;
+  bindWizardFieldValidation();
 
-  function validateProposalFile(file, label) {
+  function isProposalPdfOnlyCode(code) {
+    const normalized = String(code || '').trim().toUpperCase();
+    return normalized === 'LU-AA-FO-113' || normalized === 'LU-AA-FO-108';
+  }
+
+  function validateProposalFile(file, label, code = '') {
     if (!file) return;
     if (file.size > PROPOSAL_FILE_MAX_BYTES) {
       throw new Error(`"${label}" exceeds the 10MB file size limit. Choose a smaller file.`);
+    }
+    if (isProposalPdfOnlyCode(code)) {
+      const mime = String(file.type || '').toLowerCase();
+      const name = String(file.name || '').toLowerCase();
+      const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
+      if (!isPdf) {
+        throw new Error(`"${label}" accepts PDF files only.`);
+      }
     }
   }
 
@@ -4708,6 +5114,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     rows.forEach((row) => {
       const requirementId = String(row.dataset.requirementId || '').trim();
       const label = String(row.querySelector('.text-sm.font-bold')?.textContent || 'requirement').trim();
+      const code = String(row.dataset.requirementCode || '').trim();
       const file = row.querySelector('.proposal-edit-file-input')?.files?.[0] || null;
       const existing = submissionsByRequirement[requirementId];
       const hasExisting = Boolean(
@@ -4718,7 +5125,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         throw new Error(`Upload the file for "${label}".`);
       }
       if (file) {
-        validateProposalFile(file, label);
+        validateProposalFile(file, label, code);
       }
     });
   }
@@ -4729,6 +5136,16 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     registrationLimitInput.value = digitsOnly;
   });
 
+  const eventFeeInput = document.getElementById('event_fee');
+  eventFeeInput?.addEventListener('input', () => {
+    enforceEventFeeInputLimit(eventFeeInput);
+    refreshFieldValidation('event_fee', { showIfInvalid: true });
+  });
+  eventFeeInput?.addEventListener('blur', () => {
+    enforceEventFeeInputLimit(eventFeeInput);
+    refreshFieldValidation('event_fee', { showIfInvalid: true });
+  });
+
   document.getElementById('btnCreateEvent')?.addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
     document.getElementById('event_id').value = '';
@@ -4737,6 +5154,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     resetCoverPicker();
     document.getElementById('location').value = '';
     document.getElementById('description').value = '';
+    descriptionSnapshot = '';
+    syncDescriptionWordLock(document.getElementById('description'));
     setPickerValue(startAtInput, '');
     setPickerValue(endAtInput, '');
 
@@ -4843,8 +5262,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
 
     clearWizardStepError();
-    const stepError = validateWizardStep(step);
+    const stepError = validateAllWizardSteps();
     if (stepError) {
+      if (stepError.step && stepError.step !== step) {
+        step = stepError.step;
+        setWizardStep(step);
+      }
       showWizardStepError(stepError.message, stepError.focusId);
       return;
     }
@@ -4860,7 +5283,14 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
       const title = document.getElementById('title').value.trim();
       const location = document.getElementById('location').value.trim();
-      const description = document.getElementById('description').value.trim();
+      const description = enforceDescriptionWordLimit(document.getElementById('description'));
+      updateDescriptionWordCount();
+      if (!description) {
+        throw new Error('Event description is required.');
+      }
+      if (countWords(description) > DESCRIPTION_MAX_WORDS) {
+        throw new Error(`Description must be ${DESCRIPTION_MAX_WORDS} words or less.`);
+      }
       const eventType = getEventTypeValue();
       if (!eventType) {
         throw new Error('Specify what this Other event type is.');
@@ -4986,6 +5416,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           const feeNum = Number.parseFloat(feeRaw);
           if (!Number.isFinite(feeNum) || feeNum <= 0) {
             throw new Error('Enter the settlement amount students must pay for this paid event.');
+          }
+          if (feeNum > EVENT_FEE_MAX) {
+            throw new Error(`Settlement amount cannot exceed ₱${EVENT_FEE_MAX.toLocaleString('en-PH')}.`);
           }
           payload.event_fee = Math.round(feeNum * 100) / 100;
         } else {
@@ -5181,7 +5614,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         }
       }
       window.pulseManageEventsSubmitFailedAt = Date.now();
-      showWizardStepError(errorMessage);
+      const mapped = mapWizardSubmitError(errorMessage);
+      if (mapped?.step && mapped.step !== step) {
+        step = mapped.step;
+        setWizardStep(step);
+      }
+      showWizardStepError(errorMessage, mapped?.focusId || null);
       submitBtn.disabled = false;
       submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     } finally {
@@ -5475,8 +5913,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   }
 
   function refreshEventVisibility() {
-    const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
-    const selectedType = typeFilter ? typeFilter.value : 'all';
+      const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+      const selectedType = typeFilter ? typeFilter.value : 'all';
     let visibleCount = 0;
 
     getEventCards().forEach(card => {
@@ -5494,39 +5932,39 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         matchesTab = (activeTab === 'all') || (status === 'pending');
       }
 
-      const matchesSearch = searchTerm === '' ||
-        title.includes(searchTerm) ||
-        location.includes(searchTerm) ||
-        teacher.includes(searchTerm);
-      const matchesType = selectedType === 'all' || type === selectedType;
+          const matchesSearch = searchTerm === '' || 
+                               title.includes(searchTerm) || 
+                               location.includes(searchTerm) || 
+                               teacher.includes(searchTerm);
+          const matchesType = selectedType === 'all' || type === selectedType;
 
-      if (matchesTab && matchesSearch && matchesType) {
-        card.style.display = 'block';
+          if (matchesTab && matchesSearch && matchesType) {
+              card.style.display = 'block';
         visibleCount += 1;
-
-        // Trigger Animation Refresh
-        if (card.classList.contains('event-card-animated')) {
-          card.classList.remove('in-view');
-          // Use global observer if available
-          if (typeof window.observer !== 'undefined') {
-            window.observer.unobserve(card);
-            window.observer.observe(card);
+              
+              // Trigger Animation Refresh
+              if (card.classList.contains('event-card-animated')) {
+                  card.classList.remove('in-view');
+                  // Use global observer if available
+                  if (typeof window.observer !== 'undefined') {
+                      window.observer.unobserve(card);
+                      window.observer.observe(card);
+                  }
+              }
+          } else {
+              card.style.display = 'none';
           }
-        }
-      } else {
-        card.style.display = 'none';
-      }
-    });
+      });
 
     const emptyState = document.getElementById('eventListEmptyState');
     if (emptyState) {
       emptyState.classList.toggle('hidden', visibleCount > 0);
     }
 
-    // Update gradients after visibility change
-    if (typeof window.syncEventListGradients === 'function') {
-      setTimeout(window.syncEventListGradients, 50);
-    }
+      // Update gradients after visibility change
+      if (typeof window.syncEventListGradients === 'function') {
+          setTimeout(window.syncEventListGradients, 50);
+      }
   }
 
   function setTeacherTabState(nextTab) {
@@ -5551,23 +5989,23 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   }
 
   if (tabAll && tabPending) {
-    tabAll.addEventListener('click', () => {
-      activeTab = 'all';
-      tabAll.classList.add('border-orange-500', 'text-orange-600');
-      tabAll.classList.remove('border-transparent', 'text-zinc-500');
-      tabPending.classList.remove('border-orange-500', 'text-orange-600');
-      tabPending.classList.add('border-transparent', 'text-zinc-500');
-      refreshEventVisibility();
-    });
+      tabAll.addEventListener('click', () => {
+          activeTab = 'all';
+          tabAll.classList.add('border-orange-500', 'text-orange-600');
+          tabAll.classList.remove('border-transparent', 'text-zinc-500');
+          tabPending.classList.remove('border-orange-500', 'text-orange-600');
+          tabPending.classList.add('border-transparent', 'text-zinc-500');
+          refreshEventVisibility();
+      });
 
-    tabPending.addEventListener('click', () => {
-      activeTab = 'pending';
-      tabPending.classList.add('border-orange-500', 'text-orange-600');
-      tabPending.classList.remove('border-transparent', 'text-zinc-500');
-      tabAll.classList.remove('border-orange-500', 'text-orange-600');
-      tabAll.classList.add('border-transparent', 'text-zinc-500');
-      refreshEventVisibility();
-    });
+      tabPending.addEventListener('click', () => {
+          activeTab = 'pending';
+          tabPending.classList.add('border-orange-500', 'text-orange-600');
+          tabPending.classList.remove('border-transparent', 'text-zinc-500');
+          tabAll.classList.remove('border-orange-500', 'text-orange-600');
+          tabAll.classList.add('border-transparent', 'text-zinc-500');
+          refreshEventVisibility();
+      });
   }
 
   if (tabActive && tabApproval && tabExpired) {
@@ -5584,50 +6022,50 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   // ── Reject (Page 34 Modal) ──
   const rejectModal = document.getElementById('rejectModal');
   const rejectPanel = document.getElementById('rejectPanel');
-
+  
   document.querySelectorAll('.btnReject').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('rejectEventId').value = btn.dataset.id;
-      document.getElementById('rejectEventName').textContent = btn.dataset.title;
-
-      rejectModal.classList.add('active');
-      rejectPanel.style.transform = 'translateY(0)';
-      document.body.style.overflow = 'hidden';
-    });
+      btn.addEventListener('click', () => {
+          document.getElementById('rejectEventId').value = btn.dataset.id;
+          document.getElementById('rejectEventName').textContent = btn.dataset.title;
+          
+          rejectModal.classList.add('active');
+          rejectPanel.style.transform = 'translateY(0)';
+          document.body.style.overflow = 'hidden';
+      });
   });
-
+  
   const closeReject = () => {
-    rejectModal.classList.remove('active');
-    rejectPanel.style.transform = 'translateY(100%)';
-    document.body.style.overflow = '';
-    setTimeout(() => document.getElementById('rejectReason').value = '', 300);
+      rejectModal.classList.remove('active');
+      rejectPanel.style.transform = 'translateY(100%)';
+      document.body.style.overflow = '';
+      setTimeout(() => document.getElementById('rejectReason').value = '', 300);
   };
-
+  
   document.getElementById('btnCancelReject')?.addEventListener('click', closeReject);
   rejectModal?.addEventListener('click', (e) => { if (e.target === rejectModal) closeReject(); });
-
+  
   document.getElementById('btnConfirmReject')?.addEventListener('click', async () => {
-    const event_id = document.getElementById('rejectEventId').value;
-    const reason = document.getElementById('rejectReason').value.trim();
-    if (!reason) { alert("Please provide a reason to notify the event coordinator."); return; }
-
-    const btn = document.getElementById('btnConfirmReject');
-    btn.disabled = true; btn.textContent = 'Sending...';
-    try {
-      const res = await fetch('/api/events_approve.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Archiving as rejection
-        body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed');
-      window.location.reload();
-    } catch (e) {
-      alert(e.message || 'Failed');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Reject Proposal';
-    }
+      const event_id = document.getElementById('rejectEventId').value;
+      const reason = document.getElementById('rejectReason').value.trim();
+      if (!reason) { alert("Please provide a reason to notify the event coordinator."); return; }
+      
+      const btn = document.getElementById('btnConfirmReject');
+      btn.disabled = true; btn.textContent = 'Sending...';
+      try {
+        const res = await fetch('/api/events_approve.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Archiving as rejection
+          body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        window.location.reload();
+      } catch (e) {
+        alert(e.message || 'Failed');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Reject Proposal';
+      }
   });
 
 
@@ -5667,7 +6105,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   (function () {
     var sttBtn = document.getElementById('sttBtn');
     var textarea = document.getElementById('description');
-
+    
     // Modal elements
     var previewModal = document.getElementById('sttPreviewModal');
     var previewText = document.getElementById('sttPreviewText');
@@ -5698,12 +6136,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      logDebug("ERROR: SpeechRecognition API not supported in this browser!");
-      sttBtn.style.opacity = '0.35'; sttBtn.style.cursor = 'not-allowed';
-      sttBtn.title = 'Use Chrome or Edge';
-      return;
+      // Groq MediaRecorder path does not need Web Speech API — only log.
+      logDebug("Browser SpeechRecognition not present; using Groq recorder path.");
     } else {
-      logDebug("SpeechRecognition API found.");
+      logDebug("SpeechRecognition API found (Groq recorder still used for accuracy).");
     }
 
     var isRecording = false;
@@ -5743,7 +6179,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     tabImproved.addEventListener('click', async function () {
       if (isRecording) return;
       tabImproved.classList.add('active'); tabRaw.classList.remove('active');
-
+      
       if (activeTab === 'improved') return; // Already here
       activeTab = 'improved';
 
@@ -5773,12 +6209,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ raw_text: currentRaw, csrf_token: window.CSRF_TOKEN || "" })
         });
-
+        
         var data = await res.json();
-
+        
         if (data.ok) {
           logDebug("Gemini Response SUCCESS.");
-          improvedTranscript = data.improved_text;
+          improvedTranscript = truncateToWordLimit(data.improved_text, DESCRIPTION_MAX_WORDS);
           if (activeTab === 'improved') previewText.value = improvedTranscript;
         } else {
           logDebug("Gemini API Error: " + data.error);
@@ -5811,13 +6247,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     document.getElementById('sttPreviewDiscard').addEventListener('click', hideModal);
 
     btnReplace.addEventListener('click', function () {
-      textarea.value = previewText.value;
+      setDescriptionFieldValue(textarea, previewText.value);
+      refreshFieldValidation('description', { showIfInvalid: true });
       hideModal();
     });
     btnAppend.addEventListener('click', function () {
       var cur = textarea.value;
       if (cur && !cur.endsWith(' ') && !cur.endsWith('\n')) cur += ' ';
-      textarea.value = cur + previewText.value;
+      setDescriptionFieldValue(textarea, cur + previewText.value);
+      refreshFieldValidation('description', { showIfInvalid: true });
       hideModal();
     });
 
@@ -5827,9 +6265,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     var recordingSeconds = 0;
 
     function formatTime(sec) {
-      var m = Math.floor(sec / 60).toString().padStart(2, '0');
-      var s = (sec % 60).toString().padStart(2, '0');
-      return m + ':' + s;
+        var m = Math.floor(sec / 60).toString().padStart(2, '0');
+        var s = (sec % 60).toString().padStart(2, '0');
+        return m + ':' + s;
     }
 
     async function startRecording(resume = false) {
@@ -5840,7 +6278,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       }
       activeTab = 'raw';
       isRecording = true;
-
+      
       // Update Mic Toggle Button to Stop
       micToggleBtn.innerHTML = 'Stop Recording ⏹';
       micToggleBtn.className = 'flex items-center gap-1.5 rounded-lg bg-red-50 text-red-600 px-3 py-1.5 font-medium border border-red-200 hover:bg-red-100 transition';
@@ -5851,25 +6289,25 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       tabImproved.style.opacity = '0.5';
       tabImproved.style.pointerEvents = 'none'; // Cannot switch to AI while recording
 
-      previewText.readOnly = true;
+      previewText.readOnly = true; 
       if (!resume) previewText.value = '';
-
+      
       // UI POLISH: Hide Text box during record, show spectrum animation
       previewText.classList.add('hidden');
       if (document.getElementById('sttSpectrumEffect')) {
-        document.getElementById('sttSpectrumEffect').classList.remove('hidden');
-        document.getElementById('sttSpectrumEffect').classList.add('flex');
+          document.getElementById('sttSpectrumEffect').classList.remove('hidden');
+          document.getElementById('sttSpectrumEffect').classList.add('flex');
       }
 
       recordingSeconds = 0;
       modalStatus.classList.remove('hidden');
       modalStatus.classList.add('flex');
       modalStatus.innerHTML = '<span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span></span> <span id="sttTimer">🎙️ Recording... 00:00</span>';
-
+      
       recordingTimer = setInterval(() => {
-        recordingSeconds++;
-        var st = document.getElementById('sttTimer');
-        if (st) st.textContent = '🎙️ Recording... ' + formatTime(recordingSeconds);
+          recordingSeconds++;
+          var st = document.getElementById('sttTimer');
+          if (st) st.textContent = '🎙️ Recording... ' + formatTime(recordingSeconds);
       }, 1000);
 
       btnAppend.disabled = true; btnAppend.style.opacity = '0.5';
@@ -5882,62 +6320,95 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       openModal(previewModal);
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = function (e) {
-          if (e.data.size > 0) audioChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = async function () {
-          logDebug("MediaRecorder onstop triggered, sending audio to Groq API...");
-          clearInterval(recordingTimer);
-          modalStatus.innerHTML = '⏳ Uploading and processing audio... Please wait';
-
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          const formData = new FormData();
-          formData.append('audio', audioBlob, 'audio.webm');
-          formData.append('csrf_token', window.CSRF_TOKEN || '');
-
-          try {
-            const res = await fetch('api/speech_to_text.php', { method: 'POST', body: formData });
-            const data = await res.json();
-            if (data.ok) {
-              logDebug("Groq STT SUCCESS.");
-              // Append perfectly transcribed text
-              rawTranscript += (rawTranscript ? ' ' : '') + data.text;
-              previewText.value = rawTranscript;
-            } else {
-              logDebug("Groq STT Error: " + data.error);
-              previewText.value = rawTranscript + "\n\n⚠️ STT Error:\n" + data.error + "\n\n(Tip: Did you forget to add your Groq API key in config.php?)";
-            }
-          } catch (err) {
-            logDebug("STT Fetch Network Error: " + err);
-            previewText.value = rawTranscript + "\n\n⚠️ Network Error trying to reach the Speech API server.";
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
           }
-
-          finalizeStop();
-        };
-
-        logDebug("Starting MediaRecorder.");
-        mediaRecorder.start();
+        });
+        var preferredTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/mp4'
+        ];
+        var recMime = '';
+        for (var i = 0; i < preferredTypes.length; i++) {
+          if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredTypes[i])) {
+            recMime = preferredTypes[i];
+            break;
+          }
+        }
+        var recOpts = { audioBitsPerSecond: 128000 };
+        if (recMime) recOpts.mimeType = recMime;
+        try {
+          mediaRecorder = new MediaRecorder(stream, recOpts);
+        } catch (recErr) {
+          logDebug("MediaRecorder options fallback: " + recErr);
+          mediaRecorder = new MediaRecorder(stream);
+        }
+          audioChunks = [];
+        var blobMime = (mediaRecorder.mimeType || recMime || 'audio/webm').split(';')[0] || 'audio/webm';
+          
+        mediaRecorder.ondataavailable = function (e) {
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
+          };
+          
+        mediaRecorder.onstop = async function () {
+              logDebug("MediaRecorder onstop triggered, sending audio to Groq API...");
+              clearInterval(recordingTimer);
+              modalStatus.innerHTML = '⏳ Uploading and processing audio... Please wait';
+              
+          const audioBlob = new Blob(audioChunks, { type: blobMime });
+          var ext = 'webm';
+          if (blobMime.indexOf('ogg') !== -1) ext = 'ogg';
+          else if (blobMime.indexOf('mp4') !== -1 || blobMime.indexOf('m4a') !== -1) ext = 'm4a';
+          else if (blobMime.indexOf('wav') !== -1) ext = 'wav';
+              const formData = new FormData();
+          formData.append('audio', audioBlob, 'audio.' + ext);
+              formData.append('csrf_token', window.CSRF_TOKEN || '');
+              
+              try {
+                  const res = await fetch('api/speech_to_text.php', { method: 'POST', body: formData });
+                  const data = await res.json();
+                  if (data.ok) {
+                      logDebug("Groq STT SUCCESS.");
+                      // Append perfectly transcribed text
+                      rawTranscript += (rawTranscript ? ' ' : '') + data.text;
+                      previewText.value = rawTranscript;
+                  } else {
+                      logDebug("Groq STT Error: " + data.error);
+                      previewText.value = rawTranscript + "\n\n⚠️ STT Error:\n" + data.error + "\n\n(Tip: Did you forget to add your Groq API key in config.php?)";
+                  }
+          } catch (err) {
+                  logDebug("STT Fetch Network Error: " + err);
+                  previewText.value = rawTranscript + "\n\n⚠️ Network Error trying to reach the Speech API server.";
+              }
+              
+              finalizeStop();
+          };
+          
+        logDebug("Starting MediaRecorder mime=" + (mediaRecorder.mimeType || recMime || 'default'));
+        // timeslice keeps chunks flowing; some browsers drop empty final blobs without it
+        mediaRecorder.start(1000);
       } catch (err) {
-        logDebug("getUserMedia Error (Mic Blocked/Not found): " + err);
-        clearInterval(recordingTimer);
-        modalStatus.textContent = '🚫 Mic blocked or none found — allow access in browser';
-        modalStatus.classList.replace('text-red-600', 'text-amber-600');
-        finalizeStop();
+          logDebug("getUserMedia Error (Mic Blocked/Not found): " + err);
+          clearInterval(recordingTimer);
+          modalStatus.textContent = '🚫 Mic blocked or none found — allow access in browser';
+          modalStatus.classList.replace('text-red-600', 'text-amber-600');
+          finalizeStop();
       }
     }
 
     function stopRecording(reason) {
       logDebug("stopRecording() triggered. Reason: " + (reason || 'manual'));
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+          mediaRecorder.stop();
+          mediaRecorder.stream.getTracks().forEach(t => t.stop());
       } else {
-        finalizeStop();
+          finalizeStop();
       }
     }
 
@@ -5952,26 +6423,26 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       previewText.readOnly = false;
       previewText.classList.remove('hidden');
       if (document.getElementById('sttSpectrumEffect')) {
-        document.getElementById('sttSpectrumEffect').classList.add('hidden');
-        document.getElementById('sttSpectrumEffect').classList.remove('flex');
+          document.getElementById('sttSpectrumEffect').classList.add('hidden');
+          document.getElementById('sttSpectrumEffect').classList.remove('flex');
       }
 
       modalStatus.classList.add('hidden');
       modalStatus.classList.remove('flex');
 
       tabImproved.style.opacity = '1';
-      tabImproved.style.pointerEvents = 'auto';
+      tabImproved.style.pointerEvents = 'auto'; 
 
       btnAppend.disabled = false; btnAppend.style.opacity = '1';
       btnReplace.disabled = false; btnReplace.style.opacity = '1';
 
-      improvedTranscript = '';
+      improvedTranscript = ''; 
       updateCounts();
     }
 
     micToggleBtn.addEventListener('click', function () {
       if (isRecording) {
-        stopRecording('manual');
+        stopRecording('manual'); 
       } else {
         startRecording(true); // Resume recording without clearing text
       }
@@ -6019,106 +6490,108 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const mainUndoBtn = document.getElementById('mainUndoBtn');
     const mainAiStatus = document.getElementById('mainAiStatus');
     const mainModalPanel = document.querySelector('#eventModal .modal-panel');
-
+    
     let mainIsExpanded = false;
     let originalMainDesc = '';
-
+    
     if (mainUndoBtn && mainDesc) {
-      mainUndoBtn.addEventListener('click', () => {
-        if (originalMainDesc !== '') {
-          mainDesc.value = originalMainDesc;
-          if (mainAiStatus) {
-            mainAiStatus.innerHTML = '↶ Reverted to original text.';
-            mainAiStatus.classList.remove('hidden');
-            setTimeout(() => mainAiStatus.classList.add('hidden'), 3500);
-          }
-          mainUndoBtn.classList.add('hidden');
-        }
-      });
+        mainUndoBtn.addEventListener('click', () => {
+            if (originalMainDesc !== '') {
+                setDescriptionFieldValue(mainDesc, originalMainDesc);
+                refreshFieldValidation('description', { showIfInvalid: true });
+                if (mainAiStatus) {
+                    mainAiStatus.innerHTML = '↶ Reverted to original text.';
+                    mainAiStatus.classList.remove('hidden');
+                    setTimeout(() => mainAiStatus.classList.add('hidden'), 3500);
+                }
+                mainUndoBtn.classList.add('hidden');
+            }
+        });
     }
     if (mainExpandBtn && mainDesc) {
-      mainExpandBtn.addEventListener('click', () => {
-        mainIsExpanded = !mainIsExpanded;
-        if (mainIsExpanded) {
-          if (mainModalPanel) {
-            mainModalPanel.style.width = '800px';
-            mainModalPanel.style.maxWidth = '95vw';
-          }
-          mainDesc.style.height = 'calc(65vh - 180px)'; // Safe calculated height
-          mainExpandBtn.innerHTML = '⤡ Collapse Box';
-        } else {
-          if (mainModalPanel) {
-            mainModalPanel.style.width = '';
-            mainModalPanel.style.maxWidth = '';
-          }
-          mainDesc.style.height = '';
-          mainExpandBtn.innerHTML = '⤢ Expand Box';
-        }
-      });
+        mainExpandBtn.addEventListener('click', () => {
+            mainIsExpanded = !mainIsExpanded;
+            if (mainIsExpanded) {
+                if (mainModalPanel) {
+                    mainModalPanel.style.width = '800px';
+                    mainModalPanel.style.maxWidth = '95vw';
+                }
+                mainDesc.style.height = 'calc(65vh - 180px)'; // Safe calculated height
+                mainExpandBtn.innerHTML = '⤡ Collapse Box';
+            } else {
+                if (mainModalPanel) {
+                    mainModalPanel.style.width = '';
+                    mainModalPanel.style.maxWidth = '';
+                }
+                mainDesc.style.height = ''; 
+                mainExpandBtn.innerHTML = '⤢ Expand Box';
+            }
+        });
     }
 
     if (mainAiBtn && mainDesc && mainAiStatus) {
-      mainAiBtn.addEventListener('click', async () => {
-        const raw = mainDesc.value.trim();
-        if (!raw) {
-          alert("Please type a description first before AI can improve it!");
-          return;
-        }
-
-        // Save original before overwriting
-        originalMainDesc = raw;
-
-        // UI Loading state
-        mainAiBtn.disabled = true;
-        mainAiBtn.style.opacity = '0.5';
-        mainAiStatus.classList.remove('hidden');
-        mainAiStatus.innerHTML = '⏳ AI is rewriting your text...';
-
-        try {
-          const res = await fetch('api/ai_improve.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ raw_text: raw, csrf_token: window.CSRF_TOKEN || "" })
-          });
-          const json = await res.json();
-          if (json.ok) {
-            mainDesc.value = json.improved_text;
-            mainAiStatus.innerHTML = '✅ Professionally Improved!';
-            setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
-            if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
-          } else {
+        mainAiBtn.addEventListener('click', async () => {
+            const raw = mainDesc.value.trim();
+            if (!raw) {
+                alert("Please type a description first before AI can improve it!");
+                return;
+            }
+            
+            // Save original before overwriting
+            originalMainDesc = raw;
+            
+            // UI Loading state
+            mainAiBtn.disabled = true;
+            mainAiBtn.style.opacity = '0.5';
+            mainAiStatus.classList.remove('hidden');
+            mainAiStatus.innerHTML = '⏳ AI is rewriting your text...';
+            
+            try {
+                const res = await fetch('api/ai_improve.php', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_text: raw, csrf_token: window.CSRF_TOKEN || "" }) 
+                });
+                const json = await res.json();
+                if (json.ok) {
+                    setDescriptionFieldValue(mainDesc, json.improved_text);
+                    refreshFieldValidation('description', { showIfInvalid: true });
+                    mainAiStatus.innerHTML = '✅ Professionally Improved!';
+                    setTimeout(() => mainAiStatus.classList.add('hidden'), 4000);
+                    if (mainUndoBtn) mainUndoBtn.classList.remove('hidden');
+                } else {
             mainAiStatus.innerHTML = '❌ ' + (json.error || 'AI formatting unavailable.');
-          }
-        } catch (err) {
-          mainAiStatus.innerHTML = '❌ Network error.';
-        }
-
-        mainAiBtn.disabled = false;
-        mainAiBtn.style.opacity = '1';
-      });
+                }
+            } catch (err) {
+                mainAiStatus.innerHTML = '❌ Network error.';
+            }
+            
+            mainAiBtn.disabled = false;
+            mainAiBtn.style.opacity = '1';
+        });
     }
 
     // ── Intersection Observer for Event Cards ──
     const observerOptions = {
-      root: document.getElementById('eventScrollContainer'),
-      threshold: 0,
-      rootMargin: '100px'
+        root: document.getElementById('eventScrollContainer'),
+        threshold: 0,
+        rootMargin: '100px'
     };
 
     window.observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('in-view');
-        } else if (entry.boundingClientRect.top > entry.rootBounds.bottom) {
-          entry.target.classList.remove('in-view');
-        }
-      });
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('in-view');
+            } else if (entry.boundingClientRect.top > entry.rootBounds.bottom) {
+                entry.target.classList.remove('in-view');
+            }
+        });
     }, observerOptions);
 
     function reobserveCards() {
-      document.querySelectorAll('.event-card-animated').forEach(card => {
-        window.observer.observe(card);
-      });
+        document.querySelectorAll('.event-card-animated').forEach(card => {
+            window.observer.observe(card);
+        });
     }
     reobserveCards();
 
@@ -6128,22 +6601,22 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     const bottomGrad = document.getElementById('bottomEventGrad');
 
     if (scrollContainer && topGrad && bottomGrad) {
-      const syncGradients = () => {
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+        const syncGradients = () => {
+            const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+            
+            // Top gradient opacity
+            const tOpacity = Math.min(scrollTop / 50, 1);
+            topGrad.style.opacity = tOpacity;
 
-        // Top gradient opacity
-        const tOpacity = Math.min(scrollTop / 50, 1);
-        topGrad.style.opacity = tOpacity;
+            // Bottom gradient opacity
+            const bottomDistance = scrollHeight - (scrollTop + clientHeight);
+            const bOpacity = scrollHeight <= clientHeight ? 0 : Math.min(bottomDistance / 50, 1);
+            bottomGrad.style.opacity = bOpacity;
+        };
 
-        // Bottom gradient opacity
-        const bottomDistance = scrollHeight - (scrollTop + clientHeight);
-        const bOpacity = scrollHeight <= clientHeight ? 0 : Math.min(bottomDistance / 50, 1);
-        bottomGrad.style.opacity = bOpacity;
-      };
-
-      scrollContainer.addEventListener('scroll', syncGradients);
-      setTimeout(syncGradients, 100);
-      window.syncEventListGradients = syncGradients;
+        scrollContainer.addEventListener('scroll', syncGradients);
+        setTimeout(syncGradients, 100);
+        window.syncEventListGradients = syncGradients;
     }
 
     refreshEventVisibility();

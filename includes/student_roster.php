@@ -371,6 +371,87 @@ if (!function_exists('student_roster_public_preview')) {
     }
 }
 
+if (!function_exists('student_user_is_incomplete_signup')) {
+    /**
+     * True when Create Account wrote the row but email OTP never succeeded.
+     * These must remain claimable / resumable — not "already has an account."
+     *
+     * @param array<string,mixed> $user
+     */
+    function student_user_is_incomplete_signup(array $user): bool
+    {
+        if (!empty($user['email_verified'])) {
+            return false;
+        }
+        $status = strtolower(trim((string) ($user['account_status'] ?? '')));
+        // preverify = intended; pending/empty = legacy fallback when preverify
+        // was rejected by DB check during insert.
+        return in_array($status, ['preverify', 'pending', ''], true);
+    }
+}
+
+if (!function_exists('student_roster_fetch_signup_user')) {
+    /**
+     * Load a users row used for roster claim / incomplete-signup checks.
+     *
+     * @return array<string,mixed>|null
+     */
+    function student_roster_fetch_signup_user(string $userId): ?array
+    {
+        $userId = trim($userId);
+        if ($userId === '') {
+            return null;
+        }
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+            . '?select=id,email,student_id,role,account_status,email_verified,registration_source,archived_at'
+            . '&id=eq.' . rawurlencode($userId)
+            . '&limit=1';
+        $res = supabase_request('GET', $url, student_roster_supabase_headers());
+        if (!($res['ok'] ?? false)) {
+            return null;
+        }
+        $rows = json_decode((string) ($res['body'] ?? ''), true);
+        return is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+    }
+}
+
+if (!function_exists('student_roster_find_incomplete_by_student_no')) {
+    /**
+     * Incomplete Create Account row for this student number (OTP not done).
+     *
+     * @return array<string,mixed>|null
+     */
+    function student_roster_find_incomplete_by_student_no(string $studentNo): ?array
+    {
+        $studentNo = student_roster_normalize_no($studentNo);
+        if ($studentNo === '') {
+            return null;
+        }
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+            . '?select=id,email,student_id,role,account_status,email_verified,registration_source,archived_at'
+            . '&student_id=eq.' . rawurlencode($studentNo)
+            . '&role=eq.student'
+            . '&limit=5';
+        $res = supabase_request('GET', $url, student_roster_supabase_headers());
+        if (!($res['ok'] ?? false)) {
+            return null;
+        }
+        $rows = json_decode((string) ($res['body'] ?? ''), true);
+        if (!is_array($rows)) {
+            return null;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row) || !empty($row['archived_at'])) {
+                continue;
+            }
+            if (student_user_is_incomplete_signup($row)) {
+                return $row;
+            }
+        }
+        return null;
+    }
+}
+
 if (!function_exists('student_roster_year_ordinal_label')) {
     function student_roster_year_ordinal_label(string $yearKey): string
     {

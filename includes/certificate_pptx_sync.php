@@ -193,6 +193,21 @@ function certificate_pptx_sync_apply_layout(array $canvasState, array $layout): 
             ) {
                 $codeText = $itemText;
             }
+            $fit = certificate_pptx_fit_code_box(
+                $left,
+                $top,
+                $width,
+                $height,
+                $codeText,
+                isset($style['fontSize']) && is_numeric($style['fontSize']) ? (float) $style['fontSize'] : null,
+                isset($style['textAlign']) && is_string($style['textAlign']) ? $style['textAlign'] : null,
+                $canvasW
+            );
+            $left = $fit['left'];
+            $top = $fit['top'];
+            $width = $fit['width'];
+            $height = $fit['height'];
+            $style['textAlign'] = $fit['textAlign'];
             if ($idx === null) {
                 $codeObj = certificate_pptx_sync_new_code_object($left, $top, $width, $height, $codeText, $style);
                 $canvasState['objects'][] = $codeObj;
@@ -210,6 +225,7 @@ function certificate_pptx_sync_apply_layout(array $canvasState, array $layout): 
                     $codeText,
                     $style
                 );
+                $canvasState['objects'][$idx]['type'] = 'textbox';
                 $canvasState['objects'][$idx]['name'] = 'Certificate Code';
                 $canvasState['objects'][$idx]['id'] = 'certificate_code';
                 certificate_pptx_sync_clear_stale_geometry($canvasState['objects'][$idx]);

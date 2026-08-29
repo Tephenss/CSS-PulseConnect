@@ -133,6 +133,17 @@ if (!empty($user['archived_at'])) {
     json_response(['ok' => false, 'error' => 'This account has been archived. Contact your administrator.'], 403);
 }
 if ($role === 'student') {
+    // Create Account is incomplete until email OTP succeeds.
+    if (
+        !$emailVerified
+        && in_array($accountStatus, ['preverify', 'pending', ''], true)
+        && ($accountStatus === 'preverify' || $registrationSource === 'app')
+    ) {
+        json_response([
+            'ok' => false,
+            'error' => 'Finish Create Account email verification first. Open Create Account with your student number to continue.',
+        ], 403);
+    }
     if ($accountStatus === 'pending' && $emailVerified && $registrationSource === 'app') {
         $createdRaw = (string) ($user['created_at'] ?? '');
         $bypass = false;

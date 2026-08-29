@@ -490,11 +490,18 @@ a:hover .hide-anatomy,
 .feedback-section-head {
   background: #7f1d1d;
 }
-.feedback-bar-fill {
-  background: #7f1d1d;
-  border-radius: 2px 2px 0 0;
-  width: 70%;
-  max-width: 52px;
+.feedback-chart-wrap {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  overflow: visible;
+}
+.feedback-bar-chart {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  overflow: visible;
 }
 .feedback-year-legend {
   display: flex;

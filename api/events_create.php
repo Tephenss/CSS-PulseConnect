@@ -74,6 +74,11 @@ if ((string) ($user['role'] ?? '') === 'teacher' && $proposalRequirements === []
 if ($title === '' || mb_strlen($title) > 150) {
     json_response(['ok' => false, 'error' => 'Invalid title'], 400);
 }
+
+$descriptionError = validate_event_description_words($description);
+if ($descriptionError !== null) {
+    json_response(['ok' => false, 'error' => $descriptionError], 400);
+}
 if ($startAt === '' || $endAt === '') {
     json_response(['ok' => false, 'error' => 'Start/end required'], 400);
 }
@@ -141,7 +146,7 @@ if ($role === 'teacher') {
         if ($data['event_fee'] !== null && $data['event_fee'] !== '') {
             $eventFee = normalize_event_fee($data['event_fee']);
             if ($eventFee === null || $eventFee <= 0) {
-                json_response(['ok' => false, 'error' => 'Enter a valid event fee greater than 0.'], 400);
+                json_response(['ok' => false, 'error' => 'Settlement amount must be between 1 and ' . (int) EVENT_FEE_MAX . '.'], 400);
             }
         }
     }

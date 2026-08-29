@@ -19,7 +19,7 @@ if (is_file($scanContextPath)) {
     require_once $scanContextPath;
 }
 
-$user = require_role(['admin']);
+$user = require_role(['admin', 'teacher']);
 $data = require_post_json();
 require_csrf_from_json($data);
 
@@ -27,6 +27,9 @@ $registrationId = isset($data['registration_id']) ? trim((string) $data['registr
 if ($registrationId === '') {
     json_response(['ok' => false, 'error' => 'registration_id required'], 400);
 }
+
+$role = strtolower(trim((string) ($user['role'] ?? '')));
+$userId = trim((string) ($user['id'] ?? ''));
 
 $readHeaders = [
     'Accept: application/json',
@@ -91,8 +94,8 @@ if (!is_array($registration) || empty($registration['event_id'])) {
 $eventId = (string) $registration['event_id'];
 
 $eventSelectCandidates = [
-    'id,title,start_at,end_at,early_out_enabled_at,grace_time,status',
-    'id,title,start_at,end_at,grace_time,status',
+    'id,title,start_at,end_at,early_out_enabled_at,grace_time,status,created_by',
+    'id,title,start_at,end_at,grace_time,status,created_by',
 ];
 $event = null;
 $lastEventRes = null;
@@ -114,6 +117,11 @@ if (!is_array($event)) {
         'ok' => false,
         'error' => build_error($lastEventRes['body'] ?? null, (int) ($lastEventRes['status'] ?? 0), $lastEventRes['error'] ?? null, 'Event lookup failed'),
     ], 500);
+}
+
+$isCreator = $userId !== '' && (string) ($event['created_by'] ?? '') === $userId;
+if ($role !== 'admin' && !($role === 'teacher' && $isCreator)) {
+    json_response(['ok' => false, 'error' => 'Only the event creator or an admin can reset attendance.'], 403);
 }
 
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));

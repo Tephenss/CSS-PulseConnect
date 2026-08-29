@@ -225,9 +225,9 @@ if (!function_exists('render_event_tabs')) {
             echo event_tab_link_html($questionsHref, 'Evaluation Questions', $currentTab === 'questions');
         }
 
-        // Assist Student: same as app Assistants tab (published / finished events).
+        // Assist Student: published / expired only (not after the event is finished).
         $statusLower = $status;
-        $assistStatuses = ['published', 'finished', 'expired'];
+        $assistStatuses = ['published', 'expired'];
         if (in_array($statusLower, $assistStatuses, true) && ($role === 'teacher' || $role === 'admin')) {
             echo event_tab_link_html($assistantsHref, 'Assist Student', $currentTab === 'assistants');
         }

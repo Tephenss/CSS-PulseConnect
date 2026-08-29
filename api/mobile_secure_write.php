@@ -845,6 +845,13 @@ switch ($action) {
         $eventFor = trim((string) ($payload['event_for'] ?? ''));
         $payload['event_for'] = $eventFor !== '' ? $eventFor : 'All';
 
+        $description = clean_text((string) ($payload['description'] ?? ''));
+        $descriptionError = validate_event_description_words($description);
+        if ($descriptionError !== null) {
+            json_response(['ok' => false, 'error' => $descriptionError], 400);
+        }
+        $payload['description'] = $description !== '' ? $description : null;
+
         $isSeminarBased = (trim((string) ($payload['event_mode'] ?? '')) === 'seminar_based') || count($sessions) > 0;
         $payload['event_mode'] = $isSeminarBased ? 'seminar_based' : 'simple';
         $payload['event_structure'] = $isSeminarBased
@@ -891,7 +898,7 @@ switch ($action) {
             if (!$isFreeEvent) {
                 $eventFee = normalize_event_fee($payload['event_fee'] ?? null);
                 if ($eventFee === null || $eventFee <= 0) {
-                    json_response(['ok' => false, 'error' => 'Paid events require a settlement amount for students.'], 400);
+                    json_response(['ok' => false, 'error' => 'Settlement amount must be between 1 and ' . (int) EVENT_FEE_MAX . '.'], 400);
                 }
             }
             $registrationLimit = null;

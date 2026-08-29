@@ -110,6 +110,12 @@ users/passwords, OTP codes, trusted devices, attendance rows, ticket tokens, stu
 - Flutter must **never** `.select()` / `.insert()` `student_roster` with the anon key.
 - Student login prefers **student number + password**; email login remains for existing accounts when the identifier contains `@`.
 
+### Featured showcase (public marketing)
+
+- Admin manages slides via `admin_showcase.php` (admin session + CSRF). Writes go through PHP BFF only; table `app_showcase_slides` has no anon/authenticated grants.
+- `GET /api/showcase_slides.php` is intentionally **unauthenticated**: returns active slide labels and public `showcase-slides` image URLs only (no PII). Rate-limited.
+- Mobile/web cache metadata + images locally; bundled default assets remain the offline fallback.
+
 ### Student class schedules (registration-form PDF)
 
 - Create Account (Flutter) and Student Settings upload the LU Form No. 1 PDF to PHP (`api/mobile_register_user.php`, `api/mobile_schedule_parse.php`, `api/mobile_schedule_upload.php`).
@@ -134,7 +140,7 @@ Quarterly checklist:
 
 1. **Supabase** — confirm PITR / daily backups (or export SQL dump of critical tables: `users` without sharing hashes publicly, `student_roster`, `events`, registrations, attendance, certificates metadata).
 2. **Roster** — after each CSV import, keep the source CSV in a secure admin drive (not the web root).
-3. **Certificates / media** — back up Supabase Storage buckets (`event-covers`, `student-documents`, `proposal-documents`, `avatars`) and any Hostinger `uploads/media` that still hold local avatars.
+3. **Certificates / media** — back up Supabase Storage buckets (`event-covers`, `showcase-slides`, `student-documents`, `proposal-documents`, `avatars`) and any Hostinger `uploads/media` that still hold local avatars.
 4. **Restore drill** — on staging: empty DB → restore dump → roster lookup + one ticket/cert flow must succeed.
 
 `uploads/` is denied by `.htaccess`; never rely on public URLs for private docs.

@@ -45,11 +45,13 @@ if ($tmpName === '' || !is_uploaded_file($tmpName)) {
     json_response(['ok' => false, 'error' => 'Invalid audio upload.'], 400);
 }
 
+$browserMime = strtolower(trim((string) ($_FILES['audio']['type'] ?? '')));
 $finfo = finfo_open(FILEINFO_MIME_TYPE);
-$detectedMime = $finfo ? (string) finfo_file($finfo, $tmpName) : '';
+$detectedMime = $finfo ? strtolower(trim((string) finfo_file($finfo, $tmpName))) : '';
 if ($finfo) {
     finfo_close($finfo);
 }
+
 $allowedMime = [
     'audio/webm',
     'audio/wav',
@@ -57,10 +59,41 @@ $allowedMime = [
     'audio/mpeg',
     'audio/mp4',
     'audio/ogg',
-    'video/webm', // some browsers record webm audio as video/webm
+    'audio/x-m4a',
+    'video/webm', // browsers often label webm audio as video/webm
+    'application/octet-stream', // some hosts report webm this way
 ];
-if ($detectedMime === '' || !in_array($detectedMime, $allowedMime, true)) {
+$mime = $detectedMime !== '' ? $detectedMime : $browserMime;
+if ($mime === '' || !in_array($mime, $allowedMime, true)) {
     json_response(['ok' => false, 'error' => 'Unsupported audio format.'], 400);
+}
+
+// Groq prefers audio/*; normalize browser webm labels.
+$groqMime = $mime;
+if ($groqMime === 'video/webm' || $groqMime === 'application/octet-stream') {
+    $groqMime = 'audio/webm';
+}
+if ($groqMime === 'audio/x-wav') {
+    $groqMime = 'audio/wav';
+}
+if ($groqMime === 'audio/x-m4a') {
+    $groqMime = 'audio/mp4';
+}
+
+$extMap = [
+    'audio/webm' => 'webm',
+    'audio/wav' => 'wav',
+    'audio/mpeg' => 'mp3',
+    'audio/mp4' => 'm4a',
+    'audio/ogg' => 'ogg',
+];
+$ext = $extMap[$groqMime] ?? 'webm';
+$originalName = trim((string) ($_FILES['audio']['name'] ?? ''));
+if ($originalName !== '' && preg_match('/\.(webm|wav|mp3|m4a|ogg|mp4)$/i', $originalName, $m)) {
+    $ext = strtolower($m[1]);
+    if ($ext === 'mp4') {
+        $ext = 'm4a';
+    }
 }
 
 if (!defined('GROQ_API_KEY') || GROQ_API_KEY === '' || GROQ_API_KEY === 'YOUR_GROQ_API_KEY_HERE') {
@@ -68,13 +101,19 @@ if (!defined('GROQ_API_KEY') || GROQ_API_KEY === '' || GROQ_API_KEY === 'YOUR_GR
     json_response(['ok' => false, 'error' => 'Speech service is unavailable.'], 500);
 }
 
-$cfile = new CURLFile($tmpName, $detectedMime, 'audio.webm');
+$cfile = new CURLFile($tmpName, $groqMime, 'audio.' . $ext);
+
+// Taglish event-description prompt (same approach as latest 15, tightened for CCS).
+$prompt = 'Ito ay Tagalog at English mix (Taglish) na event description para sa College of Computer Studies PulseConnect. '
+    . 'Transcribe exactly what was spoken. Keep Filipino and English words as said. '
+    . 'Common terms: seminar, workshop, students, registration, attendance, certificate, venue, schedule.';
 
 $postData = [
     'file' => $cfile,
     'model' => 'whisper-large-v3',
     'response_format' => 'json',
-    'prompt' => 'Hello, ito ay Tagalog at English mix. Magandang araw po.',
+    'temperature' => '0',
+    'prompt' => $prompt,
 ];
 
 $ch = curl_init('https://api.groq.com/openai/v1/audio/transcriptions');

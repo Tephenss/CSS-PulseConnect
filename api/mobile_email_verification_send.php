@@ -10,6 +10,21 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 
+/**
+ * Normalize OTP purpose. Signup and login must stay separate.
+ */
+function mobile_email_otp_normalize_purpose(string $raw): string
+{
+    $p = strtolower(trim($raw));
+    if (in_array($p, ['signup', 'register', 'registration', 'create'], true)) {
+        return 'signup';
+    }
+    if (in_array($p, ['web_login', 'admin_login', 'teacher_login'], true)) {
+        return 'login';
+    }
+    return 'login';
+}
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
@@ -17,8 +32,12 @@ $sessionToken = mobile_session_extract_token($data);
 $userId = '';
 $email = strtolower(trim((string) ($data['email'] ?? '')));
 $fullName = trim((string) ($data['full_name'] ?? ''));
+$purpose = mobile_email_otp_normalize_purpose((string) ($data['purpose'] ?? 'login'));
 
-if ($sessionToken !== '') {
+// Signup OTP must not bind to a leftover login session from another account.
+if ($purpose === 'signup') {
+    $userId = trim((string) ($data['user_id'] ?? ''));
+} elseif ($sessionToken !== '') {
     $sessionUser = mobile_api_require_user($data);
     $userId = (string) ($sessionUser['id'] ?? '');
     $email = strtolower(trim((string) ($sessionUser['email'] ?? $email)));
@@ -39,7 +58,7 @@ if ($userId === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL
 }
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-if (!api_rate_limit_allow('mobile_email_verify:' . $userId . ':' . $clientIp, 6, 300)) {
+if (!api_rate_limit_allow('mobile_email_verify:' . $purpose . ':' . $userId . ':' . $clientIp, 6, 300)) {
     json_response(['ok' => false, 'error' => 'Too many verification emails. Please wait a few minutes.'], 429);
 }
 
@@ -73,43 +92,91 @@ if ($fullName === '') {
     );
 }
 
-// Server-side resend cooldown — client prefs alone are not enough (back → login
-// remounts the OTP screen and can clear/skip local markers).
 $resendCooldownSeconds = 60;
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+$headers = mobile_api_supabase_headers();
+
+$parseExisting = static function (array $existing) use ($now): array {
+    $lastSentRaw = trim((string) ($existing['last_sent_at'] ?? ''));
+    $expiresAtRaw = trim((string) ($existing['expires_at'] ?? ''));
+    $code = trim((string) ($existing['code'] ?? ''));
+    $lastSentAt = false;
+    if ($lastSentRaw !== '') {
+        $lastSentAt = DateTimeImmutable::createFromFormat(DateTimeInterface::ATOM, $lastSentRaw);
+        if ($lastSentAt === false) {
+            try {
+                $lastSentAt = new DateTimeImmutable($lastSentRaw);
+            } catch (Throwable $e) {
+                $lastSentAt = false;
+            }
+        }
+    }
+    $expiresAt = false;
+    if ($expiresAtRaw !== '') {
+        try {
+            $expiresAt = new DateTimeImmutable($expiresAtRaw);
+        } catch (Throwable $e) {
+            $expiresAt = false;
+        }
+    }
+    $validCode = $code !== ''
+        && $expiresAt instanceof DateTimeImmutable
+        && $now <= $expiresAt->setTimezone(new DateTimeZone('UTC'));
+    $elapsed = null;
+    if ($lastSentAt instanceof DateTimeImmutable) {
+        $elapsed = $now->getTimestamp() - $lastSentAt->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+    }
+    return [
+        'valid_code' => $validCode,
+        'elapsed' => $elapsed,
+        'expires_at' => $expiresAtRaw,
+    ];
+};
+
+// Prefer purpose-scoped row (signup vs login). Fall back to legacy single-row table.
+$existing = null;
+$purposeSupported = true;
 $existingUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
-    . '?select=last_sent_at,expires_at'
+    . '?select=code,last_sent_at,expires_at,purpose'
     . '&user_id=eq.' . rawurlencode($userId)
+    . '&purpose=eq.' . rawurlencode($purpose)
     . '&limit=1';
-$existingRes = supabase_request('GET', $existingUrl, mobile_api_supabase_headers());
-if ($existingRes['ok']) {
+$existingRes = supabase_request('GET', $existingUrl, $headers);
+if (!($existingRes['ok'] ?? false)) {
+    $purposeSupported = false;
+    $existingUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+        . '?select=code,last_sent_at,expires_at'
+        . '&user_id=eq.' . rawurlencode($userId)
+        . '&limit=1';
+    $existingRes = supabase_request('GET', $existingUrl, $headers);
+}
+if ($existingRes['ok'] ?? false) {
     $existingRows = json_decode((string) $existingRes['body'], true);
     $existing = is_array($existingRows) && isset($existingRows[0]) && is_array($existingRows[0])
         ? $existingRows[0]
         : null;
-    $lastSentRaw = is_array($existing) ? trim((string) ($existing['last_sent_at'] ?? '')) : '';
-    $lastSentAt = $lastSentRaw !== '' ? DateTimeImmutable::createFromFormat(DateTimeInterface::ATOM, $lastSentRaw) : false;
-    if ($lastSentAt === false && $lastSentRaw !== '') {
-        try {
-            $lastSentAt = new DateTimeImmutable($lastSentRaw);
-        } catch (Throwable $e) {
-            $lastSentAt = false;
-        }
-    }
-    if ($lastSentAt instanceof DateTimeImmutable) {
-        $lastSentAt = $lastSentAt->setTimezone(new DateTimeZone('UTC'));
-        $elapsed = $now->getTimestamp() - $lastSentAt->getTimestamp();
-        if ($elapsed >= 0 && $elapsed < $resendCooldownSeconds) {
-            $remaining = $resendCooldownSeconds - $elapsed;
-            $expiresAtRaw = trim((string) ($existing['expires_at'] ?? ''));
-            json_response([
-                'ok' => true,
-                'skipped' => true,
-                'cooldown_seconds' => $remaining,
-                'message' => 'Verification code already sent. Please check your email.',
-                'expires_at' => $expiresAtRaw !== '' ? $expiresAtRaw : $now->add(new DateInterval('PT5M'))->format(DATE_ATOM),
-            ], 200);
-        }
+}
+
+if (is_array($existing)) {
+    $meta = $parseExisting($existing);
+    $elapsed = $meta['elapsed'];
+    // Only skip when a still-valid code exists for THIS purpose.
+    // (Fixes: signup code consumed/deleted, but cooldown still blocks login send.)
+    if ($elapsed !== null
+        && $elapsed >= 0
+        && $elapsed < $resendCooldownSeconds
+        && !empty($meta['valid_code'])) {
+        $remaining = $resendCooldownSeconds - $elapsed;
+        json_response([
+            'ok' => true,
+            'skipped' => true,
+            'purpose' => $purpose,
+            'cooldown_seconds' => $remaining,
+            'message' => 'Verification code already sent. Please check your email.',
+            'expires_at' => ($meta['expires_at'] !== ''
+                ? $meta['expires_at']
+                : $now->add(new DateInterval('PT5M'))->format(DATE_ATOM)),
+        ], 200);
     }
 }
 
@@ -123,16 +190,32 @@ $payload = [
     'created_at' => $now->format(DATE_ATOM),
     'last_sent_at' => $now->format(DATE_ATOM),
 ];
+if ($purposeSupported) {
+    $payload['purpose'] = $purpose;
+}
 
-$saveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes';
-// Upsert on user_id PK so a second send replaces the previous code.
+$saveUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+    . ($purposeSupported ? '?on_conflict=user_id,purpose' : '');
+$writeHeaders = mobile_api_supabase_write_headers();
 $saveRes = supabase_request(
     'POST',
     $saveUrl,
-    mobile_api_supabase_write_headers(),
+    $writeHeaders,
     json_encode($payload, JSON_UNESCAPED_SLASHES)
 );
-if (!$saveRes['ok']) {
+
+// Legacy table without purpose column / old PK.
+if (!($saveRes['ok'] ?? false) && $purposeSupported) {
+    unset($payload['purpose']);
+    $saveRes = supabase_request(
+        'POST',
+        rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes',
+        $writeHeaders,
+        json_encode($payload, JSON_UNESCAPED_SLASHES)
+    );
+}
+
+if (!($saveRes['ok'] ?? false)) {
     json_response(['ok' => false, 'error' => 'Failed to prepare verification code.'], 500);
 }
 
@@ -150,6 +233,7 @@ if (!$sent) {
 json_response([
     'ok' => true,
     'message' => 'Verification code sent to your email.',
+    'purpose' => $purpose,
     'expires_at' => $expiresAt->format(DATE_ATOM),
     'cooldown_seconds' => $resendCooldownSeconds,
 ], 200);

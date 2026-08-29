@@ -25,6 +25,31 @@ function proposal_requirement_write_headers(): array
     ];
 }
 
+/** Default LU-AA proposal forms that must be PDF only. */
+function proposal_requirement_is_pdf_only(string $code): bool
+{
+    $code = strtoupper(trim($code));
+    return $code === 'LU-AA-FO-113' || $code === 'LU-AA-FO-108';
+}
+
+/**
+ * @return list<string>
+ */
+function proposal_document_allowed_mime_types(?string $requirementCode = null): array
+{
+    if ($requirementCode !== null && proposal_requirement_is_pdf_only($requirementCode)) {
+        return ['application/pdf'];
+    }
+    return [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+}
+
 function proposal_requirement_missing_column_error(array $response): bool
 {
     $body = strtolower((string) ($response['body'] ?? ''));

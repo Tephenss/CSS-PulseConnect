@@ -207,9 +207,17 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
   $location      = htmlspecialchars((string) ($e['location'] ?? 'Location TBA'));
   $evType        = htmlspecialchars((string) ($e['event_type'] ?? ''));
   $statusLabel   = htmlspecialchars($status);
+  $searchBlob = strtolower(trim(implode(' ', array_filter([
+      (string) ($e['title'] ?? ''),
+      (string) ($e['location'] ?? ''),
+      (string) ($e['event_type'] ?? ''),
+      $targetLabel,
+      $formattedDate,
+      $status,
+  ]))));
   ?>
   <!-- 21st.dev 3D Card Container -->
-  <div class="pc-3d-card-container py-4 flex items-center justify-center">
+  <div class="pc-3d-card-container event-card py-4 flex items-center justify-center" data-search="<?= htmlspecialchars($searchBlob) ?>">
     <a href="/event_view.php?id=<?= $eventId ?>" class="pc-3d-card-body block relative bg-white border border-black/10 w-full rounded-2xl p-5 no-underline cursor-pointer" data-3d-card>
       
       <!-- CardItem translateZ="50": Status & Title -->
@@ -486,18 +494,40 @@ render_header('Events', $user);
   <!-- PARALLAX CONTENT SECTION (Events List Revealed on Scroll) -->
   <section class="parallax__content">
     
-    <!-- White High-Visibility Tab Switcher Bar -->
-    <div class="mb-8 flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg w-fit">
-      <button type="button" id="tabPublished"
-        class="event-tab-btn rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-bold text-white shadow-md transition-all duration-300 flex items-center gap-2">
-        Published
-        <span id="badgePublished" class="ml-1.5 rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-extrabold text-white"><?= count($publishedEvents) ?></span>
-      </button>
-      <button type="button" id="tabFinished"
-        class="event-tab-btn rounded-xl px-5 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-100 transition-all duration-300 flex items-center gap-2">
-        Finished
-        <span id="badgeFinished" class="ml-1.5 rounded-full bg-zinc-200 px-2.5 py-0.5 text-[11px] font-bold text-zinc-700"><?= count($finishedEvents) ?></span>
-      </button>
+    <!-- White High-Visibility Tab Switcher Bar + Search -->
+    <div class="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg w-fit">
+        <button type="button" id="tabPublished"
+          class="event-tab-btn rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-bold text-white shadow-md transition-all duration-300 flex items-center gap-2">
+          Published
+          <span id="badgePublished" class="ml-1.5 rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-extrabold text-white"><?= count($publishedEvents) ?></span>
+        </button>
+        <button type="button" id="tabFinished"
+          class="event-tab-btn rounded-xl px-5 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-100 transition-all duration-300 flex items-center gap-2">
+          Finished
+          <span id="badgeFinished" class="ml-1.5 rounded-full bg-zinc-200 px-2.5 py-0.5 text-[11px] font-bold text-zinc-700"><?= count($finishedEvents) ?></span>
+        </button>
+      </div>
+
+      <div class="relative w-full sm:w-80 lg:w-96 group">
+        <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400 group-focus-within:text-orange-500 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+        </div>
+        <input
+          type="search"
+          id="eventSearch"
+          placeholder="Search events, location, course…"
+          autocomplete="off"
+          class="block w-full pl-10 pr-4 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition shadow-lg"
+        />
+      </div>
+    </div>
+
+    <div id="eventSearchEmpty" class="hidden mb-6 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-10 text-center">
+      <h3 class="text-lg font-medium text-zinc-800 mb-1">No matching events</h3>
+      <p class="text-sm text-zinc-500">Try another title, location, or course keyword.</p>
     </div>
 
     <!-- Published Panel -->
@@ -633,8 +663,49 @@ render_header('Events', $user);
     }
   }
 
-  publishedBtn?.addEventListener('click', () => setEventTab('published'));
-  finishedBtn?.addEventListener('click',  () => setEventTab('finished'));
+  publishedBtn?.addEventListener('click', () => {
+    setEventTab('published');
+    applyEventSearch();
+  });
+  finishedBtn?.addEventListener('click',  () => {
+    setEventTab('finished');
+    applyEventSearch();
+  });
+
+  const eventSearch = document.getElementById('eventSearch');
+  const eventSearchEmpty = document.getElementById('eventSearchEmpty');
+  const publishedBadgeBase = <?= (int) count($publishedEvents) ?>;
+  const finishedBadgeBase = <?= (int) count($finishedEvents) ?>;
+
+  function applyEventSearch() {
+    const term = (eventSearch?.value || '').toLowerCase().trim();
+    const showPublished = !publishedPanel?.classList.contains('hidden');
+    const activePanel = showPublished ? publishedPanel : finishedPanel;
+    if (!activePanel) return;
+
+    const cards = activePanel.querySelectorAll('.event-card');
+    let visible = 0;
+    cards.forEach((card) => {
+      const hay = card.getAttribute('data-search') || '';
+      const match = term === '' || hay.includes(term);
+      card.classList.toggle('hidden', !match);
+      if (match) visible += 1;
+    });
+
+    if (eventSearchEmpty) {
+      const hasCards = cards.length > 0;
+      eventSearchEmpty.classList.toggle('hidden', !(hasCards && visible === 0 && term !== ''));
+    }
+
+    if (badgePublished && showPublished) {
+      badgePublished.textContent = String(term === '' ? publishedBadgeBase : visible);
+    }
+    if (badgeFinished && !showPublished) {
+      badgeFinished.textContent = String(term === '' ? finishedBadgeBase : visible);
+    }
+  }
+
+  eventSearch?.addEventListener('input', applyEventSearch);
 
   /* ── 3-D Card Effect (Smooth lerp + rAF animation) ── */
   (function () {

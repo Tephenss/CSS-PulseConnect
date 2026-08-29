@@ -167,21 +167,130 @@ function certificate_pptx_parse_xfrm(string $xml): array
     $y = 0;
     $w = 0;
     $h = 0;
-    if (preg_match('/<a:off\b[^>]*\bx="(-?\d+)"[^>]*\by="(-?\d+)"/i', $xml, $m)) {
+    // Prefer the shape's own spPr xfrm — never the first random <a:off> in the block.
+    $chunk = $xml;
+    if (preg_match('/<p:spPr\b[^>]*>[\s\S]*?<a:xfrm\b[\s\S]*?<\/a:xfrm>/i', $xml, $sm)) {
+        $chunk = $sm[0];
+    } elseif (preg_match('/<p:xfrm\b[\s\S]*?<\/p:xfrm>/i', $xml, $sm)) {
+        $chunk = $sm[0];
+    } elseif (preg_match('/<a:xfrm\b[\s\S]*?<\/a:xfrm>/i', $xml, $sm)) {
+        $chunk = $sm[0];
+    }
+    if (preg_match('/<a:off\b[^>]*\bx="(-?\d+)"[^>]*\by="(-?\d+)"/i', $chunk, $m)) {
         $x = (int) $m[1];
         $y = (int) $m[2];
-    } elseif (preg_match('/<a:off\b[^>]*\by="(-?\d+)"[^>]*\bx="(-?\d+)"/i', $xml, $m)) {
+    } elseif (preg_match('/<a:off\b[^>]*\by="(-?\d+)"[^>]*\bx="(-?\d+)"/i', $chunk, $m)) {
         $y = (int) $m[1];
         $x = (int) $m[2];
     }
-    if (preg_match('/<a:ext\b[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"/i', $xml, $m)) {
+    if (preg_match('/<a:ext\b[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"/i', $chunk, $m)) {
         $w = (int) $m[1];
         $h = (int) $m[2];
-    } elseif (preg_match('/<a:ext\b[^>]*\bcy="(\d+)"[^>]*\bcx="(\d+)"/i', $xml, $m)) {
+    } elseif (preg_match('/<a:ext\b[^>]*\bcy="(\d+)"[^>]*\bcx="(\d+)"/i', $chunk, $m)) {
         $h = (int) $m[1];
         $w = (int) $m[2];
     }
     return ['x' => $x, 'y' => $y, 'w' => $w, 'h' => $h];
+}
+
+/**
+ * Keep certificate-code geometry faithful to PowerPoint.
+ *
+ * Registrar PPT frames are often wider than the slide (glyphs still start at
+ * the shape's left). Fabric clips to the canvas — so we only clamp/expand width
+ * while preserving the PPT anchor edge from textAlign. Never invent "right"
+ * alignment for corner codes (that pulled "LU-AA-…" into the margin).
+ *
+ * @return array{left:float,top:float,width:float,height:float,textAlign:string}
+ */
+function certificate_pptx_fit_code_box(
+    float $left,
+    float $top,
+    float $width,
+    float $height,
+    string $text,
+    ?float $fontSize,
+    ?string $textAlign,
+    float $canvasW
+): array {
+    $text = trim($text);
+    $align = strtolower(trim((string) ($textAlign ?? '')));
+    if (!in_array($align, ['left', 'center', 'right', 'justify'], true)) {
+        $align = 'left';
+    }
+    if ($align === 'justify') {
+        $align = 'left';
+    }
+    $font = ($fontSize !== null && $fontSize >= 6.0)
+        ? $fontSize
+        : max(10.0, min(28.0, max(14.0, $height * 0.55)));
+    // Tiny pad only — do not invent a large "safe margin" that shifts corner codes.
+    $edgePad = max(2.0, min(8.0, $canvasW * 0.004));
+    $maxRight = max($edgePad + 40.0, $canvasW - $edgePad);
+    $minLeft = $edgePad;
+
+    $isPlaceholder = ($text === ''
+        || stripos($text, 'CERTIFICATE-CODE') !== false
+        || preg_match('/^\{\{\s*certificate_code\s*\}\}$/i', $text) === 1);
+    $chars = max(1, mb_strlen($isPlaceholder ? 'SAMPLE-CODE-01' : $text, 'UTF-8'));
+    $needed = max(40.0, ($chars * $font * 0.62) + ($font * 0.4));
+
+    $width = max(1.0, $width);
+    $right = $left + $width;
+    $center = $left + ($width / 2.0);
+
+    if ($align === 'right') {
+        // Preserve PPT right edge (clamped on-slide), grow left if text needs room.
+        $anchorRight = min($maxRight, max($right, $minLeft + 40.0));
+        if ($right > $canvasW + 1.0) {
+            $anchorRight = $maxRight;
+        }
+        $width = max($width, $needed);
+        $left = $anchorRight - $width;
+        if ($left < $minLeft) {
+            $left = $minLeft;
+            $width = max(40.0, $anchorRight - $left);
+        }
+    } elseif ($align === 'center') {
+        $width = max($width, $needed);
+        $left = $center - ($width / 2.0);
+        if ($left < $minLeft) {
+            $left = $minLeft;
+        }
+        if (($left + $width) > $maxRight) {
+            $width = max(40.0, $maxRight - $left);
+            $left = max($minLeft, $center - ($width / 2.0));
+            if (($left + $width) > $maxRight) {
+                $left = max($minLeft, $maxRight - $width);
+            }
+        }
+    } else {
+        // left (PPT default when algn omitted): KEEP the shape's left — that is
+        // where PowerPoint starts painting the code. Only trim/grow to the right.
+        if ($left < -$edgePad) {
+            $left = $minLeft;
+        }
+        $avail = max(40.0, $maxRight - $left);
+        // Prefer PPT width when it already fits on-slide; else clamp to slide.
+        if (($left + $width) > $maxRight + 1.0) {
+            $width = $avail;
+        }
+        // If the visible span is still narrower than the glyph run, grow right
+        // (not left) — never drag the string into the corner.
+        if ($needed > $width && $needed <= $avail) {
+            $width = $needed;
+        } elseif ($needed > $avail) {
+            $width = $avail;
+        }
+    }
+
+    return [
+        'left' => round($left, 2),
+        'top' => round($top, 2),
+        'width' => round(max(1.0, $width), 2),
+        'height' => round(max($height, $font * 1.25), 2),
+        'textAlign' => $align,
+    ];
 }
 
 /**
@@ -558,6 +667,26 @@ function certificate_extract_layout_from_pptx(string $binary): array
                     'height' => round($box['h'] / $emuPerPx, 2),
                 ];
 
+            $itemAlign = $style['textAlign'];
+            if ($kind === 'certificate_code') {
+                $slidePxW = round($slideW / $emuPerPx, 2);
+                $fit = certificate_pptx_fit_code_box(
+                    (float) $vis['left'],
+                    (float) $vis['top'],
+                    (float) $vis['width'],
+                    (float) $vis['height'],
+                    $text,
+                    isset($style['fontSize']) && is_numeric($style['fontSize']) ? (float) $style['fontSize'] : null,
+                    is_string($itemAlign) ? $itemAlign : null,
+                    $slidePxW
+                );
+                $vis['left'] = $fit['left'];
+                $vis['top'] = $fit['top'];
+                $vis['width'] = $fit['width'];
+                $vis['height'] = $fit['height'];
+                $itemAlign = $fit['textAlign'];
+            }
+
             $items[] = [
                 'id' => $id,
                 'kind' => $kind,
@@ -568,7 +697,7 @@ function certificate_extract_layout_from_pptx(string $binary): array
                 'text' => $text,
                 'name' => $name,
                 'fontSize' => $style['fontSize'],
-                'textAlign' => $style['textAlign'],
+                'textAlign' => $itemAlign,
                 'fontWeight' => $style['fontWeight'],
                 'fontFamily' => $style['fontFamily'],
             ];
