@@ -230,6 +230,42 @@ function storage_resolve_avatar_url(string $photoUrlOrPath, int $expiresInSecond
 }
 
 /**
+ * Resolve a student's avatar for staff UIs (roster, masterlist, scanner).
+ * Uses photo_url when present; otherwise looks up the uploaded file by user id.
+ */
+function storage_resolve_user_avatar_url(
+    string $userId,
+    string $photoUrlOrPath = '',
+    int $expiresInSeconds = 14400
+): string {
+    $direct = storage_resolve_avatar_url($photoUrlOrPath, $expiresInSeconds);
+    if ($direct !== '') {
+        return $direct;
+    }
+
+    $userId = strtolower(trim($userId));
+    if ($userId === '' || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $userId)) {
+        return '';
+    }
+
+    if (!function_exists('media_avatar_signed_url')) {
+        require_once __DIR__ . '/media_assets.php';
+    }
+    foreach (['jpg', 'jpeg', 'png', 'webp'] as $ext) {
+        $local = media_avatar_signed_url('media/avatars/profiles/' . $userId . '.' . $ext, $expiresInSeconds);
+        if ($local !== '') {
+            return $local;
+        }
+    }
+
+    $found = storage_find_user_avatar_path($userId);
+    if ($found === '') {
+        return '';
+    }
+    return storage_resolve_avatar_url($found, $expiresInSeconds);
+}
+
+/**
  * Find the logged-in user's avatar object in the private avatars bucket.
  * Upload convention: profiles/{userId}.{jpg|jpeg|png|webp}
  */

@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
+require_once __DIR__ . '/../includes/storage_signed.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -158,7 +159,11 @@ foreach ($rows as $row) {
         'name' => mobile_block_display_name($row),
         'student_id' => trim((string) ($row['student_id'] ?? '')),
         'email' => trim((string) ($row['email'] ?? '')),
-        'photo_url' => trim((string) ($row['photo_url'] ?? '')),
+        'photo_url' => storage_resolve_user_avatar_url(
+            (string) ($row['id'] ?? ''),
+            trim((string) ($row['photo_url'] ?? '')),
+            14400
+        ),
     ];
 }
 

@@ -202,10 +202,28 @@ function attendance_check_in_window_for_start(?DateTimeImmutable $startAt, int $
 function attendance_check_out_window(
     ?DateTimeImmutable $endAt,
     ?string $earlyOutEnabledAtRaw,
-    DateTimeImmutable $nowUtc
+    DateTimeImmutable $nowUtc,
+    ?DateTimeImmutable $startAt = null,
+    int $graceMinutes = 30
 ): array {
+    $graceMinutes = max(1, $graceMinutes);
+    $graceCloses = $startAt instanceof DateTimeImmutable
+        ? $startAt->modify('+' . $graceMinutes . ' minutes')
+        : null;
+
     $earlyOutRaw = trim((string) $earlyOutEnabledAtRaw);
     if ($earlyOutRaw !== '') {
+        if ($graceCloses instanceof DateTimeImmutable && $nowUtc < $graceCloses) {
+            return [
+                'open' => false,
+                'opens_at' => $graceCloses->format('c'),
+                'closes_at' => null,
+                'status' => 'too_early_checkout',
+                'message' => 'Too early to time out. Time-in grace is still open until '
+                    . attendance_format_manila_time($graceCloses) . '.',
+                'mode' => 'early_out',
+            ];
+        }
         $enabledAt = parse_iso_datetime($earlyOutRaw);
         $closes = attendance_early_out_expires_at($enabledAt);
         if ($enabledAt instanceof DateTimeImmutable
@@ -249,23 +267,34 @@ function attendance_check_out_window(
         ];
     }
 
-    $closes = $endAt->modify('+' . ATTENDANCE_CHECK_OUT_WINDOW_HOURS . ' hours');
-    if ($nowUtc < $endAt) {
+    // Never open time-out while time-in grace is still running, even if
+    // end_at equals start_at or the seminar is shorter than grace.
+    $opensAt = $endAt;
+    if ($graceCloses instanceof DateTimeImmutable && $opensAt < $graceCloses) {
+        $opensAt = $graceCloses;
+    }
+    $closes = $opensAt->modify('+' . ATTENDANCE_CHECK_OUT_WINDOW_HOURS . ' hours');
+    if ($nowUtc < $opensAt) {
+        $openLabel = attendance_format_manila_time($opensAt);
+        $endLabel = attendance_format_manila_time($endAt);
+        $message = $graceCloses instanceof DateTimeImmutable && $opensAt == $graceCloses
+            ? ('Too early to time out. Time-in grace is still open until ' . $openLabel . '.')
+            : ('Too early to time out. Early Out is not enabled — time-out opens at the scheduled end ('
+                . ($endLabel !== '' ? $endLabel : $openLabel)
+                . ').');
         return [
             'open' => false,
-            'opens_at' => $endAt->format('c'),
+            'opens_at' => $opensAt->format('c'),
             'closes_at' => $closes->format('c'),
             'status' => 'too_early_checkout',
-            'message' => 'Too early to time out. Early Out is not enabled — time-out opens at the scheduled end ('
-                . attendance_format_manila_time($endAt)
-                . ').',
+            'message' => $message,
             'mode' => 'normal',
         ];
     }
     if ($nowUtc <= $closes) {
         return [
             'open' => true,
-            'opens_at' => $endAt->format('c'),
+            'opens_at' => $opensAt->format('c'),
             'closes_at' => $closes->format('c'),
             'status' => 'open',
             'message' => 'Time-out is open until ' . attendance_format_manila_time($closes) . '.',
@@ -275,7 +304,7 @@ function attendance_check_out_window(
 
     return [
         'open' => false,
-        'opens_at' => $endAt->format('c'),
+        'opens_at' => $opensAt->format('c'),
         'closes_at' => $closes->format('c'),
         'status' => 'closed',
         'message' => 'Time-out window ended at ' . attendance_format_manila_time($closes) . '.',

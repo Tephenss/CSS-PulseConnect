@@ -14,6 +14,7 @@ require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/event_attendance_windows.php';
+require_once __DIR__ . '/../includes/storage_signed.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -59,6 +60,17 @@ if (is_array($userRow)) {
         $participantName = $suffix;
     }
     $participantPhoto = trim((string) ($userRow['photo_url'] ?? ''));
+    if (function_exists('storage_resolve_user_avatar_url')) {
+        $signed = storage_resolve_user_avatar_url($userId, $participantPhoto, 14400);
+        if ($signed !== '') {
+            $participantPhoto = $signed;
+        }
+    } elseif ($participantPhoto !== '' && function_exists('storage_resolve_avatar_url')) {
+        $signed = storage_resolve_avatar_url($participantPhoto, 14400);
+        if ($signed !== '') {
+            $participantPhoto = $signed;
+        }
+    }
     $participantStudentNo = trim((string) ($userRow['student_id'] ?? ''));
 }
 

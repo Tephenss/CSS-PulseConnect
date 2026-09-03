@@ -74,19 +74,20 @@ render_header('Ticket', $user);
   <div class="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 flex items-center justify-center">
     <div class="text-center">
       <div class="text-sm uppercase tracking-widest text-zinc-400">QR</div>
-      <div id="qrcode" class="mt-4 bg-white p-4 rounded-xl"></div>
+      <div id="qrcode" class="pulse-qr-mount mt-4"></div>
       <p class="text-xs text-zinc-500 mt-3">Show this QR to the scanner.</p>
     </div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="/assets/js/pulse-qr.js?v=<?= (int) @filemtime(__DIR__ . '/assets/js/pulse-qr.js') ?>"></script>
 <script>
-  new QRCode(document.getElementById("qrcode"), {
+  PulseQR.mount({
+    el: document.getElementById('qrcode'),
     text: <?= json_encode((string) $token) ?>,
-    width: 240,
-    height: 240,
-    correctLevel: QRCode.CorrectLevel.M
+    size: 240,
+    logoUrl: '/assets/CCS.png',
   });
 </script>
 

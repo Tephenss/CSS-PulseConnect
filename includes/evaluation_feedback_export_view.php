@@ -10,6 +10,7 @@ declare(strict_types=1);
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <?php require_once __DIR__ . '/favicon.php'; render_favicon_tags(); ?>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title><?= htmlspecialchars($eventTitle) ?> — Event Feedback Report</title>
   <link rel="stylesheet" href="/assets/css/tailwind.css" />
@@ -182,27 +183,112 @@ declare(strict_types=1);
           preg_replace('/[^\p{L}\p{N}\s\-_]+/u', '', $eventTitle) ?: 'event-feedback',
           JSON_UNESCAPED_UNICODE
       ) ?> + '-feedback.pdf';
+      const autoPrint = <?= $autoPrint ? 'true' : 'false' ?>;
+      const inIframe = window.parent && window.parent !== window;
+      let started = false;
+      let attempt = 0;
 
       function pdfReady() {
         return typeof html2pdf !== 'undefined';
       }
 
-      function notifyParent(type) {
-        if (window.parent && window.parent !== window) {
-          window.parent.postMessage({ type: type }, window.location.origin);
+      function notifyParent(type, message, extra) {
+        if (!inIframe) return;
+        const payload = { type: type, message: message || '' };
+        if (extra && typeof extra === 'object') {
+          Object.assign(payload, extra);
         }
+        window.parent.postMessage(payload, window.location.origin);
+      }
+
+      function waitFrames(count) {
+        return new Promise(function (resolve) {
+          let remaining = count;
+          function step() {
+            remaining -= 1;
+            if (remaining <= 0) {
+              resolve();
+              return;
+            }
+            requestAnimationFrame(step);
+          }
+          requestAnimationFrame(step);
+        });
+      }
+
+      async function waitForRenderReady() {
+        if (document.fonts && document.fonts.ready) {
+          try {
+            await document.fonts.ready;
+          } catch (_) {}
+        }
+        await waitFrames(2);
+        const images = Array.from(document.querySelectorAll('.export-page img'));
+        await Promise.all(images.map(function (img) {
+          if (img.complete) {
+            return Promise.resolve();
+          }
+          return new Promise(function (resolve) {
+            img.addEventListener('load', resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+          });
+        }));
+        await new Promise(function (resolve) {
+          window.setTimeout(resolve, 350);
+        });
+      }
+
+      async function buildPdfBlob(element) {
+        return html2pdf().set({
+          margin: [8, 8, 8, 8],
+          filename: pdfFilename,
+          image: { type: 'jpeg', quality: 0.92 },
+          html2canvas: {
+            scale: 1.5,
+            useCORS: true,
+            allowTaint: true,
+            letterRendering: true,
+            logging: false,
+            backgroundColor: '#ffffff',
+          },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak: {
+            mode: ['css', 'legacy'],
+            avoid: ['.feedback-indicator-card', '.export-cover'],
+          },
+        }).from(element).outputPdf('blob');
+      }
+
+      function triggerLocalDownload(blob) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = pdfFilename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
       }
 
       async function downloadCleanPdf() {
+        if (started) return;
+        started = true;
+        attempt += 1;
+
         const btn = document.getElementById('btn-download-pdf');
         const element = document.querySelector('.export-page');
-        if (!element) return;
+        if (!element) {
+          notifyParent('feedback-pdf-error', 'Export content missing.');
+          started = false;
+          return;
+        }
 
         if (!pdfReady()) {
-          notifyParent('feedback-pdf-error');
-          if (!<?= $autoPrint ? 'true' : 'false' ?>) {
+          notifyParent('feedback-pdf-error', 'PDF generator failed to load.');
+          if (!autoPrint) {
             alert('PDF generator failed to load. Please refresh and try again.');
           }
+          started = false;
           return;
         }
 
@@ -213,27 +299,29 @@ declare(strict_types=1);
         }
 
         try {
-          await html2pdf().set({
-            margin: [8, 8, 8, 8],
-            filename: pdfFilename,
-            image: { type: 'jpeg', quality: 0.95 },
-            html2canvas: {
-              scale: 2,
-              useCORS: true,
-              letterRendering: true,
-              logging: false,
-            },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak: {
-              mode: ['css', 'legacy'],
-              avoid: ['.feedback-indicator-card', '.export-cover', '.rounded-2xl'],
-            },
-          }).from(element).save();
-          notifyParent('feedback-pdf-done');
+          await waitForRenderReady();
+          notifyParent('feedback-pdf-started');
+
+          const blob = await buildPdfBlob(element);
+          if (!(blob instanceof Blob)) {
+            throw new Error('PDF blob missing');
+          }
+
+          if (inIframe) {
+            notifyParent('feedback-pdf-blob', '', { blob: blob, filename: pdfFilename });
+          } else {
+            triggerLocalDownload(blob);
+            notifyParent('feedback-pdf-done');
+          }
         } catch (err) {
           console.error(err);
-          notifyParent('feedback-pdf-error');
-          if (!<?= $autoPrint ? 'true' : 'false' ?>) {
+          if (attempt < 2) {
+            started = false;
+            await new Promise(function (resolve) { window.setTimeout(resolve, 600); });
+            return downloadCleanPdf();
+          }
+          notifyParent('feedback-pdf-error', 'Could not generate PDF.');
+          if (!autoPrint) {
             alert('Could not generate PDF. Please try again.');
           }
         } finally {
@@ -244,18 +332,27 @@ declare(strict_types=1);
         }
       }
 
-      function startWhenReady() {
+      function startWhenReady(tries) {
+        const count = typeof tries === 'number' ? tries : 0;
         if (!pdfReady()) {
-          window.setTimeout(startWhenReady, 100);
+          if (count >= 120) {
+            notifyParent('feedback-pdf-error', 'PDF generator timed out loading.');
+            return;
+          }
+          window.setTimeout(function () { startWhenReady(count + 1); }, 100);
           return;
         }
-        <?php if ($autoPrint): ?>
-        downloadCleanPdf();
-        <?php endif; ?>
+        if (autoPrint) {
+          downloadCleanPdf();
+        }
       }
 
-      document.getElementById('btn-download-pdf')?.addEventListener('click', downloadCleanPdf);
-      window.addEventListener('load', startWhenReady);
+      document.getElementById('btn-download-pdf')?.addEventListener('click', function () {
+        started = false;
+        attempt = 0;
+        downloadCleanPdf();
+      });
+      window.addEventListener('load', function () { startWhenReady(0); });
     })();
   </script>
 </body>

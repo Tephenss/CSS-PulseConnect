@@ -25,9 +25,10 @@ function render_header(string $title, ?array $user): void
     else { $roleBadge = 'Student'; $roleColor = 'from-emerald-500 to-teal-500'; }
 
     echo '<!doctype html><html lang="en"><head>';
-    echo '<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>';
-    echo '<title>' . htmlspecialchars($title) . ' — PulseCONNECT</title>';
+    echo '<meta charset="utf-8"/>';
     render_favicon_tags();
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1"/>';
+    echo '<title>' . htmlspecialchars($title) . ' — PulseCONNECT</title>';
     // Stable asset versions (filemtime) so browsers can cache CSS across navigations.
     // Avoid ?v=time() — that forced a full CSS redownload on every click.
     $assetVersion = static function (string $relativePath): string {
@@ -43,6 +44,7 @@ function render_header(string $title, ?array $user): void
     echo '<link rel="stylesheet" href="/assets/css/layout.css?v=' . $assetVersion('/assets/css/layout.css') . '">';
     $roleClass = $role === 'teacher' ? 'role-teacher' : ($role === 'admin' ? 'role-admin' : 'role-student');
     echo '<link rel="stylesheet" href="/assets/css/auth.css?v=' . $assetVersion('/assets/css/auth.css') . '">';
+    echo '<script src="/assets/js/password-strength.js?v=' . $assetVersion('/assets/js/password-strength.js') . '"></script>';
     echo '<style>
       @keyframes skeleton-pulse {
         0%, 100% { opacity: 1; }
@@ -93,7 +95,9 @@ function render_header(string $title, ?array $user): void
     echo '<span class="sidebar-label">Dashboard</span></a>';
 
     // Events browse (published / finished) — available to teacher & admin
-    $isActive = str_contains($title, 'Events') && !str_contains($title, 'Manage');
+    $isActive = str_contains($title, 'Events')
+        && !str_contains($title, 'Manage')
+        && !str_contains($title, 'Archive');
     echo '<a href="/events" data-tooltip="Events" class="sidebar-link ' . ($isActive ? 'active' : '') . '">';
     echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>';
     echo '<span class="sidebar-label">Events</span></a>';
@@ -1253,6 +1257,17 @@ function render_footer(): void
         var pwCooldown = 0;
         var pwCooldownTimer = null;
         var pwEmailMasked = String(window.PULSE_USER_EMAIL_MASKED || "");
+        var pwMeterBound = false;
+
+        function pwEnsureMeter() {
+            if (pwMeterBound) return;
+            if (!window.PulsePassword || typeof PulsePassword.bindMeter !== "function") return;
+            var input = document.getElementById("p-new");
+            var meter = document.getElementById("p-new-meter");
+            if (!input || !meter) return;
+            PulsePassword.bindMeter(input, meter);
+            pwMeterBound = true;
+        }
 
         function pwSetLoading(isLoading) {
             var btn = document.getElementById("pref-btn");
@@ -1307,6 +1322,7 @@ function render_footer(): void
             if (btnLbl) {
                 btnLbl.textContent = pwStep === 0 ? "Send Code" : (pwStep === 1 ? "Verify Code" : "Update Password");
             }
+            if (pwStep === 2) pwEnsureMeter();
             pwUpdateDesc();
         }
 
@@ -1349,6 +1365,8 @@ function render_footer(): void
             }
             var form = document.getElementById("pform");
             if (form) form.reset();
+            var pnew = document.getElementById("p-new");
+            if (pnew) pnew.dispatchEvent(new Event("input"));
             pwShowMsg("", "");
             pwRenderSteps();
             var resendBtn = document.getElementById("pref-resend");
@@ -1473,8 +1491,8 @@ function render_footer(): void
                 pwShowMsg("err", "New passwords do not match.");
                 return;
             }
-            if (np.length < 8) {
-                pwShowMsg("err", "Password must be at least 8 characters.");
+            if (!window.PulsePassword || !PulsePassword.isStrong(np)) {
+                pwShowMsg("err", (window.PulsePassword && PulsePassword.error) || "Use 8+ chars with upper, lower, number, and symbol.");
                 return;
             }
             if (!pwChangeToken) {
@@ -1538,7 +1556,22 @@ function render_footer(): void
             <div id="pref-step-pass" class="hidden space-y-4">
             <div>
                 <label class="block text-xs font-semibold text-zinc-700 mb-1">New Password</label>
-                    <input type="password" id="p-new" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+                    <input type="password" id="p-new" autocomplete="new-password" class="w-full rounded-xl bg-zinc-50 border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-600/30">
+                    <div id="p-new-meter" class="pw-meter mt-2 space-y-1.5">
+                      <div class="flex items-center justify-between gap-2">
+                        <div data-pw-bar class="h-1.5 flex-1 rounded-full bg-zinc-200 overflow-hidden">
+                          <div data-pw-fill class="h-full w-0 rounded-full transition-all"></div>
+                        </div>
+                        <span data-pw-label class="text-[10px] font-black uppercase tracking-wider min-w-[3.5rem] text-right"></span>
+                      </div>
+                      <ul class="grid grid-cols-1 gap-0.5 text-[10px] text-zinc-500">
+                        <li data-pw-rule="len">8+ characters</li>
+                        <li data-pw-rule="upper">Uppercase letter</li>
+                        <li data-pw-rule="lower">Lowercase letter</li>
+                        <li data-pw-rule="digit">Number</li>
+                        <li data-pw-rule="special">Symbol</li>
+                      </ul>
+                    </div>
             </div>
             <div>
                 <label class="block text-xs font-semibold text-zinc-700 mb-1">Confirm New Password</label>

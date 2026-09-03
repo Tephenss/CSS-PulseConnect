@@ -5,8 +5,8 @@ declare(strict_types=1);
  * Push + inbox notification when a student completes time-out and can answer
  * the event evaluation form.
  *
- * Multi-seminar (2+ sessions): only after the FINAL seminar time-out
- * (latest session end_at — aligns with the event end date).
+ * Multi-seminar (2+ sessions): only after the LAST seminar time-out
+ * (Seminar 2 in program order). Seminar 1 time-out does not open the form.
  * Simple / 1-seminar: after that single time-out (unchanged).
  */
 
@@ -86,7 +86,39 @@ function evaluation_event_has_open_questions(
 }
 
 /**
- * Resolve the final seminar for an event (latest end_at).
+ * True when the event is configured as two seminars (even if session fetch is short).
+ */
+function evaluation_event_expects_two_seminars(string $eventId): bool
+{
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return false;
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=event_structure,event_mode,session_count'
+        . '&id=eq.' . rawurlencode($eventId)
+        . '&limit=1';
+    $res = supabase_request('GET', $url, evaluation_notify_headers());
+    if (!($res['ok'] ?? false)) {
+        return false;
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    $event = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+    if (!is_array($event)) {
+        return false;
+    }
+
+    $structure = strtolower(trim((string) ($event['event_structure'] ?? '')));
+    if ($structure === 'two_seminars') {
+        return true;
+    }
+    $count = (int) ($event['session_count'] ?? 0);
+    return $count >= 2;
+}
+
+/**
+ * Resolve the last seminar in program order (Seminar 2), not "latest end_at".
  *
  * @return array{id:string,end_at:?DateTimeImmutable}|null
  */
@@ -102,46 +134,33 @@ function evaluation_final_seminar_for_event(string $eventId): ?array
     }
 
     $sessions = fetch_event_sessions($eventId, evaluation_notify_headers());
-    if (!is_array($sessions) || count($sessions) <= 1) {
+    $valid = [];
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            if (trim((string) ($session['id'] ?? '')) === '') {
+                continue;
+            }
+            $valid[] = $session;
+        }
+    }
+    if (count($valid) <= 1) {
         return null; // simple / single seminar — no multi-seminar gate
     }
 
-    $finalId = '';
-    $finalEnd = null;
-    foreach ($sessions as $session) {
-        if (!is_array($session)) {
-            continue;
-        }
-        $sid = trim((string) ($session['id'] ?? ''));
-        if ($sid === '') {
-            continue;
-        }
-        $end = null;
-        if (function_exists('parse_iso_datetime')) {
-            $end = parse_iso_datetime((string) ($session['end_at'] ?? ''))
-                ?? parse_iso_datetime((string) ($session['start_at'] ?? ''));
-        } else {
-            $raw = trim((string) ($session['end_at'] ?? $session['start_at'] ?? ''));
-            if ($raw !== '') {
-                try {
-                    $end = new DateTimeImmutable($raw);
-                } catch (Throwable $e) {
-                    $end = null;
-                }
-            }
-        }
-        if ($end === null) {
-            continue;
-        }
-        if ($finalEnd === null || $end > $finalEnd) {
-            $finalEnd = $end;
-            $finalId = $sid;
-        }
+    $last = function_exists('event_sessions_last') ? event_sessions_last($valid) : null;
+    if (!is_array($last)) {
+        return null;
     }
-
+    $finalId = trim((string) ($last['id'] ?? ''));
     if ($finalId === '') {
         return null;
     }
+
+    $finalEnd = event_session_parse_program_time($last['end_at'] ?? null)
+        ?? event_session_parse_program_time($last['start_at'] ?? null);
 
     return ['id' => $finalId, 'end_at' => $finalEnd];
 }
@@ -149,25 +168,42 @@ function evaluation_final_seminar_for_event(string $eventId): ?array
 /**
  * True when this time-out should open evaluation.
  * - Simple / 1 seminar: always true
- * - 2+ seminars: only when the timed-out session is the final seminar
+ * - 2+ seminars: only the last seminar time-out (Seminar 2), never Seminar 1
  */
 function evaluation_timeout_is_final_for_eval(
     string $eventId,
     ?string $sessionId
 ): bool {
-    $final = evaluation_final_seminar_for_event($eventId);
-    if ($final === null) {
-        return true;
+    if (!function_exists('fetch_event_sessions')) {
+        require_once __DIR__ . '/event_sessions.php';
     }
 
+    $sessions = fetch_event_sessions($eventId, evaluation_notify_headers());
+    $valid = [];
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            if (trim((string) ($session['id'] ?? '')) === '') {
+                continue;
+            }
+            $valid[] = $session;
+        }
+    }
+
+    if (count($valid) <= 1) {
+        // Two-seminar event with a short/failed session list: do not open on Seminar 1.
+        return !evaluation_event_expects_two_seminars($eventId);
+    }
+
+    $last = function_exists('event_sessions_last') ? event_sessions_last($valid) : null;
     $sessionId = trim((string) $sessionId);
-    if ($sessionId === '') {
-        // Event-level checkout on a multi-seminar event should not open eval
-        // early — wait for the final seminar session out.
+    if (!is_array($last) || $sessionId === '') {
         return false;
     }
 
-    return $sessionId === (string) ($final['id'] ?? '');
+    return $sessionId === trim((string) ($last['id'] ?? ''));
 }
 
 /**

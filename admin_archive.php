@@ -93,6 +93,36 @@ while (true) {
     }
 }
 
+$archTeachOffset = 0;
+while (true) {
+    $urlArchTeach = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+        . '?select=id,first_name,middle_name,last_name,suffix,email,role,contact_number,archived_at'
+        . '&archived_at=not.is.null'
+        . '&role=in.(teacher,admin)'
+        . '&order=archived_at.desc'
+        . '&limit=500&offset=' . $archTeachOffset;
+    $resArchTeach = supabase_request('GET', $urlArchTeach, $headers);
+    if (!$resArchTeach['ok']) {
+        break;
+    }
+    $chunkT = json_decode((string) ($resArchTeach['body'] ?? ''), true);
+    if (!is_array($chunkT) || $chunkT === []) {
+        break;
+    }
+    foreach ($chunkT as $row) {
+        if (is_array($row)) {
+            $archivedTeachers[] = $row;
+        }
+    }
+    if (count($chunkT) < 500) {
+        break;
+    }
+    $archTeachOffset += 500;
+    if ($archTeachOffset >= 3000) {
+        break;
+    }
+}
+
 render_header('Archived Events', $user);
 ?>
 
@@ -248,7 +278,7 @@ render_header('Archived Events', $user);
   <?php endif; ?>
 </div>
 
-<!-- ARCHIVED TEACHERS LIST -->
+<!-- ARCHIVED TEACHERS / ADMINS LIST -->
 <div id="panelTeachers" class="pb-10 hidden">
   <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
     <table class="w-full text-left text-sm text-zinc-600">
@@ -257,15 +287,49 @@ render_header('Archived Events', $user);
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Name</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 w-1/4">Email</th>
                 <th class="px-4 py-4 font-bold text-zinc-900">Contact</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Year Level</th>
-                <th class="px-4 py-4 font-bold text-zinc-900">Block</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Role</th>
+                <th class="px-4 py-4 font-bold text-zinc-900">Archived</th>
                 <th class="px-6 py-4 font-bold text-zinc-900 text-right">Actions</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
+            <?php if (count($archivedTeachers) > 0): ?>
+              <?php foreach ($archivedTeachers as $at): ?>
+                <?php
+                  $tid = (string) ($at['id'] ?? '');
+                  $tLast = trim((string) ($at['last_name'] ?? ''));
+                  $tFirst = trim((string) ($at['first_name'] ?? ''));
+                  $tMiddle = trim((string) ($at['middle_name'] ?? ''));
+                  $tSuffix = trim((string) ($at['suffix'] ?? ''));
+                  $tNm = trim($tLast . ($tLast !== '' && $tFirst !== '' ? ', ' : '') . $tFirst . ($tMiddle !== '' ? ' ' . $tMiddle : '') . ($tSuffix !== '' ? ' ' . $tSuffix : ''));
+                  $tRole = strtolower(trim((string) ($at['role'] ?? 'teacher')));
+                  $tArchRaw = (string) ($at['archived_at'] ?? '');
+                  $tArchFmt = '—';
+                  if ($tArchRaw !== '') {
+                      try {
+                          $tArchFmt = (new DateTimeImmutable($tArchRaw))->setTimezone(new DateTimeZone('Asia/Manila'))->format('M d, Y');
+                      } catch (Throwable $e) {
+                          $tArchFmt = $tArchRaw;
+                      }
+                  }
+                ?>
+                <tr class="hover:bg-zinc-50 transition-colors" id="archStaff-<?= htmlspecialchars($tid) ?>">
+                  <td class="px-6 py-4 font-bold text-zinc-900"><?= htmlspecialchars($tNm !== '' ? $tNm : '—') ?></td>
+                  <td class="px-6 py-4 text-zinc-600"><?= htmlspecialchars((string) (($at['email'] ?? '') !== '' ? $at['email'] : '—')) ?></td>
+                  <td class="px-4 py-4 text-zinc-500"><?= htmlspecialchars((string) (($at['contact_number'] ?? '') !== '' ? $at['contact_number'] : '—')) ?></td>
+                  <td class="px-4 py-4 text-zinc-700 font-semibold"><?= htmlspecialchars($tRole === 'admin' ? 'Admin' : 'Teacher') ?></td>
+                  <td class="px-4 py-4 text-zinc-500"><?= htmlspecialchars($tArchFmt) ?></td>
+                  <td class="px-6 py-4 text-right">
+                    <button type="button" class="btnRestoreStaff mr-2 text-xs font-bold text-sky-600 hover:text-sky-800 border border-sky-600 hover:bg-sky-50 px-3 py-1.5 rounded-lg transition-colors" data-user-id="<?= htmlspecialchars($tid) ?>">Restore</button>
+                    <button type="button" class="btnHardDeleteStaff p-2 -mr-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Permanently" data-user-id="<?= htmlspecialchars($tid) ?>"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            <?php else: ?>
             <tr>
                 <td colspan="6" class="px-6 py-8 text-center text-zinc-500">No archived teachers available.</td>
             </tr>
+            <?php endif; ?>
         </tbody>
     </table>
   </div>
@@ -575,6 +639,65 @@ render_header('Archived Events', $user);
         btn.closest('tr').remove();
       } catch (e) {
         alert(e.message || 'Failed to delete section');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.btnRestoreStaff').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Restore this account to the active Users list?')) return;
+      const userId = btn.dataset.userId || '';
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = 'Restoring...';
+      try {
+        const res = await fetch('/api/staff_user_archive.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            csrf_token: window.CSRF_TOKEN,
+            user_id: userId,
+            action: 'restore',
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        const countSpan = document.querySelector('#btnTabTeachers span');
+        if (countSpan) countSpan.textContent = Math.max(0, parseInt(countSpan.textContent) - 1);
+        btn.closest('tr')?.remove();
+      } catch (e) {
+        alert(e.message || 'Failed to restore account');
+        btn.textContent = prev;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.btnHardDeleteStaff').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Permanently delete this account? This cannot be undone.')) return;
+      const userId = btn.dataset.userId || '';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/staff_user_archive.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            csrf_token: window.CSRF_TOKEN,
+            user_id: userId,
+            action: 'hard_delete',
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Failed');
+        const countSpan = document.querySelector('#btnTabTeachers span');
+        if (countSpan) countSpan.textContent = Math.max(0, parseInt(countSpan.textContent) - 1);
+        btn.closest('tr')?.remove();
+      } catch (e) {
+        alert(e.message || 'Failed to delete account');
       } finally {
         btn.disabled = false;
       }

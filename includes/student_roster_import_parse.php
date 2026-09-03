@@ -34,7 +34,7 @@ function student_roster_parse_workbook_sheets(array $workbookSheets, string $imp
         ],
         'full_name' => [
             'full_name', 'fullname', 'complete_name', 'student_name', 'students_name',
-            'learner_name', 'name_of_student', 'name',
+            'student_s_name', 'learner_name', 'name_of_student', 'name',
         ],
         'last_name' => ['last_name', 'lastname', 'surname', 'family_name', 'l_name', 'ln'],
         'first_name' => ['first_name', 'firstname', 'given_name', 'f_name', 'fn', 'forename'],
@@ -88,22 +88,11 @@ function student_roster_parse_workbook_sheets(array $workbookSheets, string $imp
         return isset($colMap['full_name']) || (isset($colMap['first_name']) && isset($colMap['last_name']));
     };
 
-    $inferProgramFromSheetName = static function (string $sheetName): string {
-        $n = strtoupper(trim($sheetName));
-        $compact = preg_replace('/[^A-Z0-9]+/', '', $n) ?? $n;
-        $spaced = preg_replace('/[^A-Z0-9]+/', ' ', $n) ?? $n;
-        $spaced = trim(preg_replace('/\s+/', ' ', $spaced) ?? $spaced);
-        // Sheet tabs like BSIT-BA, BSIT-SD, or glued variants (BSITBA / BSITSD).
-        if (preg_match('/BSIT.*BA|BA.*BSIT/', $compact) || preg_match('/\bBSIT\b.*\bBA\b/', $spaced)) {
-            return 'BSIT BA';
+    $inferFromSheet = static function (string $sheetName): array {
+        if (function_exists('student_roster_infer_from_sheet_name')) {
+            return student_roster_infer_from_sheet_name($sheetName);
         }
-        if (preg_match('/BSIT.*SD|SD.*BSIT/', $compact) || preg_match('/\bBSIT\b.*\bSD\b/', $spaced)) {
-            return 'BSIT SD';
-        }
-        if (str_contains($compact, 'BSCS') || str_contains($spaced, 'COMPUTER SCIENCE')) {
-            return 'BSCS';
-        }
-        return '';
+        return ['program' => '', 'year' => null, 'block' => ''];
     };
 
     $payloadsByNo = [];
@@ -123,8 +112,14 @@ function student_roster_parse_workbook_sheets(array $workbookSheets, string $imp
         if (!is_array($rawRows) || $rawRows === []) {
             continue;
         }
+        if (preg_match('/^Sheet\d+$/i', $sheetName)) {
+            continue;
+        }
 
-        $sheetProgramHint = $inferProgramFromSheetName($sheetName);
+        $sheetMeta = $inferFromSheet($sheetName);
+        $sheetProgramHint = (string) ($sheetMeta['program'] ?? '');
+        $sheetYearHint = isset($sheetMeta['year']) && is_int($sheetMeta['year']) ? $sheetMeta['year'] : null;
+        $sheetBlockHint = trim((string) ($sheetMeta['block'] ?? ''));
         $headerRowIndex = null;
         $colMap = [];
         $scanLimit = min(20, count($rawRows));
@@ -210,7 +205,12 @@ function student_roster_parse_workbook_sheets(array $workbookSheets, string $imp
             $maybeHeader = $mapRowHeaders($row);
             if (isset($maybeHeader['student_no']) && $headerHasName($maybeHeader)) {
                 $labelJoin = strtolower(implode(' ', array_map('strval', $row)));
-                if (str_contains($labelJoin, 'student') && (str_contains($labelJoin, 'surname') || str_contains($labelJoin, 'first'))) {
+                if (str_contains($labelJoin, 'student') && (
+                    str_contains($labelJoin, 'surname')
+                    || str_contains($labelJoin, 'first')
+                    || str_contains($labelJoin, 'student\'s name')
+                    || str_contains($labelJoin, 'students name')
+                )) {
                     continue;
                 }
             }
@@ -260,6 +260,12 @@ function student_roster_parse_workbook_sheets(array $workbookSheets, string $imp
             $specRaw = $get('specialization');
             $yearRaw = $get('year');
             $blockRaw = $get('block');
+            if ($yearRaw === '' && !isset($colMap['year']) && $sheetYearHint !== null) {
+                $yearRaw = (string) $sheetYearHint;
+            }
+            if ($blockRaw === '' && !isset($colMap['block']) && $sheetBlockHint !== '') {
+                $blockRaw = $sheetBlockHint;
+            }
 
             if ($studentNo === '' || ($fullName === '' && $lastName === '' && $firstName === '')) {
                 $skipped++;

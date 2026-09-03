@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Admin: create another admin account and email a temporary password.
+ */
+
 require_once __DIR__ . '/../includes/session.php';
 session_bootstrap();
 
@@ -10,11 +14,18 @@ require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 
-$user = require_role(['admin']);
+$actor = require_role(['admin']);
+$actorId = trim((string) ($actor['id'] ?? ''));
 $data = require_post_json();
 require_csrf_from_json($data);
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('users_register_admin:' . $actorId . ':' . $clientIp, 10, 3600)) {
+    json_response(['ok' => false, 'error' => 'Too many admin registrations. Try again later.'], 429);
+}
 
 $firstName = isset($data['first_name']) ? clean_string((string) $data['first_name']) : '';
 $middleName = isset($data['middle_name']) ? clean_string((string) $data['middle_name']) : '';
@@ -43,7 +54,7 @@ if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
 }
 
-function generate_teacher_temp_password(int $length = 12): string
+function generate_admin_temp_password(int $length = 12): string
 {
     $lower = 'abcdefghjkmnpqrstuvwxyz';
     $upper = 'ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -68,7 +79,21 @@ function generate_teacher_temp_password(int $length = 12): string
     return implode('', $chars);
 }
 
-$tempPassword = generate_teacher_temp_password(12);
+$authHeaders = [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+$dupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+    . '?select=id,email&email=eq.' . rawurlencode($email)
+    . '&limit=1';
+$dupRes = supabase_request('GET', $dupUrl, $authHeaders);
+$dupRows = $dupRes['ok'] ? json_decode((string) ($dupRes['body'] ?? ''), true) : [];
+if (is_array($dupRows) && isset($dupRows[0]) && is_array($dupRows[0])) {
+    json_response(['ok' => false, 'error' => 'That email is already in use.'], 409);
+}
+
+$tempPassword = generate_admin_temp_password(12);
 $passwordHash = password_hash($tempPassword, PASSWORD_DEFAULT);
 
 $payload = [
@@ -79,7 +104,7 @@ $payload = [
     'contact_number' => $contactNumber !== '' ? $contactNumber : null,
     'email' => $email,
     'password' => $passwordHash,
-    'role' => 'teacher',
+    'role' => 'admin',
     'account_status' => 'approved',
     'registration_source' => 'admin',
     'section_id' => null,
@@ -98,9 +123,13 @@ $headers = [
 $res = supabase_request('POST', $url, $headers, json_encode([$payload], JSON_UNESCAPED_SLASHES));
 
 if (!$res['ok']) {
+    $errText = strtolower((string) ($res['body'] ?? ''));
+    if (str_contains($errText, 'duplicate') || str_contains($errText, 'unique')) {
+        json_response(['ok' => false, 'error' => 'That email is already in use.'], 409);
+    }
     json_response([
         'ok' => false,
-        'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Could not create teacher account'),
+        'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Could not create admin account'),
     ], 500);
 }
 
@@ -108,23 +137,17 @@ $rows = json_decode((string) $res['body'], true);
 $created = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
 
 $fullName = build_display_name($firstName, $middleName, $lastName, $suffix);
-$sent = send_teacher_account_credentials_email($email, $fullName, $tempPassword);
+$sent = send_staff_account_credentials_email($email, $fullName, $tempPassword, 'admin');
 if (!$sent) {
-    // Rollback: delete the created teacher account to avoid an account with unknown password.
     $createdId = is_array($created) ? (string) ($created['id'] ?? '') : '';
     if ($createdId !== '') {
         $deleteUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
             . '?id=eq.' . rawurlencode($createdId);
-        $deleteHeaders = [
-            'Accept: application/json',
-            'apikey: ' . SUPABASE_KEY,
-            'Authorization: Bearer ' . SUPABASE_KEY,
-        ];
-        supabase_request('DELETE', $deleteUrl, $deleteHeaders);
+        supabase_request('DELETE', $deleteUrl, $authHeaders);
     }
     json_response([
         'ok' => false,
-        'error' => 'Teacher account email failed to send. No account was created.',
+        'error' => 'Admin account email failed to send. No account was created.',
         'debug' => function_exists('smtp_get_last_error') ? smtp_get_last_error() : null,
     ], 500);
 }

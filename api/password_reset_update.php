@@ -5,6 +5,7 @@ require_once __DIR__ . '/../includes/session.php';
 session_bootstrap();
 
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
@@ -28,8 +29,8 @@ if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
 if ($resetToken === '') {
     json_response(['ok' => false, 'error' => 'Missing reset token.'], 400);
 }
-if (mb_strlen($newPassword) < 8) {
-    json_response(['ok' => false, 'error' => 'Password must be at least 8 characters.'], 400);
+if (!is_strong_password($newPassword)) {
+    json_response(['ok' => false, 'error' => password_policy_error()], 400);
 }
 
 $headers = [

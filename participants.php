@@ -109,6 +109,11 @@ if ($isAbsenceFormCreator) {
 $isPaidEvent = !event_is_free_registration_event($event);
 $returnTo = $backHref;
 $returnToQuery = '&return_to=' . rawurlencode($returnTo);
+$exportExcelHtml = '<a href="/participants?event_id=' . htmlspecialchars($eventId)
+    . '&export=excel' . htmlspecialchars($returnToQuery)
+    . '" class="rounded-xl border border-emerald-200 bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 transition shadow-sm flex items-center gap-2 group">'
+    . '<svg class="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>'
+    . 'Export Excel</a>';
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
 $resetIsTimeoutPhase = false;
@@ -208,7 +213,7 @@ if ($absenceRes['ok']) {
 if ($usesSessions) {
 
     $pUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-        . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,sections(name)),tickets(id,token)'
+        . '?select=id,registered_at,student_id,users(first_name,middle_name,last_name,suffix,email,student_id,photo_url,sections(name)),tickets(id,token)'
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&order=registered_at.desc';
     $pRes = supabase_request('GET', $pUrl, $headers);
@@ -553,13 +558,22 @@ if ($usesSessions) {
     }
 
     $sessionCounts = [];
+    $sessionOutCounts = [];
     foreach ($sessions as $session) {
-        $sessionCounts[(string) ($session['id'] ?? '')] = 0;
+        $sid = (string) ($session['id'] ?? '');
+        $sessionCounts[$sid] = 0;
+        $sessionOutCounts[$sid] = 0;
     }
     foreach ($attendanceMap as $rows) {
         foreach ($rows as $sessionId => $row) {
-            if ($attendanceCountsAsPresent(is_array($row) ? $row : null) && isset($sessionCounts[$sessionId])) {
+            if (!isset($sessionCounts[$sessionId])) {
+                continue;
+            }
+            if ($attendanceCountsAsPresent(is_array($row) ? $row : null)) {
                 $sessionCounts[$sessionId]++;
+            }
+            if (is_array($row) && trim((string) ($row['check_out_at'] ?? '')) !== '') {
+                $sessionOutCounts[$sessionId]++;
             }
         }
     }
@@ -766,6 +780,226 @@ if ($usesSessions) {
         ];
     }
 
+    if (isset($_GET['export']) && $_GET['export'] === 'excel') {
+        $eventStart = $toLocalDt((string) ($event['start_at'] ?? ''));
+        $eventEnd = $toLocalDt((string) ($event['end_at'] ?? ''));
+        if (!$eventStart && $sessions !== []) {
+            $eventStart = $toLocalDt((string) ($sessions[0]['start_at'] ?? ''));
+        }
+        if (!$eventEnd && $sessions !== []) {
+            $lastSession = $sessions[count($sessions) - 1];
+            $eventEnd = $toLocalDt(trim((string) ($lastSession['end_at'] ?? '')));
+        }
+
+        $sectionsMap = [];
+        foreach ($participants as $r) {
+            if (!is_array($r)) {
+                continue;
+            }
+            $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+            $sec = isset($u['sections']) && is_array($u['sections']) ? $u['sections'] : null;
+            $secName = is_array($sec) && isset($sec['name']) && trim((string) $sec['name']) !== ''
+                ? trim((string) $sec['name'])
+                : 'Unknown Block';
+            $yearKey = student_roster_resolve_year_key(
+                trim((string) ($r['student_id'] ?? '')),
+                trim((string) ($u['student_id'] ?? '')),
+                $secName,
+                $sessionYearMaps
+            );
+            $yearLvl = $yearKey !== '' ? $yearKey : 'N/A';
+            if (!isset($sectionsMap[$secName])) {
+                $sectionsMap[$secName] = ['year' => $yearLvl, 'participants' => []];
+            }
+            $sectionsMap[$secName]['participants'][] = $r;
+        }
+        ksort($sectionsMap);
+
+        $sessionCols = [];
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            $sid = (string) ($session['id'] ?? '');
+            if ($sid === '') {
+                continue;
+            }
+            $sessionCols[] = [
+                'id' => $sid,
+                'name' => build_session_display_name($session, 'Seminar'),
+            ];
+        }
+
+        $baseCols = 4;
+        $colCount = $baseCols + (count($sessionCols) * 3);
+        if ($colCount < 4) {
+            $colCount = 4;
+        }
+
+        $eventTitle = strtoupper((string) ($event['title'] ?? 'UNKNOWN EVENT'));
+        $eventDate = ($eventStart ? $eventStart->format('M d, Y') : '')
+            . ($eventEnd && $eventStart && $eventEnd->format('Y-m-d') !== $eventStart->format('Y-m-d')
+                ? ' - ' . $eventEnd->format('M d, Y')
+                : '');
+
+        header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+        header('Content-Disposition: attachment; filename="Event_Participants_' . preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) ($event['title'] ?? '')) . '.xls"');
+
+        echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+        echo '<head><meta charset="utf-8"> <style>';
+        echo '  .hdr-main { font-family: "Segoe UI", Arial, sans-serif; font-size: 18pt; font-weight: bold; color: #1e293b; text-align: center; }';
+        echo '  .hdr-sub  { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; color: #64748b; font-weight: normal; text-align: center; }';
+        echo '  .gen-on   { font-family: "Segoe UI", Arial, sans-serif; font-size: 9pt; color: #94a3b8; text-align: center; }';
+        echo '  .logo-badge { background-color: #ea580c; color: #ffffff; font-family: "Impact", Arial, sans-serif; font-size: 24pt; font-weight: bold; text-align: center; vertical-align: middle; border: 2pt solid #c2410c; }';
+        echo '  .event-hdr { background-color: #ea580c; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 14pt; font-weight: bold; padding: 15px; text-align: center; height: 35px; border: 1pt solid #c2410c; }';
+        echo '  .event-date { background-color: #fef2f2; color: #991b1b; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; text-align: center; height: 25px; border-bottom: 2pt solid #ea580c; }';
+        echo '  .sec-hdr { background-color: #1e293b; color: #ffffff; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: bold; padding: 10px; height: 25px; }';
+        echo '  .col-hdr { background-color: #f8fafc; border: 1pt solid #cbd5e1; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; height: 30px; white-space: nowrap; }';
+        echo '  .sess-hdr { background-color: #0c4a6e; color: #ffffff; border: 1pt solid #0369a1; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; height: 26px; }';
+        echo '  .data-cell { border: 0.2pt solid #e2e8f0; font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; height: 25px; vertical-align: middle; }';
+        echo '  .compl { color: #059669; font-weight: bold; text-align: center; background-color: #f0fdf4; }';
+        echo '  .timedin { color: #0369a1; font-weight: bold; text-align: center; background-color: #f0f9ff; }';
+        echo '  .absent { color: #b45309; font-weight: bold; text-align: center; background-color: #fffbeb; }';
+        echo '  .pend  { color: #64748b; font-weight: bold; text-align: center; background-color: #f8fafc; }';
+        echo '  col.col-name { width: 280px; }';
+        echo '  col.col-studno { width: 160px; }';
+        echo '  col.col-year { width: 70px; }';
+        echo '  col.col-block { width: 150px; }';
+        echo '  col.col-time { width: 150px; }';
+        echo '  col.col-status { width: 110px; }';
+        echo ' </style></head><body>';
+        echo '<table border="0" style="border-collapse:collapse; table-layout:fixed;">';
+        echo '<colgroup>';
+        echo '<col class="col-name" style="width:280px" />';
+        echo '<col class="col-studno" style="width:160px" />';
+        echo '<col class="col-year" style="width:70px" />';
+        echo '<col class="col-block" style="width:150px" />';
+        foreach ($sessionCols as $_) {
+            echo '<col class="col-time" style="width:150px" />';
+            echo '<col class="col-time" style="width:150px" />';
+            echo '<col class="col-status" style="width:110px" />';
+        }
+        echo '</colgroup>';
+
+        echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
+        echo '<tr>';
+        echo '  <td colspan="1" rowspan="3" class="logo-badge">CCS</td>';
+        echo '  <td colspan="' . ($colCount - 1) . '" class="hdr-main">COLLEGE OF COMPUTER STUDIES</td>';
+        echo '</tr>';
+        echo '<tr><td colspan="' . ($colCount - 1) . '" class="hdr-sub">PulseConnect Seminar Participant Registry Report</td></tr>';
+        echo '<tr><td colspan="' . ($colCount - 1) . '" class="gen-on">Generated on ' . date('F j, Y, g:i A') . '</td></tr>';
+        echo '<tr><td colspan="' . $colCount . '" style="height: 15px;"></td></tr>';
+        echo '<tr><td colspan="' . $colCount . '" class="event-hdr">' . htmlspecialchars($eventTitle) . '</td></tr>';
+        echo '<tr><td colspan="' . $colCount . '" class="event-date">' . htmlspecialchars($eventDate) . '</td></tr>';
+        echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
+
+        foreach ($sectionsMap as $secName => $secData) {
+            $secText = 'BLOCK: ' . strtoupper($secName) . '   |   YEAR LEVEL: ' . (string) $secData['year'];
+            echo '<tr><td colspan="' . $colCount . '" class="sec-hdr">' . htmlspecialchars($secText) . '</td></tr>';
+
+            echo '<tr>';
+            echo '<th class="col-hdr" colspan="4">STUDENT</th>';
+            foreach ($sessionCols as $sessionCol) {
+                echo '<th class="sess-hdr" colspan="3">' . htmlspecialchars(strtoupper((string) $sessionCol['name'])) . '</th>';
+            }
+            echo '</tr>';
+
+            echo '<tr>';
+            echo ' <th class="col-hdr">STUDENT NAME</th>';
+            echo ' <th class="col-hdr">STUDENT&nbsp;NUMBER</th>';
+            echo ' <th class="col-hdr">YEAR</th>';
+            echo ' <th class="col-hdr">BLOCK</th>';
+            foreach ($sessionCols as $_) {
+                echo ' <th class="col-hdr">TIME IN</th>';
+                echo ' <th class="col-hdr">TIME OUT</th>';
+                echo ' <th class="col-hdr">STATUS</th>';
+            }
+            echo '</tr>';
+
+            foreach ($secData['participants'] as $r) {
+                if (!is_array($r)) {
+                    continue;
+                }
+                $u = isset($r['users']) && is_array($r['users']) ? $r['users'] : [];
+                $lastName = trim((string) ($u['last_name'] ?? ''));
+                $givenParts = [];
+                foreach (['first_name', 'middle_name'] as $k) {
+                    $v = trim((string) ($u[$k] ?? ''));
+                    if ($v !== '') {
+                        $givenParts[] = $v;
+                    }
+                }
+                $given = implode(' ', $givenParts);
+                $suffix = trim((string) ($u['suffix'] ?? ''));
+                if ($lastName !== '' && $given !== '') {
+                    $name = $lastName . ($suffix !== '' ? ' ' . $suffix : '') . ', ' . $given;
+                } elseif ($lastName !== '') {
+                    $name = $lastName . ($suffix !== '' ? ', ' . $suffix : '');
+                } else {
+                    $name = $given . ($suffix !== '' ? ', ' . $suffix : '');
+                }
+                $studentNumber = trim((string) ($u['student_id'] ?? ''));
+                if ($studentNumber === '') {
+                    $studentNumber = 'N/A';
+                }
+                $registrationId = (string) ($r['id'] ?? '');
+
+                echo '<tr>';
+                echo ' <td class="data-cell" style="padding-left: 5px;">' . htmlspecialchars($name !== '' ? $name : 'Unnamed') . '</td>';
+                echo ' <td class="data-cell" style="text-align:center; font-family: Consolas, monospace; mso-number-format:\'\\@\';">' . htmlspecialchars($studentNumber) . '</td>';
+                echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars((string) $secData['year']) . '</td>';
+                echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars((string) $secName) . '</td>';
+
+                foreach ($sessionCols as $sessionCol) {
+                    $att = $attendanceMap[$registrationId][$sessionCol['id']] ?? null;
+                    $checkIn = is_array($att) ? trim((string) ($att['check_in_at'] ?? '')) : '';
+                    $checkOut = is_array($att) ? trim((string) ($att['check_out_at'] ?? '')) : '';
+                    $hasIn = $attendanceCountsAsPresent(is_array($att) ? $att : null);
+                    $sessionMeta = $sessionWindowMeta[$sessionCol['id']] ?? null;
+                    $sessionClosed = is_array($sessionMeta) && !empty($sessionMeta['closed']);
+
+                    $timeInDisplay = '-';
+                    $timeOutDisplay = '-';
+                    if ($checkIn !== '') {
+                        $checkInLocal = $toLocalDt($checkIn);
+                        if ($checkInLocal) {
+                            $timeInDisplay = $checkInLocal->format('m/d/Y h:i A');
+                        }
+                    }
+                    if ($checkOut !== '') {
+                        $checkOutLocal = $toLocalDt($checkOut);
+                        if ($checkOutLocal) {
+                            $timeOutDisplay = $checkOutLocal->format('m/d/Y h:i A');
+                        }
+                    }
+
+                    if ($hasIn && $checkOut !== '') {
+                        $statusStr = 'COMPLETED';
+                        $statusCls = 'compl';
+                    } elseif ($hasIn) {
+                        $statusStr = 'TIMED IN';
+                        $statusCls = 'timedin';
+                    } elseif ($sessionClosed) {
+                        $statusStr = 'ABSENT';
+                        $statusCls = 'absent';
+                    } else {
+                        $statusStr = 'NO RECORD';
+                        $statusCls = 'pend';
+                    }
+
+                    echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($timeInDisplay) . '</td>';
+                    echo ' <td class="data-cell" style="text-align:center;">' . htmlspecialchars($timeOutDisplay) . '</td>';
+                    echo ' <td class="data-cell ' . $statusCls . '">' . $statusStr . '</td>';
+                }
+                echo '</tr>';
+            }
+            echo '<tr><td colspan="' . $colCount . '" style="height: 10px;"></td></tr>';
+        }
+
+        echo '</table></body></html>';
+        exit;
+    }
+
     render_header('Participants', $user);
     ?>
     <?php
@@ -773,7 +1007,7 @@ if ($usesSessions) {
         'back_href' => $backHref,
         'title' => (string) ($event['title'] ?? ''),
         'subtitle' => 'Seminar attendance is tracked per session.',
-        'actions_html' => $absenceExportHtml,
+        'actions_html' => $absenceExportHtml . $exportExcelHtml,
     ]);
     render_event_tabs([
         'event_id' => $eventId,
@@ -790,30 +1024,139 @@ if ($usesSessions) {
 
       <?php if ($participantTab === 'participants'): ?>
         <div class="grid grid-cols-1 md:grid-cols-<?= max(1, min(4, count($sessions))) ?> gap-4 mb-6">
-          <?php foreach ($sessions as $session): ?>
-            <?php $sessionId = (string) ($session['id'] ?? ''); ?>
-            <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div class="text-xs font-bold uppercase tracking-wider text-zinc-500">Seminar</div>
-              <div class="text-sm font-bold text-zinc-900 mt-1"><?= htmlspecialchars(build_session_display_name($session)) ?></div>
-              <div class="text-xs text-zinc-500 mt-2"><?= htmlspecialchars(format_date_local((string) ($session['start_at'] ?? ''), 'M j, Y g:i A')) ?></div>
-              <div class="text-xl font-black text-emerald-700 mt-3"><?= htmlspecialchars((string) ($sessionCounts[$sessionId] ?? 0)) ?></div>
-              <div class="text-xs text-zinc-500">checked in</div>
-            </div>
+          <?php
+            $nowLocal = $nowUtc->setTimezone($appTz);
+            foreach ($sessions as $sessionIndex => $session):
+              $sessionId = (string) ($session['id'] ?? '');
+              $sessionStart = $toLocalDt((string) ($session['start_at'] ?? ''));
+              $sessionEnd = $toLocalDt(trim((string) ($session['end_at'] ?? '')));
+              $meta = $sessionWindowMeta[$sessionId] ?? null;
+              $timeInCloses = is_array($meta) && ($meta['closes_at'] ?? null) instanceof DateTimeImmutable
+                  ? $meta['closes_at']
+                  : null;
+              $timeoutCloses = is_array($meta) && ($meta['timeout_closes_at'] ?? null) instanceof DateTimeImmutable
+                  ? $meta['timeout_closes_at']
+                  : null;
+              $timeoutOpens = is_array($meta) && ($meta['end_at'] ?? null) instanceof DateTimeImmutable
+                  ? $meta['end_at']
+                  : $sessionEnd;
+              $earlyOutAt = $toLocalDt(trim((string) ($session['early_out_enabled_at'] ?? '')));
+              if ($earlyOutAt instanceof DateTimeImmutable && $nowLocal >= $earlyOutAt) {
+                  $timeoutOpens = $earlyOutAt;
+              }
+              $statusLabel = 'Upcoming';
+              $statusClass = 'seminar-summary-status is-upcoming';
+              if ($sessionStart instanceof DateTimeImmutable && $nowLocal < $sessionStart) {
+                  $statusLabel = 'Upcoming';
+                  $statusClass = 'seminar-summary-status is-upcoming';
+              } elseif ($timeInCloses instanceof DateTimeImmutable && $nowLocal <= $timeInCloses) {
+                  $statusLabel = 'Time-in open';
+                  $statusClass = 'seminar-summary-status is-time-in';
+              } elseif (
+                  $timeoutOpens instanceof DateTimeImmutable
+                  && $nowLocal >= $timeoutOpens
+                  && (!($timeoutCloses instanceof DateTimeImmutable) || $nowLocal <= $timeoutCloses)
+              ) {
+                  $statusLabel = 'Time-out open';
+                  $statusClass = 'seminar-summary-status is-time-out';
+              } elseif ($timeoutCloses instanceof DateTimeImmutable && $nowLocal > $timeoutCloses) {
+                  $statusLabel = 'Ended';
+                  $statusClass = 'seminar-summary-status is-ended';
+              } else {
+                  $statusLabel = 'Ongoing';
+                  $statusClass = 'seminar-summary-status is-ongoing';
+              }
+              $sameDay = $sessionStart instanceof DateTimeImmutable
+                  && $sessionEnd instanceof DateTimeImmutable
+                  && $sessionStart->format('Y-m-d') === $sessionEnd->format('Y-m-d');
+              $startDate = $sessionStart instanceof DateTimeImmutable ? $sessionStart->format('M j, Y') : '—';
+              $startTime = $sessionStart instanceof DateTimeImmutable ? $sessionStart->format('g:i A') : '—';
+              $endDate = $sessionEnd instanceof DateTimeImmutable ? $sessionEnd->format('M j, Y') : '—';
+              $endTime = $sessionEnd instanceof DateTimeImmutable ? $sessionEnd->format('g:i A') : '—';
+          ?>
+            <article class="seminar-summary-card">
+              <div class="seminar-summary-card-inner">
+                <div class="seminar-summary-top">
+                  <div class="seminar-summary-identity">
+                    <span class="seminar-summary-index"><?= (int) $sessionIndex + 1 ?></span>
+                    <div>
+                      <div class="seminar-summary-kicker">Seminar</div>
+                      <h3 class="seminar-summary-title"><?= htmlspecialchars(build_session_display_name($session)) ?></h3>
+                    </div>
+                  </div>
+                  <span class="<?= htmlspecialchars($statusClass) ?>"><?= htmlspecialchars($statusLabel) ?></span>
+                </div>
+
+                <?php if ($sameDay): ?>
+                  <div class="seminar-summary-date"><?= htmlspecialchars($startDate) ?></div>
+                <?php endif; ?>
+
+                <div class="seminar-summary-window">
+                  <div class="seminar-summary-slot">
+                    <span class="seminar-summary-slot-label">Start</span>
+                    <?php if (!$sameDay): ?>
+                      <span class="seminar-summary-slot-date"><?= htmlspecialchars($startDate) ?></span>
+                    <?php endif; ?>
+                    <span class="seminar-summary-slot-time"><?= htmlspecialchars($startTime) ?></span>
+                  </div>
+                  <div class="seminar-summary-slot-rule" aria-hidden="true"></div>
+                  <div class="seminar-summary-slot">
+                    <span class="seminar-summary-slot-label">End</span>
+                    <?php if (!$sameDay): ?>
+                      <span class="seminar-summary-slot-date"><?= htmlspecialchars($endDate) ?></span>
+                    <?php endif; ?>
+                    <span class="seminar-summary-slot-time"><?= htmlspecialchars($endTime) ?></span>
+                  </div>
+                </div>
+
+                <div class="seminar-summary-stats">
+                  <div class="seminar-summary-stat is-in">
+                    <span class="seminar-summary-stat-value"><?= htmlspecialchars((string) ($sessionCounts[$sessionId] ?? 0)) ?></span>
+                    <span class="seminar-summary-stat-label">Timed in</span>
+                  </div>
+                  <div class="seminar-summary-stat is-out">
+                    <span class="seminar-summary-stat-value"><?= htmlspecialchars((string) ($sessionOutCounts[$sessionId] ?? 0)) ?></span>
+                    <span class="seminar-summary-stat-label">Timed out</span>
+                  </div>
+                </div>
+              </div>
+            </article>
           <?php endforeach; ?>
         </div>
 
-        <div class="overflow-x-auto rounded-2xl border border-zinc-200 bg-white shadow-sm">
-          <table class="min-w-full divide-y divide-zinc-200">
-            <thead class="bg-zinc-50">
+        <!-- Live Search & Counter Bar -->
+        <div class="mb-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-zinc-200/80 shadow-2xs">
+          <div class="relative flex-1">
+            <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-zinc-400">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+            </div>
+            <input
+              type="text"
+              id="multiSessionSearchInput"
+              placeholder="Search participant name, student ID, section..."
+              class="w-full rounded-xl border border-zinc-200 bg-zinc-50/60 py-2 pl-10 pr-4 text-xs text-zinc-900 placeholder-zinc-400 transition focus:border-sky-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 font-medium"
+            />
+          </div>
+          <div class="flex items-center justify-between sm:justify-end gap-2 px-1">
+            <span class="text-xs font-semibold text-zinc-500">Total Participants:</span>
+            <span class="inline-flex items-center justify-center rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-bold text-sky-700 border border-sky-200/60">
+              <?= count($participants) ?>
+            </span>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto rounded-2xl border border-zinc-200/80 bg-white shadow-sm">
+          <table class="min-w-full divide-y divide-zinc-200/80">
+            <thead class="bg-zinc-50/80">
               <tr>
-                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Participant</th>
-                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
-                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
+                <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Participant</th>
+                <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Student No.</th>
+                <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Section</th>
                 <?php foreach ($sessions as $session): ?>
-                  <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
+                  <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
                 <?php endforeach; ?>
                 <?php if ($canResetAttendance): ?>
-                  <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Action</th>
+                  <th class="px-4 py-3.5 text-right text-[11px] font-bold uppercase tracking-wider text-zinc-500">Action</th>
                 <?php endif; ?>
               </tr>
             </thead>
@@ -823,6 +1166,16 @@ if ($usesSessions) {
                   $registrationId = (string) ($participant['id'] ?? '');
                   $studentId = (string) ($participant['student_id'] ?? '');
                   $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+                  $avatarUrl = storage_resolve_user_avatar_url(
+                      $studentId,
+                      (string) ($profile['photo_url'] ?? '')
+                  );
+                  $email = (string) ($profile['email'] ?? '');
+                  $firstName = trim((string) ($profile['first_name'] ?? ''));
+                  $lastName = trim((string) ($profile['last_name'] ?? ''));
+                  $initials = strtoupper(mb_substr($firstName, 0, 1) . mb_substr($lastName, 0, 1));
+                  if ($initials === '') { $initials = 'P'; }
+
                   $section = isset($profile['sections']) && is_array($profile['sections']) ? trim((string) ($profile['sections']['name'] ?? '')) : '';
                   $yearKey = student_roster_resolve_year_key(
                       $studentId,
@@ -846,37 +1199,120 @@ if ($usesSessions) {
                   if ($suffix !== '') {
                       $name .= ', ' . $suffix;
                   }
+                  $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $section);
+
+                  $nextResetSessionId = '';
+                  $nextResetHasOut = false;
+                  $nextResetHasIn = false;
+                  foreach ($sessions as $resetSession) {
+                      $resetSid = (string) ($resetSession['id'] ?? '');
+                      $resetAtt = $attendanceMap[$registrationId][$resetSid] ?? null;
+                      $resetHasIn = is_array($resetAtt) && $attendanceCountsAsPresent($resetAtt);
+                      $resetHasOut = is_array($resetAtt) && trim((string) ($resetAtt['check_out_at'] ?? '')) !== '';
+                      if ($resetHasOut) {
+                          $nextResetSessionId = $resetSid;
+                          $nextResetHasOut = true;
+                          $nextResetHasIn = true;
+                          break;
+                      }
+                      if ($resetHasIn && $nextResetSessionId === '') {
+                          $nextResetSessionId = $resetSid;
+                          $nextResetHasIn = true;
+                      }
+                  }
+                  $nextResetLabel = $nextResetHasOut ? '↺ Reset Time-Out' : '↺ Reset Time-In';
+                  $nextResetConfirm = $nextResetHasOut
+                      ? 'Reset Time-Out for this seminar? Time-in will be kept. Reset again to clear time-in.'
+                      : 'Reset Time-In for this seminar? Only this seminar is cleared.';
                 ?>
-                <tr>
-                  <td class="px-4 py-4 text-sm font-semibold text-zinc-900"><?= htmlspecialchars($name !== '' ? $name : 'Unnamed Participant') ?></td>
-                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars((string) ($profile['student_id'] ?? 'N/A')) ?></td>
-                  <td class="px-4 py-4 text-sm text-zinc-600"><?= htmlspecialchars($section !== '' ? $section : 'N/A') ?></td>
+                <tr class="multi-participant-row hover:bg-zinc-50/80 transition-colors" data-search="<?= htmlspecialchars($searchStr) ?>">
+                  <td class="px-4 py-3.5 whitespace-nowrap">
+                    <div class="flex items-center gap-3">
+                      <div class="participant-avatar flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-sky-500 to-sky-700 text-white flex items-center justify-center font-extrabold text-xs shadow-2xs border border-white">
+                        <?php if ($avatarUrl !== ''): ?>
+                          <img src="<?= htmlspecialchars($avatarUrl) ?>" alt="<?= htmlspecialchars($name) ?>" class="w-full h-full object-cover" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                          <span style="display:none;" class="w-full h-full items-center justify-center"><?= htmlspecialchars($initials) ?></span>
+                        <?php else: ?>
+                          <span><?= htmlspecialchars($initials) ?></span>
+                        <?php endif; ?>
+                      </div>
+                      <div class="min-w-0">
+                        <div class="text-sm font-bold text-zinc-900 truncate"><?= htmlspecialchars($name !== '' ? $name : 'Unnamed Participant') ?></div>
+                        <?php if ($email !== ''): ?>
+                          <div class="text-xs text-zinc-400 truncate"><?= htmlspecialchars($email) ?></div>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3.5 whitespace-nowrap text-xs font-mono text-zinc-600">
+                    <span class="inline-block px-2 py-0.5 rounded bg-zinc-100/90 border border-zinc-200/60 font-semibold text-zinc-700">
+                      <?= htmlspecialchars((string) ($profile['student_id'] ?? 'N/A')) ?>
+                    </span>
+                  </td>
+                  <td class="px-4 py-3.5 whitespace-nowrap">
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/70">
+                      <?= htmlspecialchars($section !== '' ? $section : 'N/A') ?>
+                    </span>
+                  </td>
                   <?php foreach ($sessions as $session): ?>
                     <?php
                       $sessionId = (string) ($session['id'] ?? '');
                       $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
-                      $checkInAt = is_array($attendance) ? (string) ($attendance['check_in_at'] ?? '') : '';
+                      $checkInAt = is_array($attendance) ? trim((string) ($attendance['check_in_at'] ?? '')) : '';
+                      $checkOutAt = is_array($attendance) ? trim((string) ($attendance['check_out_at'] ?? '')) : '';
                       $sessionMeta = $sessionWindowMeta[$sessionId] ?? null;
                       $sessionClosed = is_array($sessionMeta) && !empty($sessionMeta['closed']);
+                      $hasTimeIn = is_array($attendance) && $attendanceCountsAsPresent($attendance);
+                      $hasTimeOut = $checkOutAt !== '';
                     ?>
-                    <td class="px-4 py-4 text-sm text-zinc-600">
-                      <?php if (is_array($attendance) && $attendanceCountsAsPresent($attendance)): ?>
-                        <span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Present</span>
-                        <?php if ($checkInAt !== ''): ?>
-                          <div class="mt-2 text-xs text-zinc-500"><?= htmlspecialchars(format_date_local($checkInAt, 'M j, g:i A')) ?></div>
-                        <?php endif; ?>
+                    <td class="px-4 py-3.5 text-xs whitespace-nowrap">
+                      <?php if ($hasTimeIn): ?>
+                        <div class="space-y-1">
+                          <div>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                              <svg class="w-3 h-3 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+                              <span>Time-In</span>
+                              <?php if ($checkInAt !== ''): ?>
+                                <span class="text-[11px] font-normal text-emerald-600/80">• <?= htmlspecialchars(format_date_local($checkInAt, 'g:i A')) ?></span>
+                              <?php endif; ?>
+                            </span>
+                          </div>
+                          <div>
+                            <?php if ($hasTimeOut): ?>
+                              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200/80">
+                                <svg class="w-3 h-3 text-sky-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg>
+                                <span>Time-Out</span>
+                                <span class="text-[11px] font-normal text-sky-600/80">• <?= htmlspecialchars(format_date_local($checkOutAt, 'g:i A')) ?></span>
+                              </span>
+                            <?php else: ?>
+                              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-500 border border-zinc-200/60">No time-out</span>
+                            <?php endif; ?>
+                          </div>
+                        </div>
                       <?php elseif ($sessionClosed): ?>
-                        <span class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">Absent</span>
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200/80">
+                          <svg class="w-3 h-3 text-amber-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                          Absent
+                        </span>
                       <?php else: ?>
-                        <span class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-bold text-zinc-500">No record</span>
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-50 text-zinc-400 border border-zinc-200/50">No record</span>
                       <?php endif; ?>
                     </td>
                   <?php endforeach; ?>
                   <?php if ($canResetAttendance): ?>
-                  <td class="px-4 py-4">
-                    <button class="btnResetAttendance rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition" data-id="<?= htmlspecialchars($registrationId) ?>">
-                      <?= htmlspecialchars($resetButtonLabel) ?>
-                    </button>
+                  <td class="px-4 py-3.5 whitespace-nowrap text-right">
+                    <?php if ($nextResetHasIn): ?>
+                      <button
+                        type="button"
+                        class="btnResetAttendance inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200/80 hover:bg-amber-100 hover:border-amber-300 active:scale-95 transition-all shadow-2xs cursor-pointer"
+                        data-id="<?= htmlspecialchars($registrationId) ?>"
+                        data-session-id="<?= htmlspecialchars($nextResetSessionId) ?>"
+                        data-confirm="<?= htmlspecialchars($nextResetConfirm) ?>"
+                      >
+                        <svg class="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                        <span><?= htmlspecialchars($nextResetLabel) ?></span>
+                      </button>
+                    <?php endif; ?>
                   </td>
                   <?php endif; ?>
                 </tr>
@@ -1035,18 +1471,23 @@ if ($usesSessions) {
 
       document.querySelectorAll('.btnResetAttendance').forEach(btn => {
         btn.addEventListener('click', async () => {
-          const ok = confirm(<?= json_encode($resetConfirmMessage) ?>);
+          const confirmText = (btn.dataset.confirm || <?= json_encode($resetConfirmMessage) ?>).trim();
+          const ok = confirm(confirmText);
           if (!ok) return;
 
           btn.disabled = true;
           try {
+            const payload = {
+              registration_id: btn.dataset.id,
+              csrf_token: window.CSRF_TOKEN
+            };
+            if ((btn.dataset.sessionId || '').trim() !== '') {
+              payload.session_id = btn.dataset.sessionId.trim();
+            }
             const res = await fetch('/api/participant_attendance_reset.php', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                registration_id: btn.dataset.id,
-                csrf_token: window.CSRF_TOKEN
-              })
+              body: JSON.stringify(payload)
             });
             const data = await res.json();
             if (!data.ok) throw new Error(data.error || 'Failed');
@@ -1960,7 +2401,10 @@ render_event_tabs([
           };
           $attLabel = $attStatusNorm !== '' ? ucfirst($attStatusNorm) : 'Unscanned';
 
-          $avatarUrl = storage_resolve_avatar_url((string) ($u['photo_url'] ?? ''));
+          $avatarUrl = storage_resolve_user_avatar_url(
+              (string) ($r['student_id'] ?? ''),
+              (string) ($u['photo_url'] ?? '')
+          );
           $studentId = (string) ($u['student_id'] ?? 'N/A');
           $email     = (string) ($u['email'] ?? '');
           $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $secName . ' ' . $yearLvl);
@@ -2004,13 +2448,25 @@ render_event_tabs([
             <td class="px-4 py-3 text-right">
               <div class="admin-btns justify-end">
                 <?php if ($canResetAttendance): ?>
+                <?php
+                  $rowHasOut = trim((string) $checkOutRaw) !== '';
+                  $rowHasIn = $attendanceCountsAsPresent(is_array($attendance) ? $attendance : null);
+                  $rowResetLabel = $rowHasOut ? '↺ Out' : '↺ In';
+                  $rowResetAria = $rowHasOut ? 'Reset Time-Out' : 'Reset Time-In';
+                  $rowResetConfirm = $rowHasOut
+                      ? 'Reset this participant time-out? Time-in will be kept. Reset again to clear time-in.'
+                      : 'Reset this participant time-in?';
+                ?>
+                <?php if ($rowHasIn): ?>
                 <button
                   type="button"
                   class="btnResetAttendance"
                   data-id="<?= htmlspecialchars($registrationId) ?>"
-                  title="<?= htmlspecialchars($resetConfirmMessage) ?>"
-                  aria-label="<?= htmlspecialchars($resetButtonLabel) ?>"
-                ><?= htmlspecialchars($resetButtonShort) ?></button>
+                  data-confirm="<?= htmlspecialchars($rowResetConfirm) ?>"
+                  title="<?= htmlspecialchars($rowResetConfirm) ?>"
+                  aria-label="<?= htmlspecialchars($rowResetAria) ?>"
+                ><?= htmlspecialchars($rowResetLabel) ?></button>
+                <?php endif; ?>
                 <?php endif; ?>
                 <?php if ($canRemoveParticipant): ?>
                 <button
@@ -2211,15 +2667,20 @@ render_event_tabs([
   <?php if ($canResetAttendance): ?>
   document.querySelectorAll('.btnResetAttendance').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const ok = confirm(<?= json_encode($resetConfirmMessage) ?>);
+      const confirmText = (btn.dataset.confirm || <?= json_encode($resetConfirmMessage) ?>).trim();
+      const ok = confirm(confirmText);
       if (!ok) return;
       btn.disabled = true;
       try {
         const registration_id = btn.dataset.id;
+        const payload = { registration_id, csrf_token: window.CSRF_TOKEN };
+        if ((btn.dataset.sessionId || '').trim() !== '') {
+          payload.session_id = btn.dataset.sessionId.trim();
+        }
         const res = await fetch('/api/participant_attendance_reset.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ registration_id, csrf_token: window.CSRF_TOKEN })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'Failed');
@@ -2288,6 +2749,21 @@ render_event_tabs([
           searchEmpty.classList.add('hidden');
         }
       }
+    });
+  }
+
+  const multiSearchInput = document.getElementById('multiSessionSearchInput');
+  if (multiSearchInput) {
+    multiSearchInput.addEventListener('input', (e) => {
+      const term = e.target.value.toLowerCase().trim();
+      document.querySelectorAll('.multi-participant-row').forEach(row => {
+        const searchable = row.dataset.search || '';
+        if (searchable.includes(term)) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
     });
   }
 </script>

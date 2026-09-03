@@ -292,11 +292,13 @@ try {
 
     if ($usesSessions) {
         $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
-        // Multi-seminar (2+): evaluation unlocks only after FINAL seminar time-out.
+        // Multi-seminar (2+): unlock only after last seminar (Seminar 2) time-out.
         $final = evaluation_final_seminar_for_event($eventId);
         if ($final !== null) {
             $finalId = trim((string) ($final['id'] ?? ''));
             $eventEligible = $finalId !== '' && in_array($finalId, $attendedSessionIds, true);
+        } elseif (evaluation_event_expects_two_seminars($eventId)) {
+            $eventEligible = false;
         } else {
             $eventEligible = count($attendedSessionIds) > 0;
         }

@@ -408,11 +408,13 @@ render_header('Event Details', $user);
                     <img src="<?= htmlspecialchars($coverImageUrl) ?>"
                         alt="<?= htmlspecialchars((string) ($event['title'] ?? 'Event cover')) ?>"
                         class="h-full w-full object-cover" loading="eager" decoding="async" />
-                    <div class="absolute inset-0 bg-gradient-to-t from-black/50 via-black/10 to-transparent"></div>
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent"></div>
                     <div class="absolute bottom-0 left-0 right-0 p-5 md:p-6">
-                        <h3 class="pc-shiny-title pc-shiny-title--on-dark text-lg md:text-xl font-black tracking-wide line-clamp-2">
-                            <?= htmlspecialchars((string) ($event['title'] ?? '')) ?>
-                        </h3>
+                        <div class="pc-event-cover-glass inline-block max-w-[min(100%,40rem)] rounded-2xl px-4 py-3 md:px-5 md:py-3.5">
+                            <h3 class="pc-shiny-title pc-shiny-title--on-dark text-lg md:text-xl font-black tracking-wide line-clamp-2">
+                                <?= htmlspecialchars((string) ($event['title'] ?? '')) ?>
+                            </h3>
+                        </div>
                     </div>
                 </div>
                 <?php endif; ?>

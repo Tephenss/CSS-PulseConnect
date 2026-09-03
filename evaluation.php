@@ -10,6 +10,7 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/evaluation_notifications.php';
+require_once __DIR__ . '/includes/evaluation_feedback_lib.php';
 
 $user = require_role(['student']);
 $studentId = (string) ($user['id'] ?? '');
@@ -46,7 +47,7 @@ function evaluation_page_fetch_event_questions(string $eventId, array $headers):
     $res = supabase_request('GET', $url, $headers);
     $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
 
-    return is_array($rows) ? $rows : [];
+    return evaluation_sort_questions_by_type(is_array($rows) ? $rows : []);
 }
 
 function evaluation_page_fetch_session_questions(array $sessionIds, array $headers): array
@@ -62,7 +63,7 @@ function evaluation_page_fetch_session_questions(array $sessionIds, array $heade
     $res = supabase_request('GET', $url, $headers);
     $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
 
-    return is_array($rows) ? $rows : [];
+    return evaluation_sort_questions_by_type(is_array($rows) ? $rows : []);
 }
 
 function evaluation_page_fetch_event_answers(string $eventId, string $studentId, array $headers): array
@@ -266,11 +267,13 @@ if ($usesSessions) {
         $sidebarHint = 'Seminar-based events will show one event feedback section plus the seminars you actually attended.';
     } else {
         $attendedSessionIds = evaluation_page_attended_session_ids($sessions, $studentId, $headers);
-        // Multi-seminar: form unlocks only after final seminar time-out.
+        // Multi-seminar: form unlocks only after Seminar 2 (last) time-out.
         $final = evaluation_final_seminar_for_event($activeEventId);
         $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
         if ($finalId !== '') {
             $hasAttendance = in_array($finalId, $attendedSessionIds, true);
+        } elseif (evaluation_event_expects_two_seminars($activeEventId)) {
+            $hasAttendance = false;
         } else {
             $hasAttendance = count($attendedSessionIds) > 0;
         }

@@ -26,10 +26,37 @@ function auth_verified_on_current_ph_day(?string $verifiedAtIso): bool
     }
 }
 
+function auth_session_trust_keys_match(string $trustKey): bool
+{
+    if ($trustKey !== '' && (string) ($_SESSION['web_daily_ok_trust'] ?? '') === $trustKey) {
+        return true;
+    }
+    $cachedKeys = $_SESSION['web_daily_ok_trust_keys'] ?? [];
+    if (!is_array($cachedKeys)) {
+        return false;
+    }
+    $requestKeys = function_exists('device_trust_request_keys') ? device_trust_request_keys() : [];
+    if ($trustKey !== '') {
+        $requestKeys[] = $trustKey;
+    }
+    foreach ($requestKeys as $key) {
+        $key = strtolower(trim((string) $key));
+        if ($key === '') {
+            continue;
+        }
+        foreach ($cachedKeys as $cached) {
+            if ($key === strtolower(trim((string) $cached))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 /**
- * After 12:00 AM Manila, force admin/teacher sessions to re-verify via login OTP.
- * Successful checks are cached in the PHP session (~10 min) so sidebar navigation
- * does not re-hit Supabase on every page load. Cache is IP-bound and day-bound.
+ * After 12:00 AM Manila, or on a new network, ask admin/teacher for OTP once.
+ * Do not destroy the login session — that looked like auto-logout after OTP.
  */
 function auth_enforce_daily_web_verification(array $user): void
 {
@@ -54,18 +81,24 @@ function auth_enforce_daily_web_verification(array $user): void
 
     $trustKey = device_trust_ip_key();
     $phDay = (new DateTimeImmutable('now', auth_ph_timezone()))->format('Y-m-d');
-    $cacheTtlSeconds = 600; // 10 minutes
+    $cacheTtlSeconds = 3600;
     $cachedUser = (string) ($_SESSION['web_daily_ok_user'] ?? '');
-    $cachedTrust = (string) ($_SESSION['web_daily_ok_trust'] ?? '');
     $cachedDay = (string) ($_SESSION['web_daily_ok_ph_day'] ?? '');
     $cachedUntil = (int) ($_SESSION['web_daily_ok_until'] ?? 0);
+    $graceUntil = (int) ($_SESSION['web_otp_grace_until'] ?? 0);
 
-    if (
-        $cachedUser === $userId
-        && $cachedTrust === $trustKey
-        && $cachedDay === $phDay
-        && $cachedUntil > time()
-    ) {
+    $sameUserDay = $cachedUser === $userId && $cachedDay === $phDay;
+
+    // Right after OTP, Hostinger may present a slightly different hop than the POST.
+    // Keep the session and persist whatever keys this GET shows.
+    if ($sameUserDay && $graceUntil > time()) {
+        if (function_exists('device_trust_upsert_request')) {
+            device_trust_upsert_request($userId, 'web');
+        }
+        return;
+    }
+
+    if ($sameUserDay && $cachedUntil > time() && auth_session_trust_keys_match($trustKey)) {
         return;
     }
 
@@ -105,13 +138,14 @@ function auth_enforce_daily_web_verification(array $user): void
         if ($verifiedToday) {
             $_SESSION['web_daily_ok_user'] = $userId;
             $_SESSION['web_daily_ok_trust'] = '';
+            $_SESSION['web_daily_ok_trust_keys'] = [];
             $_SESSION['web_daily_ok_ph_day'] = $phDay;
             $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
+            unset($_SESSION['web_needs_otp']);
             return;
         }
         $why = 'day';
     } else {
-        // Older Hostinger deploys may still have device_trust_is_trusted only.
         if (function_exists('device_trust_status')) {
             $trustStatus = device_trust_status($userId, $trustKey);
             if ($trustStatus === null) {
@@ -125,9 +159,12 @@ function auth_enforce_daily_web_verification(array $user): void
         if ($verifiedToday && $trustStatus === true) {
             $_SESSION['web_daily_ok_user'] = $userId;
             $_SESSION['web_daily_ok_trust'] = $trustKey;
+            $_SESSION['web_daily_ok_trust_keys'] = function_exists('device_trust_request_keys')
+                ? device_trust_request_keys()
+                : [$trustKey];
             $_SESSION['web_daily_ok_ph_day'] = $phDay;
             $_SESSION['web_daily_ok_until'] = time() + $cacheTtlSeconds;
-            // Touch once per successful revalidation window (not every sidebar click).
+            unset($_SESSION['web_needs_otp']);
             device_trust_touch($userId, $trustKey);
             return;
         }
@@ -138,44 +175,35 @@ function auth_enforce_daily_web_verification(array $user): void
     unset(
         $_SESSION['web_daily_ok_user'],
         $_SESSION['web_daily_ok_trust'],
+        $_SESSION['web_daily_ok_trust_keys'],
         $_SESSION['web_daily_ok_ph_day'],
-        $_SESSION['web_daily_ok_until']
+        $_SESSION['web_daily_ok_until'],
+        $_SESSION['web_otp_grace_until']
     );
 
-    $_SESSION = [];
-    if (ini_get('session.use_cookies')) {
-        $params = session_get_cookie_params();
-        setcookie(session_name(), '', [
-            'expires' => time() - 42000,
-            'path' => (string) ($params['path'] ?? '/'),
-            'domain' => (string) ($params['domain'] ?? ''),
-            'secure' => (bool) ($params['secure'] ?? false),
-            'httponly' => (bool) ($params['httponly'] ?? true),
-            'samesite' => (string) ($params['samesite'] ?? 'Strict'),
-        ]);
-    }
-    session_destroy();
-
-    $why = isset($why) && in_array($why, ['day', 'ip'], true) ? $why : 'unknown';
-    error_log('auth_enforce_daily_web_verification: forcing reverify user=' . $userId . ' why=' . $why . ' trust=' . $trustKey);
-    header('Location: /login?reverify=1&why=' . rawurlencode($why));
+    $why = in_array($why, ['day', 'ip'], true) ? $why : 'unknown';
+    $_SESSION['web_needs_otp'] = $why;
+    error_log('auth_enforce_daily_web_verification: OTP required user=' . $userId . ' why=' . $why . ' trust=' . $trustKey);
+    header('Location: /login?step=verify&reverify=1&why=' . rawurlencode($why));
     exit;
 }
 
-function require_login(): array
+function require_login(bool $enforceDailyVerification = true): array
 {
     $user = current_user();
     if ($user === null) {
         header('Location: /login?unauth=1');
         exit;
     }
-    auth_enforce_daily_web_verification($user);
+    if ($enforceDailyVerification) {
+        auth_enforce_daily_web_verification($user);
+    }
     return $user;
 }
 
-function require_role(array $allowedRoles): array
+function require_role(array $allowedRoles, bool $enforceDailyVerification = true): array
 {
-    $user = require_login();
+    $user = require_login($enforceDailyVerification);
     $role = isset($user['role']) ? (string) $user['role'] : 'student';
     if (!in_array($role, $allowedRoles, true)) {
         http_response_code(403);

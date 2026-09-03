@@ -17,12 +17,10 @@ header('Expires: 0');
 
 $webTrustKey = device_trust_ip_key();
 
-// Forced re-verify / unauth must not bounce back to /home (that caused redirect loops).
-$forceLoginScreen = (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1')
+$needsReverify = !empty($_SESSION['web_needs_otp'])
+    || (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1');
+$forceLoginScreen = $needsReverify
     || (isset($_GET['unauth']) && (string) $_GET['unauth'] === '1');
-if ($forceLoginScreen && isset($_SESSION['user'])) {
-    $_SESSION = [];
-}
 
 if (!$forceLoginScreen && isset($_SESSION['user']) && is_array($_SESSION['user'])) {
     header('Location: /home');
@@ -41,16 +39,17 @@ $old = [
 $challenge = (isset($_SESSION['admin_login_challenge']) && is_array($_SESSION['admin_login_challenge']))
     ? $_SESSION['admin_login_challenge']
     : null;
-$isVerificationStep = isset($_GET['step']) && (string) $_GET['step'] === 'verify';
+$isVerificationStep = (isset($_GET['step']) && (string) $_GET['step'] === 'verify')
+    || $needsReverify;
 
-if (isset($_GET['reverify']) && (string) $_GET['reverify'] === '1') {
-    $why = strtolower(trim((string) ($_GET['why'] ?? '')));
+if ($needsReverify) {
+    $why = strtolower(trim((string) ($_GET['why'] ?? (string) ($_SESSION['web_needs_otp'] ?? ''))));
     if ($why === 'ip') {
-        $info = 'New network/IP detected — verify again to continue. (This is not the 12:00 AM Manila daily reset.)';
+        $info = 'New network detected — enter the code once to trust this connection.';
     } elseif ($why === 'day') {
-        $info = 'New day after 12:00 AM (Manila) — verify again to continue.';
+        $info = 'New day after 12:00 AM (Manila) — verify once to continue.';
     } else {
-        $info = 'Verification required again — new day (12:00 AM Manila) or new network/IP detected.';
+        $info = 'Verification required — new day (12:00 AM Manila) or a new network.';
     }
 }
 
@@ -230,8 +229,8 @@ function admin_login_establish_user_session(string $userId, string $fullName, st
 }
 
 /**
- * Seed the same short-lived gate cache used by auth_enforce_daily_web_verification
- * so /home does not race-logout right after a successful OTP (trust upsert lag / IP glitch).
+ * Seed the gate cache used by auth_enforce_daily_web_verification
+ * so /home does not race-logout right after a successful OTP (Hostinger hop / IP glitch).
  */
 function admin_login_seed_daily_ok_cache(string $userId, string $trustKey): void
 {
@@ -240,10 +239,17 @@ function admin_login_seed_daily_ok_cache(string $userId, string $trustKey): void
         return;
     }
     $phDay = (new DateTimeImmutable('now', admin_login_ph_timezone()))->format('Y-m-d');
+    $keys = function_exists('device_trust_request_keys') ? device_trust_request_keys() : [];
+    if ($trustKey !== '' && !in_array($trustKey, $keys, true)) {
+        array_unshift($keys, $trustKey);
+    }
     $_SESSION['web_daily_ok_user'] = $userId;
     $_SESSION['web_daily_ok_trust'] = $trustKey;
+    $_SESSION['web_daily_ok_trust_keys'] = $keys;
     $_SESSION['web_daily_ok_ph_day'] = $phDay;
-    $_SESSION['web_daily_ok_until'] = time() + 600;
+    $_SESSION['web_daily_ok_until'] = time() + 3600;
+    $_SESSION['web_otp_grace_until'] = time() + 1800;
+    unset($_SESSION['web_needs_otp']);
 }
 
 function admin_login_resend_cooldown_seconds(): int
@@ -473,6 +479,14 @@ function admin_login_issue_challenge(
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    $sessionUser = (isset($_SESSION['user']) && is_array($_SESSION['user'])) ? $_SESSION['user'] : null;
+    $sessionUserId = is_array($sessionUser) ? trim((string) ($sessionUser['id'] ?? '')) : '';
+
+    if ($challenge !== null && $sessionUserId !== '' && trim((string) ($challenge['id'] ?? '')) !== $sessionUserId) {
+        unset($_SESSION['admin_login_challenge']);
+        $challenge = null;
+    }
+
     if ($challenge !== null && !$isVerificationStep) {
         admin_login_delete_code((string) ($challenge['id'] ?? ''));
         unset($_SESSION['admin_login_challenge']);
@@ -481,9 +495,27 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             header('Location: /login');
             exit;
         }
-    } elseif ($challenge === null && $isVerificationStep) {
+    } elseif ($challenge === null && $isVerificationStep && $sessionUser === null) {
         header('Location: /login');
         exit;
+    }
+
+    if ($sessionUser !== null && $needsReverify && $challenge === null) {
+        $issueError = null;
+        $issueInfo = null;
+        $issueRole = admin_login_normalize_staff_role((string) ($sessionUser['role'] ?? ''))
+            ?? admin_login_fetch_staff_role($sessionUserId)
+            ?? 'admin';
+        $gateWhy = strtolower(trim((string) ($_GET['why'] ?? (string) ($_SESSION['web_needs_otp'] ?? ''))));
+        $gateReason = $gateWhy === 'day' ? 'daily' : 'new_ip';
+        if (admin_login_issue_challenge($sessionUser, $issueError, $issueInfo, $issueRole, $gateReason)) {
+            $challenge = $_SESSION['admin_login_challenge'] ?? $challenge;
+            if (is_string($issueInfo) && $issueInfo !== '') {
+                $info = $issueInfo;
+            }
+        } elseif (is_string($issueError) && $issueError !== '') {
+            $error = $issueError;
+        }
     }
 }
 
@@ -588,12 +620,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     error_log('OTP daily verification store failed: ' . $persistEx->getMessage());
                                 }
                                 try {
-                                    $trustRes = device_trust_upsert(
-                                        $verifiedUserId,
-                                        $webTrustKey,
-                                        'web',
-                                        'ip:' . device_trust_client_ip()
-                                    );
+                                    $trustRes = device_trust_upsert_request($verifiedUserId, 'web');
                                     if (!($trustRes['ok'] ?? false)) {
                                         error_log(
                                             'OTP device trust upsert failed user=' . $verifiedUserId
@@ -604,6 +631,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     error_log('OTP device trust upsert exception: ' . $trustEx->getMessage());
                                 }
 
+                                session_write_close();
                                 header('Location: /home');
                                 exit;
                             }
@@ -696,12 +724,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $verifiedToday = admin_login_has_valid_daily_verification($userId);
                                 $trustedIp = device_trust_is_trusted($userId, $webTrustKey);
 
-                                // Same day + same IP → skip OTP (any browser on that IP is fine).
-                                // New day (12AM Manila) OR new IP → verify again.
+                                // Same day + same network → skip OTP.
+                                // New day (12AM Manila) OR new network → OTP once, then that network is trusted.
                                 if ($verifiedToday && $trustedIp) {
-                                    device_trust_touch($userId, $webTrustKey);
+                                    device_trust_upsert_request($userId, 'web');
                                     admin_login_establish_user_session($userId, $fullName, $userEmail, $role);
                                     admin_login_seed_daily_ok_cache($userId, $webTrustKey);
+                                    session_write_close();
                                     header('Location: /home');
                                     exit;
                                 }
@@ -743,7 +772,7 @@ $roleLabel = ($challenge && ($challenge['role'] ?? '') === 'teacher') ? 'teacher
 $roleLabelCap = ucfirst($roleLabel);
 $gateReason = is_array($challenge) ? strtolower(trim((string) ($challenge['gate_reason'] ?? ''))) : '';
 $gateReasonMessage = match ($gateReason) {
-    'new_ip' => 'New network/IP detected — verify once to trust this connection.',
+    'new_ip' => 'New network detected — verify once to trust this connection.',
     'daily' => 'Daily security check — verification resets every day at 12:00 AM (Manila).',
     default => 'Enter the 6-digit code sent to your email to continue.',
 };
@@ -761,9 +790,9 @@ if ($isVerificationMode && is_array($challenge)) {
 
 <head>
     <meta charset="utf-8" />
+    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CCS PulseConnect — Login</title>
-    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <link rel="stylesheet" href="/assets/css/tailwind.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/tailwind.css') ?>" />
     <link rel="stylesheet" href="/assets/css/app.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/app.css') ?>" />
     <link rel="stylesheet" href="/assets/css/auth.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/auth.css') ?>" />

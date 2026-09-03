@@ -33,48 +33,104 @@ if (!function_exists('student_roster_parse_full_name')) {
     function student_roster_parse_full_name(string $raw): array
     {
         $raw = trim(preg_replace('/\s+/', ' ', $raw) ?? $raw);
+        $suffixRe = '(JR\.?|SR\.?|II|III|IV|V)';
         $suffixes = ['JR', 'JR.', 'SR', 'SR.', 'II', 'III', 'IV', 'V'];
+
+        $normSuffix = static function (string $tok): string {
+            return rtrim(strtoupper(trim($tok)), '.');
+        };
+
+        $pack = static function (string $first, string $middle, string $last, string $suffix): array {
+            return [
+                'first_name' => trim($first),
+                'middle_name' => trim($middle),
+                'last_name' => trim($last),
+                'suffix' => trim($suffix),
+            ];
+        };
+
+        $splitGiven = static function (string $rest): array {
+            $restParts = preg_split('/\s+/', trim($rest)) ?: [];
+            $first = (string) ($restParts[0] ?? '');
+            $middle = trim(implode(' ', array_slice($restParts, 1)));
+            return [$first, $middle];
+        };
+
+        // LAST, JR, FIRST MIDDLE  (BSCS: "BASCA,JR, SANDRO")
+        if (preg_match('/^(.+?),\s*' . $suffixRe . '\s*,\s*(.+)$/iu', $raw, $m)) {
+            [$first, $middle] = $splitGiven((string) $m[3]);
+            return $pack($first, $middle, (string) $m[1], $normSuffix((string) $m[2]));
+        }
+
         $suffix = '';
         $parts = preg_split('/\s+/', $raw) ?: [];
         if ($parts !== []) {
             $lastTok = strtoupper(rtrim((string) end($parts), ','));
             if (in_array($lastTok, $suffixes, true)) {
-                $suffix = (string) array_pop($parts);
+                $suffix = $normSuffix((string) array_pop($parts));
                 $raw = trim(implode(' ', $parts));
             }
         }
 
         if (str_contains($raw, ',')) {
             [$last, $rest] = array_pad(array_map('trim', explode(',', $raw, 2)), 2, '');
-            $restParts = preg_split('/\s+/', $rest) ?: [];
-            $first = (string) ($restParts[0] ?? '');
-            $middle = trim(implode(' ', array_slice($restParts, 1)));
-            return [
-                'first_name' => $first,
-                'middle_name' => $middle,
-                'last_name' => $last,
-                'suffix' => $suffix,
-            ];
+            if (preg_match('/^(.+?)\s+' . $suffixRe . '\.?$/iu', $last, $sm)) {
+                $last = trim((string) $sm[1]);
+                $suffix = $normSuffix((string) $sm[2]);
+            }
+            [$first, $middle] = $splitGiven($rest);
+            return $pack($first, $middle, $last, $suffix);
         }
 
         $toks = preg_split('/\s+/', $raw) ?: [];
         if (count($toks) === 0) {
-            return ['first_name' => '', 'middle_name' => '', 'last_name' => '', 'suffix' => $suffix];
+            return $pack('', '', '', $suffix);
         }
         if (count($toks) === 1) {
-            return ['first_name' => $toks[0], 'middle_name' => '', 'last_name' => $toks[0], 'suffix' => $suffix];
+            return $pack($toks[0], '', $toks[0], $suffix);
         }
         if (count($toks) === 2) {
-            return ['first_name' => $toks[0], 'middle_name' => '', 'last_name' => $toks[1], 'suffix' => $suffix];
+            return $pack($toks[0], '', $toks[1], $suffix);
         }
         $first = $toks[0];
         $last = $toks[count($toks) - 1];
         $middle = trim(implode(' ', array_slice($toks, 1, -1)));
+        return $pack($first, $middle, $last, $suffix);
+    }
+}
+
+if (!function_exists('student_roster_infer_from_sheet_name')) {
+    /**
+     * Sheet tabs like "BSCS-DS 1A" carry program + year/block (no Year/Block columns).
+     *
+     * @return array{program:string,year:?int,block:string}
+     */
+    function student_roster_infer_from_sheet_name(string $sheetName): array
+    {
+        $n = strtoupper(trim($sheetName));
+        $compact = preg_replace('/[^A-Z0-9]+/', '', $n) ?? $n;
+        $spaced = trim(preg_replace('/\s+/', ' ', preg_replace('/[^A-Z0-9]+/', ' ', $n) ?? $n) ?? $n);
+
+        $program = '';
+        if (preg_match('/BSIT.*BA|BA.*BSIT/', $compact) || preg_match('/\bBSIT\b.*\bBA\b/', $spaced)) {
+            $program = 'BSIT BA';
+        } elseif (preg_match('/BSIT.*SD|SD.*BSIT/', $compact) || preg_match('/\bBSIT\b.*\bSD\b/', $spaced)) {
+            $program = 'BSIT SD';
+        } elseif (str_contains($compact, 'BSCS') || str_contains($spaced, 'COMPUTER SCIENCE')) {
+            $program = 'BSCS';
+        }
+
+        $year = null;
+        $block = '';
+        if (preg_match('/([1-4])([A-F])$/', $compact, $m)) {
+            $year = (int) $m[1];
+            $block = $m[1] . $m[2];
+        }
+
         return [
-            'first_name' => $first,
-            'middle_name' => $middle,
-            'last_name' => $last,
-            'suffix' => $suffix,
+            'program' => $program,
+            'year' => $year,
+            'block' => $block,
         ];
     }
 }
@@ -101,7 +157,12 @@ if (!function_exists('student_roster_map_program')) {
         if (preg_match('/\bBSIT\s*BA\b/', $blob) || preg_match('/\bBUSINESS\s*ANALYTIC/', $blob)) {
             return ['course_code' => 'IT', 'program_label' => 'BSIT BA'];
         }
-        if ($cNorm === 'BSCS' || $cNorm === 'CS' || str_contains($blob, 'COMPUTER SCIENCE') || $sNorm === 'BSCS') {
+        if (
+            preg_match('/\bBSCS\b/', $blob)
+            || $cNorm === 'CS'
+            || str_contains($blob, 'COMPUTER SCIENCE')
+            || $sNorm === 'BSCS'
+        ) {
             return ['course_code' => 'CS', 'program_label' => 'BSCS'];
         }
         if ($cNorm === 'IT' || $cNorm === 'BSIT' || preg_match('/\bBSIT\b/', $blob)) {

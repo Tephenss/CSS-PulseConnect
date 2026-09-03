@@ -3,6 +3,113 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/event_sessions.php';
 
+/**
+ * Rating (Likert) questions first, then comment/text — stable by sort_order within type.
+ *
+ * @param list<array<string, mixed>> $questions
+ * @return list<array<string, mixed>>
+ */
+function evaluation_sort_questions_by_type(array $questions): array
+{
+    $indexed = [];
+    foreach ($questions as $i => $question) {
+        if (!is_array($question)) {
+            continue;
+        }
+        $indexed[] = ['q' => $question, 'i' => $i];
+    }
+
+    usort($indexed, static function (array $a, array $b): int {
+        $typeA = strtolower(trim((string) ($a['q']['field_type'] ?? 'text')));
+        $typeB = strtolower(trim((string) ($b['q']['field_type'] ?? 'text')));
+        $rankA = $typeA === 'rating' ? 0 : 1;
+        $rankB = $typeB === 'rating' ? 0 : 1;
+        if ($rankA !== $rankB) {
+            return $rankA <=> $rankB;
+        }
+        $sortA = (int) ($a['q']['sort_order'] ?? 0);
+        $sortB = (int) ($b['q']['sort_order'] ?? 0);
+        if ($sortA !== $sortB) {
+            return $sortA <=> $sortB;
+        }
+        return $a['i'] <=> $b['i'];
+    });
+
+    return array_values(array_map(static fn (array $row): array => $row['q'], $indexed));
+}
+
+/**
+ * Rewrite sort_order so DB order matches rating-then-comment display order.
+ *
+ * @param 'evaluation_questions'|'event_session_evaluation_questions' $table
+ */
+function evaluation_renormalize_question_sort_orders(
+    string $table,
+    string $filterColumn,
+    string $filterValue,
+    array $headers
+): void {
+    $filterColumn = trim($filterColumn);
+    $filterValue = trim($filterValue);
+    if ($filterColumn === '' || $filterValue === '') {
+        return;
+    }
+    if (!in_array($table, ['evaluation_questions', 'event_session_evaluation_questions'], true)) {
+        return;
+    }
+    if (!in_array($filterColumn, ['event_id', 'session_id'], true)) {
+        return;
+    }
+
+    $listUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+        . '?select=id,field_type,sort_order'
+        . '&' . $filterColumn . '=eq.' . rawurlencode($filterValue)
+        . '&order=sort_order.asc';
+    $listRes = supabase_request('GET', $listUrl, [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ]);
+    if (!$listRes['ok']) {
+        return;
+    }
+    $rows = json_decode((string) ($listRes['body'] ?? ''), true);
+    if (!is_array($rows) || count($rows) === 0) {
+        return;
+    }
+
+    $sorted = evaluation_sort_questions_by_type($rows);
+    $patchHeaders = [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: return=minimal',
+    ];
+
+    $order = 1;
+    foreach ($sorted as $question) {
+        $id = trim((string) ($question['id'] ?? ''));
+        if ($id === '') {
+            continue;
+        }
+        $current = (int) ($question['sort_order'] ?? -1);
+        if ($current === $order) {
+            $order++;
+            continue;
+        }
+        $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+            . '?id=eq.' . rawurlencode($id);
+        supabase_request(
+            'PATCH',
+            $patchUrl,
+            $patchHeaders,
+            json_encode(['sort_order' => $order], JSON_UNESCAPED_SLASHES)
+        );
+        $order++;
+    }
+}
+
 function feedback_attendance_counts_as_present(array $row): bool
 {
     $status = strtolower(trim((string) ($row['status'] ?? '')));
@@ -605,6 +712,7 @@ function evaluation_feedback_load_sections(
     array $sessionQuestionGroups
 ): array {
     $feedbackSections = [];
+    $eventQuestions = evaluation_sort_questions_by_type($eventQuestions);
 if ($usesSessions) {
         $sessionIds = [];
         foreach ($sessions as $session) {
@@ -740,6 +848,7 @@ if ($usesSessions) {
                     $sessionQuestionList[] = $item;
                 }
             }
+            $sessionQuestionList = evaluation_sort_questions_by_type($sessionQuestionList);
 
             $feedbackSections[] = feedback_section_summary(
                 build_session_display_name($session),

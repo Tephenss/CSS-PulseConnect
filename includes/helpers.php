@@ -8,6 +8,34 @@ function clean_string(string $v): string
     return trim(preg_replace('/\s+/', ' ', $v) ?? '');
 }
 
+function is_valid_person_name(string $name, bool $required = true, int $minLen = 2, int $maxLen = 60): bool
+{
+    if ($name === '') {
+        return !$required;
+    }
+    $len = mb_strlen($name);
+    if ($len < $minLen || $len > $maxLen) {
+        return false;
+    }
+    if (preg_match('/\d/u', $name)) {
+        return false;
+    }
+    return (bool) preg_match("/^[\\p{L}][\\p{L}\\s.'\\-]*$/u", $name);
+}
+
+function normalize_ph_contact_digits(string $raw): string
+{
+    return preg_replace('/\D+/', '', $raw) ?? '';
+}
+
+function is_valid_ph_contact(string $digits, bool $required = false): bool
+{
+    if ($digits === '') {
+        return !$required;
+    }
+    return strlen($digits) === 11 && ctype_digit($digits);
+}
+
 function clean_text(string $v): string
 {
     return trim($v);
@@ -45,6 +73,41 @@ function build_display_name(string $first, string $middle, string $last, string 
     }
 
     return $base;
+}
+
+function password_policy_error(): string
+{
+    return 'Use 8+ chars with upper, lower, number, and symbol.';
+}
+
+function password_policy_score(string $value): int
+{
+    $score = 0;
+    if (mb_strlen($value) >= 8) {
+        $score++;
+    }
+    if (preg_match('/[A-Z]/', $value)) {
+        $score++;
+    }
+    if (preg_match('/[a-z]/', $value)) {
+        $score++;
+    }
+    if (preg_match('/\d/', $value)) {
+        $score++;
+    }
+    if (preg_match('/[^A-Za-z0-9]/', $value)) {
+        $score++;
+    }
+    return $score;
+}
+
+function is_strong_password(string $value): bool
+{
+    return mb_strlen($value) >= 8
+        && preg_match('/[A-Z]/', $value) === 1
+        && preg_match('/[a-z]/', $value) === 1
+        && preg_match('/\d/', $value) === 1
+        && preg_match('/[^A-Za-z0-9]/', $value) === 1;
 }
 
 /**

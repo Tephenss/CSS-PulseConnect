@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
 }
 
-$user = require_role(['admin', 'teacher']);
+$user = require_role(['admin', 'teacher'], false);
 $lite = isset($_GET['lite']) && (string) $_GET['lite'] === '1';
 $skipCache = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
 $userId = trim((string) ($user['id'] ?? ''));

@@ -514,3 +514,76 @@ function build_session_display_name(array $session, ?string $fallback = null): s
 
     return $fallback !== null && trim($fallback) !== '' ? $fallback : 'Seminar';
 }
+
+function event_session_parse_program_time(mixed $raw): ?DateTimeImmutable
+{
+    $text = trim((string) $raw);
+    if ($text === '') {
+        return null;
+    }
+    if (function_exists('parse_iso_datetime')) {
+        $parsed = parse_iso_datetime($text);
+        return $parsed instanceof DateTimeImmutable ? $parsed : null;
+    }
+    try {
+        return new DateTimeImmutable($text);
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/**
+ * True when $a is later in the event program than $b (Seminar 2 after Seminar 1).
+ * Sequence wins over "latest end_at" so a shared end time never treats Seminar 1 as final.
+ */
+function event_session_is_later_in_program(array $a, array $b): bool
+{
+    $sortA = isset($a['sort_order']) ? (int) $a['sort_order'] : -1;
+    $sortB = isset($b['sort_order']) ? (int) $b['sort_order'] : -1;
+    if ($sortA !== $sortB) {
+        return $sortA > $sortB;
+    }
+
+    $noA = isset($a['session_no']) ? (int) $a['session_no'] : -1;
+    $noB = isset($b['session_no']) ? (int) $b['session_no'] : -1;
+    if ($noA !== $noB) {
+        return $noA > $noB;
+    }
+
+    $startA = event_session_parse_program_time($a['start_at'] ?? null);
+    $startB = event_session_parse_program_time($b['start_at'] ?? null);
+    if ($startA instanceof DateTimeImmutable && $startB instanceof DateTimeImmutable && $startA != $startB) {
+        return $startA > $startB;
+    }
+
+    $endA = event_session_parse_program_time($a['end_at'] ?? null);
+    $endB = event_session_parse_program_time($b['end_at'] ?? null);
+    if ($endA instanceof DateTimeImmutable && $endB instanceof DateTimeImmutable && $endA != $endB) {
+        return $endA > $endB;
+    }
+
+    return false;
+}
+
+/**
+ * Last seminar in program order (Seminar 2 on a two-seminar event).
+ *
+ * @return array<string, mixed>|null
+ */
+function event_sessions_last(array $sessions): ?array
+{
+    $last = null;
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        if (trim((string) ($session['id'] ?? '')) === '') {
+            continue;
+        }
+        if ($last === null || event_session_is_later_in_program($session, $last)) {
+            $last = $session;
+        }
+    }
+
+    return $last;
+}

@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
 }
 
-$user = require_role(['admin', 'teacher']);
+$user = require_role(['admin', 'teacher'], false);
 $limit = isset($_GET['limit']) ? max(1, min(100, (int) $_GET['limit'])) : 10;
 $userId = trim((string) ($user['id'] ?? ''));
 $role = trim((string) ($user['role'] ?? ''));

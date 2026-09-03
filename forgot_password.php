@@ -19,12 +19,13 @@ csrf_ensure_token();
 
 <head>
     <meta charset="utf-8" />
+    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CCS PulseConnect — Forgot Password</title>
-    <?php require_once __DIR__ . '/includes/favicon.php'; render_favicon_tags(); ?>
     <link rel="stylesheet" href="/assets/css/tailwind.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/tailwind.css') ?>" />
     <link rel="stylesheet" href="/assets/css/app.css" />
-    <link rel="stylesheet" href="/assets/css/auth.css" />
+    <link rel="stylesheet" href="/assets/css/auth.css?v=<?= (int) @filemtime(__DIR__ . '/assets/css/auth.css') ?>" />
+    <script src="/assets/js/password-strength.js?v=<?= (int) @filemtime(__DIR__ . '/assets/js/password-strength.js') ?>"></script>
 </head>
 
 <body class="min-h-screen bg-zinc-950 text-zinc-100 auth-login-bg">
@@ -107,9 +108,24 @@ csrf_ensure_token();
                             id="fpNewPassword"
                             type="password"
                             class="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-700"
-                            placeholder="At least 8 characters"
+                            placeholder="8+ chars, upper, lower, number, symbol"
                             autocomplete="new-password"
                         />
+                        <div id="fp-new-meter" class="pw-meter mt-2 space-y-1.5">
+                          <div class="flex items-center justify-between gap-2">
+                            <div data-pw-bar class="h-1.5 flex-1 rounded-full bg-zinc-800 overflow-hidden">
+                              <div data-pw-fill class="h-full w-0 rounded-full transition-all"></div>
+                            </div>
+                            <span data-pw-label class="text-[10px] font-black uppercase tracking-wider min-w-[3.5rem] text-right"></span>
+                          </div>
+                          <ul class="grid grid-cols-1 gap-0.5 text-[10px] text-zinc-500">
+                            <li data-pw-rule="len">8+ characters</li>
+                            <li data-pw-rule="upper">Uppercase letter</li>
+                            <li data-pw-rule="lower">Lowercase letter</li>
+                            <li data-pw-rule="digit">Number</li>
+                            <li data-pw-rule="special">Symbol</li>
+                          </ul>
+                        </div>
 
                         <div class="h-4"></div>
 
@@ -234,8 +250,8 @@ csrf_ensure_token();
             hideMessages();
             const newPassword = (document.getElementById('fpNewPassword').value || '');
             const confirmPassword = (document.getElementById('fpConfirmPassword').value || '');
-            if (newPassword.length < 8) {
-                showError('Password must be at least 8 characters.');
+            if (!window.PulsePassword || !PulsePassword.isStrong(newPassword)) {
+                showError((window.PulsePassword && PulsePassword.error) || 'Use 8+ chars with upper, lower, number, and symbol.');
                 return;
             }
             if (newPassword !== confirmPassword) {
@@ -297,6 +313,10 @@ csrf_ensure_token();
             requestAnimationFrame(animateBg);
         }
         animateBg();
+
+        if (window.PulsePassword && typeof PulsePassword.bindMeter === 'function') {
+            PulsePassword.bindMeter(document.getElementById('fpNewPassword'), document.getElementById('fp-new-meter'));
+        }
     </script>
 </body>
 

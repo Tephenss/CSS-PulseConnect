@@ -125,26 +125,47 @@ if ($role !== 'admin' && !($role === 'teacher' && $isCreator)) {
 }
 
 $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-if (function_exists('attendance_lazy_clear_early_out')) {
-    try {
-        attendance_lazy_clear_early_out(
-            'events',
-            $eventId,
-            $event['early_out_enabled_at'] ?? null,
-            $nowUtc,
-            $readHeaders
-        );
-    } catch (Throwable $e) {
-        // Non-fatal.
+$requestedSessionId = trim((string) ($data['session_id'] ?? ''));
+
+$eventSessionsPath = __DIR__ . '/../includes/event_sessions.php';
+if (is_file($eventSessionsPath)) {
+    require_once $eventSessionsPath;
+}
+$sessions = function_exists('fetch_event_sessions')
+    ? fetch_event_sessions($eventId, $readHeaders)
+    : [];
+$usesSessions = is_array($sessions) && count($sessions) > 0;
+$sessionIds = [];
+foreach ($sessions as $sessionRow) {
+    if (!is_array($sessionRow)) {
+        continue;
+    }
+    $sid = trim((string) ($sessionRow['id'] ?? ''));
+    if ($sid !== '') {
+        $sessionIds[$sid] = true;
     }
 }
-if (function_exists('attendance_early_out_is_active')
-    && !attendance_early_out_is_active((string) ($event['early_out_enabled_at'] ?? ''), $nowUtc)) {
-    $event['early_out_enabled_at'] = null;
-}
 
-$isTimeoutPhase = participant_reset_is_timeout_phase($event, $nowUtc);
-$resetTarget = $isTimeoutPhase ? 'time_out' : 'time_in';
+$rowHasTimeIn = static function (?array $row): bool {
+    if (!is_array($row)) {
+        return false;
+    }
+    if (function_exists('attendance_has_valid_time_in')) {
+        return attendance_has_valid_time_in($row);
+    }
+    $status = strtolower(trim((string) ($row['status'] ?? '')));
+    if ($status === 'absent') {
+        return false;
+    }
+    if (trim((string) ($row['check_in_at'] ?? '')) !== '') {
+        return true;
+    }
+    return in_array($status, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true);
+};
+
+$rowHasTimeOut = static function (?array $row): bool {
+    return is_array($row) && trim((string) ($row['check_out_at'] ?? '')) !== '';
+};
 
 $ticketUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets?select=id,registration_id'
     . '&registration_id=eq.' . rawurlencode($registrationId)
@@ -166,47 +187,176 @@ if (!is_array($ticket) || empty($ticket['id'])) {
 $ticketId = (string) $ticket['id'];
 $nowIso = $nowUtc->format('c');
 
-if ($isTimeoutPhase) {
-    // Time-out phase (Early Out ON, or event already ended): clear time-out only.
-    $patchPayload = [
-        'check_out_at' => null,
-        'updated_at' => $nowIso,
-    ];
-    $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId)
+if ($usesSessions) {
+    if ($requestedSessionId !== '' && !isset($sessionIds[$requestedSessionId])) {
+        json_response(['ok' => false, 'error' => 'Seminar does not belong to this event.'], 400);
+    }
+
+    $sessionAttUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+        . '?select=id,session_id,registration_id,ticket_id,status,check_in_at,check_out_at,updated_at'
+        . '&registration_id=eq.' . rawurlencode($registrationId);
+    $sessionAttRes = supabase_request('GET', $sessionAttUrl, $readHeaders);
+    $sessionAttRows = json_decode((string) ($sessionAttRes['body'] ?? ''), true);
+    if (!is_array($sessionAttRows)) {
+        $sessionAttRows = [];
+    }
+
+    $target = null;
+    foreach ($sessionAttRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $sid = trim((string) ($row['session_id'] ?? ''));
+        if ($sid === '' || !isset($sessionIds[$sid])) {
+            continue;
+        }
+        if ($requestedSessionId !== '' && $sid !== $requestedSessionId) {
+            continue;
+        }
+        if ($target === null) {
+            $target = $row;
+            continue;
+        }
+        $targetOut = $rowHasTimeOut($target);
+        $rowOut = $rowHasTimeOut($row);
+        if ($rowOut && !$targetOut) {
+            $target = $row;
+            continue;
+        }
+        if ($rowOut === $targetOut) {
+            $rowUpdated = trim((string) ($row['updated_at'] ?? ''));
+            $targetUpdated = trim((string) ($target['updated_at'] ?? ''));
+            if ($rowUpdated !== '' && $rowUpdated > $targetUpdated) {
+                $target = $row;
+            }
+        }
+    }
+
+    if (!is_array($target) || empty($target['id'])) {
+        json_response(['ok' => false, 'error' => 'No seminar attendance to reset for this participant.'], 404);
+    }
+
+    $targetId = (string) $target['id'];
+    $targetSessionId = trim((string) ($target['session_id'] ?? ''));
+    $resetOut = $rowHasTimeOut($target);
+
+    if ($resetOut) {
+        $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?id=eq.' . rawurlencode($targetId)
+            . '&select=id,session_id,status,check_in_at,check_out_at';
+        $patchRes = supabase_request(
+            'PATCH',
+            $patchUrl,
+            $writeHeaders,
+            json_encode(['check_out_at' => null, 'updated_at' => $nowIso], JSON_UNESCAPED_SLASHES)
+        );
+        if (!$patchRes['ok']) {
+            json_response([
+                'ok' => false,
+                'error' => build_error($patchRes['body'] ?? null, (int) ($patchRes['status'] ?? 0), $patchRes['error'] ?? null, 'Time-out reset failed'),
+            ], 500);
+        }
+        $patchedRows = json_decode((string) $patchRes['body'], true);
+        json_response([
+            'ok' => true,
+            'reset_target' => 'time_out',
+            'session_id' => $targetSessionId,
+            'message' => 'Time-out cleared. Time-in is kept — reset again to clear time-in.',
+            'attendance' => is_array($patchedRows) && isset($patchedRows[0]) ? $patchedRows[0] : $target,
+        ], 200);
+    }
+
+    $deleteUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?id=eq.' . rawurlencode($targetId);
+    $deleteRes = supabase_request('DELETE', $deleteUrl, $readHeaders);
+    if (!$deleteRes['ok']) {
+        json_response([
+            'ok' => false,
+            'error' => build_error($deleteRes['body'] ?? null, (int) ($deleteRes['status'] ?? 0), $deleteRes['error'] ?? null, 'Time-in reset failed'),
+        ], 500);
+    }
+
+    $remainingOut = false;
+    $remainingIn = false;
+    foreach ($sessionAttRows as $row) {
+        if (!is_array($row) || (string) ($row['id'] ?? '') === $targetId) {
+            continue;
+        }
+        if ($rowHasTimeOut($row)) {
+            $remainingOut = true;
+        }
+        if ($rowHasTimeIn($row)) {
+            $remainingIn = true;
+        }
+    }
+
+    // Keep ticket-level attendance aligned only when no other seminar still has a scan.
+    if (!$remainingIn) {
+        $ticketPatch = [
+            'status' => 'unscanned',
+            'check_in_at' => null,
+            'check_out_at' => null,
+            'last_scanned_at' => null,
+            'last_scanned_by' => null,
+            'updated_at' => $nowIso,
+        ];
+        supabase_request(
+            'PATCH',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId),
+            $writeHeaders,
+            json_encode($ticketPatch, JSON_UNESCAPED_SLASHES)
+        );
+    } elseif (!$remainingOut) {
+        supabase_request(
+            'PATCH',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId),
+            $writeHeaders,
+            json_encode(['check_out_at' => null, 'updated_at' => $nowIso], JSON_UNESCAPED_SLASHES)
+        );
+    }
+
+    json_response([
+        'ok' => true,
+        'reset_target' => 'time_in',
+        'session_id' => $targetSessionId,
+        'message' => 'Time-in cleared for this seminar. Other seminars are unchanged.',
+        'attendance' => null,
+    ], 200);
+}
+
+$attUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
+    . '?select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by'
+    . '&ticket_id=eq.' . rawurlencode($ticketId)
+    . '&limit=1';
+$attRes = supabase_request('GET', $attUrl, $readHeaders);
+$attRows = json_decode((string) ($attRes['body'] ?? ''), true);
+$attendance = is_array($attRows) && isset($attRows[0]) && is_array($attRows[0]) ? $attRows[0] : null;
+if (!is_array($attendance)) {
+    json_response(['ok' => false, 'error' => 'No attendance record to reset'], 404);
+}
+
+if ($rowHasTimeOut($attendance)) {
+    $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?id=eq.' . rawurlencode((string) $attendance['id'])
         . '&select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by';
-    $patchRes = supabase_request('PATCH', $patchUrl, $writeHeaders, json_encode($patchPayload, JSON_UNESCAPED_SLASHES));
+    $patchRes = supabase_request(
+        'PATCH',
+        $patchUrl,
+        $writeHeaders,
+        json_encode(['check_out_at' => null, 'updated_at' => $nowIso], JSON_UNESCAPED_SLASHES)
+    );
     if (!$patchRes['ok']) {
         json_response([
             'ok' => false,
             'error' => build_error($patchRes['body'] ?? null, (int) ($patchRes['status'] ?? 0), $patchRes['error'] ?? null, 'Time-out reset failed'),
         ], 500);
     }
-
     $patchedRows = json_decode((string) $patchRes['body'], true);
-    $attendance = is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0]) ? $patchedRows[0] : null;
-    if (!is_array($attendance)) {
-        json_response(['ok' => false, 'error' => 'No attendance record to reset for time-out'], 404);
-    }
-
-    // Seminar rows: clear check_out_at when column exists.
-    $sessionPatchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-        . '?registration_id=eq.' . rawurlencode($registrationId);
-    supabase_request(
-        'PATCH',
-        $sessionPatchUrl,
-        $writeHeaders,
-        json_encode(['check_out_at' => null, 'updated_at' => $nowIso], JSON_UNESCAPED_SLASHES)
-    );
-
     json_response([
         'ok' => true,
-        'reset_target' => $resetTarget,
-        'message' => 'Time-out cleared. Student remains checked in and can be timed out again.',
-        'attendance' => $attendance,
+        'reset_target' => 'time_out',
+        'message' => 'Time-out cleared. Time-in is kept — reset again to clear time-in.',
+        'attendance' => is_array($patchedRows) && isset($patchedRows[0]) ? $patchedRows[0] : $attendance,
     ], 200);
 }
 
-// Time-in phase (event not ended, Early Out off): clear time-in (and any leftover time-out).
 $patchPayload = [
     'status' => 'unscanned',
     'check_in_at' => null,
@@ -215,70 +365,24 @@ $patchPayload = [
     'last_scanned_by' => null,
     'updated_at' => $nowIso,
 ];
-
-$patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId)
+$patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?id=eq.' . rawurlencode((string) $attendance['id'])
     . '&select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by';
 $patchRes = supabase_request('PATCH', $patchUrl, $writeHeaders, json_encode($patchPayload, JSON_UNESCAPED_SLASHES));
 if (!$patchRes['ok']) {
     unset($patchPayload['check_out_at']);
-    $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?ticket_id=eq.' . rawurlencode($ticketId)
-        . '&select=id,ticket_id,status,check_in_at,last_scanned_at,last_scanned_by';
     $patchRes = supabase_request('PATCH', $patchUrl, $writeHeaders, json_encode($patchPayload, JSON_UNESCAPED_SLASHES));
 }
 if (!$patchRes['ok']) {
     json_response([
         'ok' => false,
-        'error' => build_error($patchRes['body'] ?? null, (int) ($patchRes['status'] ?? 0), $patchRes['error'] ?? null, 'Attendance reset failed'),
+        'error' => build_error($patchRes['body'] ?? null, (int) ($patchRes['status'] ?? 0), $patchRes['error'] ?? null, 'Time-in reset failed'),
     ], 500);
 }
-
 $patchedRows = json_decode((string) $patchRes['body'], true);
-$attendance = is_array($patchedRows) && isset($patchedRows[0]) && is_array($patchedRows[0]) ? $patchedRows[0] : null;
-
-if (!is_array($attendance)) {
-    $createPayload = [[
-        'ticket_id' => $ticketId,
-        'status' => 'unscanned',
-        'check_in_at' => null,
-        'check_out_at' => null,
-        'last_scanned_at' => null,
-        'last_scanned_by' => null,
-    ]];
-    $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,ticket_id,status,check_in_at,check_out_at,last_scanned_at,last_scanned_by';
-    $createRes = supabase_request('POST', $createUrl, $writeHeaders, json_encode($createPayload, JSON_UNESCAPED_SLASHES));
-    if (!$createRes['ok']) {
-        $createPayload = [[
-            'ticket_id' => $ticketId,
-            'status' => 'unscanned',
-            'check_in_at' => null,
-            'last_scanned_at' => null,
-            'last_scanned_by' => null,
-        ]];
-        $createUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance?select=id,ticket_id,status,check_in_at,last_scanned_at,last_scanned_by';
-        $createRes = supabase_request('POST', $createUrl, $writeHeaders, json_encode($createPayload, JSON_UNESCAPED_SLASHES));
-    }
-    if (!$createRes['ok']) {
-        json_response([
-            'ok' => false,
-            'error' => build_error($createRes['body'] ?? null, (int) ($createRes['status'] ?? 0), $createRes['error'] ?? null, 'Attendance reset failed'),
-        ], 500);
-    }
-
-    $createdRows = json_decode((string) $createRes['body'], true);
-    $attendance = is_array($createdRows) && isset($createdRows[0]) && is_array($createdRows[0]) ? $createdRows[0] : null;
-}
-
-if (!is_array($attendance)) {
-    json_response(['ok' => false, 'error' => 'Attendance reset failed'], 500);
-}
-
-$sessionResetUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-    . '?registration_id=eq.' . rawurlencode($registrationId);
-supabase_request('DELETE', $sessionResetUrl, $readHeaders);
 
 json_response([
     'ok' => true,
-    'reset_target' => $resetTarget,
-    'message' => 'Time-in cleared. Student can be checked in again.',
-    'attendance' => $attendance,
+    'reset_target' => 'time_in',
+    'message' => 'Time-in cleared. Student can be timed in again.',
+    'attendance' => is_array($patchedRows) && isset($patchedRows[0]) ? $patchedRows[0] : $attendance,
 ], 200);

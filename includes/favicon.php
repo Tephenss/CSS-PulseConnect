@@ -3,8 +3,38 @@ declare(strict_types=1);
 
 /**
  * Echo CCS favicon / apple-touch-icon link tags (cache-busted).
- * Prefer root /favicon.ico so Chrome shows CCS while the tab is still loading.
+ * Inline PNG first so the tab icon appears while HTML/CSS is still loading.
  */
+function favicon_inline_data_uri(): string
+{
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
+
+    $root = dirname(__DIR__);
+    $candidates = [
+        $root . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'favicon-32.png',
+        $root . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'favicon-48.png',
+        $root . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'CCS.png',
+    ];
+
+    foreach ($candidates as $path) {
+        if (!is_file($path)) {
+            continue;
+        }
+        $bytes = file_get_contents($path);
+        if ($bytes === false || $bytes === '') {
+            continue;
+        }
+        $cached = 'data:image/png;base64,' . base64_encode($bytes);
+        return $cached;
+    }
+
+    $cached = '';
+    return $cached;
+}
+
 function render_favicon_tags(): void
 {
     $root = dirname(__DIR__);
@@ -13,13 +43,17 @@ function render_favicon_tags(): void
         return is_file($full) ? (string) max(1, (int) @filemtime($full)) : '1';
     };
 
+    $inline = favicon_inline_data_uri();
+    if ($inline !== '') {
+        echo '<link rel="icon" type="image/png" href="' . htmlspecialchars($inline, ENT_QUOTES, 'UTF-8') . '"/>';
+    }
+
     $icoV = $versionFor('/favicon.ico');
     $png32 = '/assets/favicon-32.png';
     $png48 = '/assets/favicon-48.png';
     $apple = '/assets/apple-touch-icon.png';
     $fallback = '/assets/CCS.png';
 
-    // Root ICO first — browsers request this early (even before HTML finishes).
     if (is_file($root . DIRECTORY_SEPARATOR . 'favicon.ico')) {
         $icoHref = htmlspecialchars('/favicon.ico?v=' . $icoV, ENT_QUOTES, 'UTF-8');
         echo '<link rel="icon" href="' . $icoHref . '" sizes="any"/>';

@@ -16,6 +16,7 @@ require_once __DIR__ . '/../includes/event_sessions.php';
 require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/mobile_scan_write.php';
 require_once __DIR__ . '/../includes/evaluation_notifications.php';
+require_once __DIR__ . '/../includes/storage_signed.php';
 
 // Optional: time-out / early-out helpers (deploy includes/event_attendance_windows.php with this API).
 $attendanceWindowsPath = __DIR__ . '/../includes/event_attendance_windows.php';
@@ -240,6 +241,17 @@ function mobile_scan_participant_from_ticket(array $ticket, array $headers): arr
             if ($studentNo === '') {
                 $studentNo = trim((string) ($user['student_id'] ?? ''));
             }
+        }
+    }
+    if (function_exists('storage_resolve_user_avatar_url')) {
+        $signed = storage_resolve_user_avatar_url($userUuid, $photo, 14400);
+        if ($signed !== '') {
+            $photo = $signed;
+        }
+    } elseif ($photo !== '' && function_exists('storage_resolve_avatar_url')) {
+        $signed = storage_resolve_avatar_url($photo, 14400);
+        if ($signed !== '') {
+            $photo = $signed;
         }
     }
     return [
@@ -547,7 +559,17 @@ if ($source === 'session') {
             ? (string) $sessionContext['early_out_enabled_at']
             : null;
         try {
-            $sessionOutWin = attendance_check_out_window($sessionEndAt, $sessionEarlyOut, $scanAt);
+            $sessionStartAt = function_exists('parse_iso_datetime')
+                ? parse_iso_datetime((string) ($sessionContext['start_at'] ?? ''))
+                : mobile_scan_parse_iso((string) ($sessionContext['start_at'] ?? ''));
+            $sessionGrace = max(1, (int) ($sessionContext['scan_window_minutes'] ?? 30));
+            $sessionOutWin = attendance_check_out_window(
+                $sessionEndAt,
+                $sessionEarlyOut,
+                $scanAt,
+                $sessionStartAt,
+                $sessionGrace
+            );
             $sessionOutOpen = ($sessionOutWin['open'] ?? false) === true;
         } catch (Throwable $e) {
             error_log('session attendance_check_out_window: ' . $e->getMessage());
@@ -833,7 +855,19 @@ if (function_exists('attendance_check_out_window')) {
         $endAt = function_exists('parse_iso_datetime')
             ? parse_iso_datetime((string) ($event['end_at'] ?? ''))
             : mobile_scan_parse_iso((string) ($event['end_at'] ?? ''));
-        $outWin = attendance_check_out_window($endAt, isset($event['early_out_enabled_at']) ? (string) $event['early_out_enabled_at'] : null, $scanAt);
+        $eventStartAt = function_exists('parse_iso_datetime')
+            ? parse_iso_datetime((string) ($event['start_at'] ?? ''))
+            : mobile_scan_parse_iso((string) ($event['start_at'] ?? ''));
+        $eventGrace = function_exists('simple_event_grace_minutes')
+            ? simple_event_grace_minutes($event)
+            : max(1, (int) ($event['grace_time'] ?? 30));
+        $outWin = attendance_check_out_window(
+            $endAt,
+            isset($event['early_out_enabled_at']) ? (string) $event['early_out_enabled_at'] : null,
+            $scanAt,
+            $eventStartAt,
+            $eventGrace
+        );
         $outWinOpen = ($outWin['open'] ?? false) === true;
     } catch (Throwable $e) {
         error_log('attendance_check_out_window: ' . $e->getMessage());

@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/evaluation_feedback_lib.php';
 
 $user = require_role(['teacher']);
 $data = require_post_json();
@@ -104,5 +105,23 @@ if (!$res['ok']) {
 
 $rows = json_decode((string) $res['body'], true);
 $q = is_array($rows) && isset($rows[0]) ? $rows[0] : null;
+
+// Keep rating questions together, then comments (matches student form order).
+if ($sessionId !== '') {
+    evaluation_renormalize_question_sort_orders(
+        'event_session_evaluation_questions',
+        'session_id',
+        $sessionId,
+        $headers
+    );
+} elseif ($eventId !== '') {
+    evaluation_renormalize_question_sort_orders(
+        'evaluation_questions',
+        'event_id',
+        $eventId,
+        $headers
+    );
+}
+
 json_response(['ok' => true, 'question' => $q], 200);
 

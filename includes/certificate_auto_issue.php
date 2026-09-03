@@ -714,6 +714,58 @@ function certificate_auto_eval_is_complete(
 }
 
 /**
+ * True when this event is set up for certificates (linked template and/or code pool).
+ * Events without any cert setup should not mention certificates after evaluation.
+ *
+ * @param list<array<string, mixed>> $sessions
+ */
+function certificate_auto_event_has_setup(
+    string $eventId,
+    array $headers,
+    bool $usesSessions,
+    array $sessions
+): bool {
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return false;
+    }
+
+    if (certificate_auto_resolve_event_template_id($eventId, $headers) !== '') {
+        return true;
+    }
+
+    if ($usesSessions) {
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            $sid = trim((string) ($session['id'] ?? ''));
+            if ($sid !== '' && certificate_auto_resolve_session_template_id($sid, $headers) !== '') {
+                return true;
+            }
+        }
+    }
+
+    if (certificate_pool_has_any_code($eventId, null)) {
+        return true;
+    }
+
+    if ($usesSessions) {
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            $sid = trim((string) ($session['id'] ?? ''));
+            if ($sid !== '' && certificate_pool_has_any_code($eventId, $sid)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
  * @return array{ok:bool,issued:int,notified:bool,error?:string,skipped?:string}
  */
 function certificate_auto_issue_for_student(string $eventId, string $studentId, ?array $headers = null): array
@@ -741,6 +793,12 @@ function certificate_auto_issue_for_student(string $eventId, string $studentId, 
 
     $sessions = fetch_event_sessions($eventId, $headers);
     $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+
+    // No linked certificate / code pool — eval-only event; skip cert messaging.
+    if (!certificate_auto_event_has_setup($eventId, $headers, $usesSessions, $sessions)) {
+        return ['ok' => true, 'issued' => 0, 'notified' => false, 'skipped' => 'not_configured'];
+    }
+
     $writeHeaders = certificate_auto_write_headers();
     $issued = 0;
     $issuedBy = trim((string) ($event['created_by'] ?? '')) ?: null;

@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/student_roster.php';
 
 $user = require_role(['admin']);
+$currentAdminId = trim((string) ($user['id'] ?? ''));
 
 $headers = [
     'Accept: application/json',
@@ -314,19 +315,12 @@ render_header('Users & Roles', $user);
         Export Excel
       </a>
 
-      <!-- Teacher Actions Dropdown -->
-      <div class="relative group hidden" id="actionTeacher">
-        <button type="button" class="inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 text-white px-5 py-2.5 text-[13px] font-bold shadow-sm hover:bg-orange-700 transition-colors border border-orange-600">
+      <!-- Teacher add (no import) -->
+      <div class="hidden" id="actionTeacher">
+        <button type="button" id="btnOpenRegisterTeacher" class="inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 text-white px-5 py-2.5 text-[13px] font-bold shadow-sm hover:bg-orange-700 transition-colors border border-orange-600">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
           Add Teacher
-          <svg class="w-3.5 h-3.5 ml-1 opacity-70 cursor-pointer" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
         </button>
-        <div class="absolute right-0 top-full mt-2 w-48 rounded-xl bg-white border border-zinc-200 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all overflow-hidden transform origin-top-right group-hover:translate-y-0 translate-y-1">
-          <button type="button" id="btnOpenRegisterTeacher" class="w-full flex items-center gap-2 px-4 py-3 text-[13px] font-bold text-zinc-700 hover:bg-orange-50 hover:text-orange-700 border-b border-zinc-100 transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
-              Add Manually
-          </button>
-        </div>
       </div>
       
       <!-- Student Actions Dropdown -->
@@ -347,6 +341,14 @@ render_header('Users & Roles', $user);
           </button>
         </div>
       </div>
+
+      <!-- Admin add (no import) -->
+      <div class="hidden" id="actionAdmin">
+        <button type="button" id="btnOpenRegisterAdmin" class="inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 text-white px-5 py-2.5 text-[13px] font-bold shadow-sm hover:bg-orange-700 transition-colors border border-orange-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+          Add Admin
+        </button>
+      </div>
   </div>
 </div>
 
@@ -360,6 +362,19 @@ render_header('Users & Roles', $user);
     elseif ($r === 'admin') $adminCount++;
   }
   $studentTabCount = count($studentDirectory);
+  $studentCsCount = 0;
+  $studentItCount = 0;
+  foreach ($studentDirectory as $dirRow) {
+    if (!is_array($dirRow)) {
+      continue;
+    }
+    $prog = strtoupper(preg_replace('/\s+/', ' ', trim((string) ($dirRow['program'] ?? ''))) ?? '');
+    if ($prog === 'BSCS' || $prog === 'CS') {
+      $studentCsCount++;
+    } elseif ($prog !== '' && $prog !== '—' && (str_contains($prog, 'IT') || str_starts_with($prog, 'BSIT'))) {
+      $studentItCount++;
+    }
+  }
 ?>
 
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
@@ -427,10 +442,22 @@ render_header('Users & Roles', $user);
      </div>
        <span class="truncate">Student Management</span>
   </h3>
-  <div class="px-3.5 py-1.5 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center gap-2 shrink-0 self-start sm:self-auto">
-     <span class="text-[11px] font-bold text-zinc-600 uppercase tracking-wider">Total</span>
-       <span id="panelTotal" class="text-base font-bold text-zinc-900 leading-none"><?= (int) $studentTabCount ?></span>
+  <div class="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
+    <div class="px-3.5 py-1.5 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center gap-2">
+      <span class="text-[11px] font-bold text-zinc-600 uppercase tracking-wider">Total</span>
+      <span id="panelTotal" class="text-base font-bold text-zinc-900 leading-none"><?= (int) $studentTabCount ?></span>
     </div>
+    <div id="panelProgramCounts" class="flex flex-wrap items-center gap-2">
+      <div class="px-3.5 py-1.5 rounded-xl bg-sky-50 border border-sky-200 flex items-center gap-2">
+        <span class="text-[11px] font-bold text-sky-700 uppercase tracking-wider">CS</span>
+        <span id="panelCsCount" class="text-base font-bold text-sky-900 leading-none"><?= (int) $studentCsCount ?></span>
+      </div>
+      <div class="px-3.5 py-1.5 rounded-xl bg-violet-50 border border-violet-200 flex items-center gap-2">
+        <span class="text-[11px] font-bold text-violet-700 uppercase tracking-wider">IT</span>
+        <span id="panelItCount" class="text-base font-bold text-violet-900 leading-none"><?= (int) $studentItCount ?></span>
+      </div>
+    </div>
+  </div>
   </div>
   <div class="relative w-full max-w-xl">
     <svg style="left:12px;top:50%;transform:translateY(-50%);position:absolute;width:16px;height:16px;color:#a1a1aa;pointer-events:none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
@@ -521,13 +548,12 @@ render_header('Users & Roles', $user);
   #tableTeachers .users-dir-table col.c-t-middle { min-width: 120px; }
   #tableTeachers .users-dir-table col.c-t-email { min-width: 220px; }
   #tableTeachers .users-dir-table col.c-t-contact { min-width: 130px; }
-  #tableTeachers .users-dir-table col.c-t-grade { min-width: 100px; }
-  #tableTeachers .users-dir-table col.c-t-block { min-width: 120px; }
   #tableTeachers .users-dir-table col.c-t-actions { min-width: 96px; }
   #tableAdmins .users-dir-table col.c-a-surname { min-width: 140px; }
   #tableAdmins .users-dir-table col.c-a-first { min-width: 140px; }
   #tableAdmins .users-dir-table col.c-a-middle { min-width: 120px; }
   #tableAdmins .users-dir-table col.c-a-email { min-width: 240px; }
+  #tableAdmins .users-dir-table col.c-a-contact { min-width: 130px; }
   #tableAdmins .users-dir-table col.c-a-actions { min-width: 96px; }
 </style>
 
@@ -545,8 +571,6 @@ render_header('Users & Roles', $user);
           <col class="c-t-middle" />
           <col class="c-t-email" />
           <col class="c-t-contact" />
-          <col class="c-t-grade" />
-          <col class="c-t-block" />
           <col class="c-t-actions" />
         </colgroup>
         <thead class="bg-zinc-50 border-b border-zinc-200">
@@ -556,8 +580,6 @@ render_header('Users & Roles', $user);
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Middle Name</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Email</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Contact No.</th>
-            <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Year Level</th>
-            <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Block</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900 text-right">Actions</th>
           </tr>
         </thead>
@@ -568,44 +590,35 @@ render_header('Users & Roles', $user);
               $tFirst = trim((string) ($u['first_name'] ?? ''));
               $tMiddle = trim((string) ($u['middle_name'] ?? ''));
               $uid = (string) ($u['id'] ?? '');
-              
-              $secId = (string)($u['section_id'] ?? ''); 
-              $secNameRaw = $sectionMap[$secId] ?? '';
-              $bits = admin_users_format_section_bits($secNameRaw);
-              $gradeLvl = $bits['year'] !== '' ? $bits['year'] : '—';
-              $parsedBlock = $bits['section'] !== '' ? $bits['section'] : '—';
-              if (preg_match('/([1-4][A-F])$/i', $secNameRaw, $bm)) {
-                  $parsedBlock = strtoupper($bm[1]);
-              } elseif (strcasecmp($secNameRaw, 'IRREGULAR') === 0) {
-                  $parsedBlock = '--';
-              }
             ?>
             <tr class="hover:bg-zinc-50/80 transition-colors group user-row"
+              data-user-id="<?= htmlspecialchars($uid) ?>"
+              data-role="teacher"
               data-last-name="<?= htmlspecialchars($tLast) ?>"
               data-first-name="<?= htmlspecialchars($tFirst) ?>"
               data-middle-name="<?= htmlspecialchars($tMiddle) ?>"
-              data-email="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>">
+              data-suffix="<?= htmlspecialchars(trim((string) ($u['suffix'] ?? ''))) ?>"
+              data-email="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"
+              data-contact="<?= htmlspecialchars((string)($u['contact_number'] ?? '')) ?>">
               <td class="px-4 py-3"><span class="cell-clip font-bold text-zinc-900" title="<?= htmlspecialchars($tLast) ?>"><?= htmlspecialchars($tLast !== '' ? $tLast : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-semibold text-zinc-800" title="<?= htmlspecialchars($tFirst) ?>"><?= htmlspecialchars($tFirst !== '' ? $tFirst : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-medium text-zinc-600" title="<?= htmlspecialchars($tMiddle) ?>"><?= htmlspecialchars($tMiddle !== '' ? $tMiddle : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-medium text-zinc-500" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)(($u['email'] ?? '') !== '' ? $u['email'] : '—')) ?></span></td>
               <td class="px-4 py-3 cell-nowrap font-medium text-zinc-500"><?= htmlspecialchars((string)(($u['contact_number'] ?? '') !== '' ? $u['contact_number'] : '—')) ?></td>
-              <td class="px-4 py-3"><span class="cell-clip font-bold text-zinc-800" title="<?= htmlspecialchars($gradeLvl) ?>"><?= htmlspecialchars($gradeLvl) ?></span></td>
-              <td class="px-4 py-3"><span class="cell-clip font-bold text-zinc-800" title="<?= htmlspecialchars($parsedBlock) ?>"><?= htmlspecialchars($parsedBlock) ?></span></td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button type="button" class="p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit Teacher">
+                <div class="inline-flex items-center justify-end gap-1">
+                    <button type="button" class="btnEditStaff p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit teacher" aria-label="Edit teacher">
                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
                     </button>
-                    <button type="button" class="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-transparent hover:border-red-200" title="Archive User">
-                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/></svg>
+                    <button type="button" class="btnArchiveStaff p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-transparent hover:border-red-200" title="Move to Archive" aria-label="Move to Archive">
+                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                     </button>
                 </div>
               </td>
             </tr>
           <?php endforeach; ?>
           <?php if ($teacherCount === 0 || count($users) === 0): ?>
-            <tr><td colspan="8" class="px-6 py-16 text-center text-zinc-500">No teachers found.</td></tr>
+            <tr><td colspan="6" class="px-6 py-16 text-center text-zinc-500">No teachers found.</td></tr>
           <?php endif; ?>
         </tbody>
       </table>
@@ -706,6 +719,7 @@ render_header('Users & Roles', $user);
           <col class="c-a-first" />
           <col class="c-a-middle" />
           <col class="c-a-email" />
+          <col class="c-a-contact" />
           <col class="c-a-actions" />
         </colgroup>
         <thead class="bg-zinc-50 border-b border-zinc-200">
@@ -714,6 +728,7 @@ render_header('Users & Roles', $user);
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">First Name</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Middle Name</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Email</th>
+            <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900">Contact No.</th>
             <th scope="col" class="px-4 py-3.5 font-bold text-zinc-900 text-right">Actions</th>
           </tr>
         </thead>
@@ -723,23 +738,30 @@ render_header('Users & Roles', $user);
               $aLast = trim((string) ($u['last_name'] ?? ''));
               $aFirst = trim((string) ($u['first_name'] ?? ''));
               $aMiddle = trim((string) ($u['middle_name'] ?? ''));
+              $aId = trim((string) ($u['id'] ?? ''));
+              $isSelf = $currentAdminId !== '' && $aId === $currentAdminId;
             ?>
             <tr class="hover:bg-zinc-50/80 transition-colors group user-row"
+              data-user-id="<?= htmlspecialchars($aId) ?>"
+              data-role="admin"
               data-last-name="<?= htmlspecialchars($aLast) ?>"
               data-first-name="<?= htmlspecialchars($aFirst) ?>"
               data-middle-name="<?= htmlspecialchars($aMiddle) ?>"
-              data-email="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>">
+              data-suffix="<?= htmlspecialchars(trim((string) ($u['suffix'] ?? ''))) ?>"
+              data-email="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"
+              data-contact="<?= htmlspecialchars((string)($u['contact_number'] ?? '')) ?>">
               <td class="px-4 py-3"><span class="cell-clip font-bold text-zinc-900" title="<?= htmlspecialchars($aLast) ?>"><?= htmlspecialchars($aLast !== '' ? $aLast : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-semibold text-zinc-800" title="<?= htmlspecialchars($aFirst) ?>"><?= htmlspecialchars($aFirst !== '' ? $aFirst : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-medium text-zinc-600" title="<?= htmlspecialchars($aMiddle) ?>"><?= htmlspecialchars($aMiddle !== '' ? $aMiddle : '—') ?></span></td>
               <td class="px-4 py-3"><span class="cell-clip font-medium text-zinc-500" title="<?= htmlspecialchars((string)($u['email'] ?? '')) ?>"><?= htmlspecialchars((string)(($u['email'] ?? '') !== '' ? $u['email'] : '—')) ?></span></td>
+              <td class="px-4 py-3 cell-nowrap font-medium text-zinc-500"><?= htmlspecialchars((string)(($u['contact_number'] ?? '') !== '' ? $u['contact_number'] : '—')) ?></td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button type="button" class="p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit Admin">
+                <div class="inline-flex items-center justify-end gap-1">
+                    <button type="button" class="btnEditStaff p-2 rounded-xl text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition-colors border border-transparent hover:border-sky-200" title="Edit admin" aria-label="Edit admin">
                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
                     </button>
-                    <button type="button" class="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-transparent hover:border-red-200" title="Archive User">
-                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"/></svg>
+                    <button type="button" class="btnArchiveStaff p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-transparent hover:border-red-200<?= $isSelf ? ' opacity-40 cursor-not-allowed' : '' ?>" title="<?= $isSelf ? 'You cannot archive your own account' : 'Move to Archive' ?>" aria-label="Move to Archive" <?= $isSelf ? 'disabled' : '' ?>>
+                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                     </button>
                 </div>
               </td>
@@ -770,15 +792,15 @@ render_header('Users & Roles', $user);
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="sm:col-span-1">
           <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_first_name">First name</label>
-          <input id="rt_first_name" name="first_name" type="text" required autocomplete="given-name" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+          <input id="rt_first_name" name="first_name" type="text" required maxlength="60" autocomplete="given-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
         <div class="sm:col-span-1">
           <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_middle_name">Middle name <span class="text-zinc-400 font-normal">(optional)</span></label>
-          <input id="rt_middle_name" name="middle_name" type="text" autocomplete="additional-name" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+          <input id="rt_middle_name" name="middle_name" type="text" maxlength="60" autocomplete="additional-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
         <div class="sm:col-span-1">
           <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_last_name">Surname</label>
-          <input id="rt_last_name" name="last_name" type="text" required autocomplete="family-name" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+          <input id="rt_last_name" name="last_name" type="text" required maxlength="60" autocomplete="family-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
         <div class="sm:col-span-1">
           <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_suffix">Suffix <span class="text-zinc-400 font-normal">(optional)</span></label>
@@ -791,13 +813,111 @@ render_header('Users & Roles', $user);
           <input id="rt_email" name="email" type="email" required autocomplete="email" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
         <div>
-          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_contact">Contact Number</label>
-          <input id="rt_contact" name="contact_number" type="text" placeholder="09123456789" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="rt_contact">Contact Number <span class="text-zinc-400 font-normal">(11 digits)</span></label>
+          <input id="rt_contact" name="contact_number" type="text" inputmode="numeric" maxlength="11" pattern="[0-9]{11}" placeholder="09123456789" class="js-ph-contact w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
         </div>
       </div>
       <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-2">
         <button type="button" id="btnCancelRegisterTeacher" class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Cancel</button>
         <button type="submit" id="btnSubmitRegisterTeacher" class="rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-sky-700 border border-sky-600">Create teacher</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Register admin modal -->
+<div id="modalRegisterAdmin" class="fixed inset-0 z-[60] hidden items-center justify-center p-4 bg-zinc-900/50 backdrop-blur-sm" aria-hidden="true">
+  <div class="w-full max-w-md rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden" role="dialog" aria-labelledby="modalRegAdminTitle">
+    <div class="px-5 py-4 border-b border-zinc-200 flex items-center justify-between">
+      <h4 id="modalRegAdminTitle" class="text-lg font-bold text-zinc-900">Register admin</h4>
+      <button type="button" id="btnCloseRegisterAdmin" class="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 transition-colors" aria-label="Close">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="formRegisterAdmin" class="p-5 space-y-4 max-h-[min(70vh,520px)] overflow-y-auto">
+      <p class="text-sm text-zinc-600">
+        Creates a new account with role <span class="font-semibold text-orange-800">Admin</span>.
+        A temporary password will be auto-generated and emailed to the admin.
+        They should change it in <span class="font-semibold">Settings &gt; Change Password</span>.
+      </p>
+      <div id="regAdminErr" class="hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="sm:col-span-1">
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_first_name">First name</label>
+          <input id="ra_first_name" name="first_name" type="text" required maxlength="60" autocomplete="given-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div class="sm:col-span-1">
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_middle_name">Middle name <span class="text-zinc-400 font-normal">(optional)</span></label>
+          <input id="ra_middle_name" name="middle_name" type="text" maxlength="60" autocomplete="additional-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div class="sm:col-span-1">
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_last_name">Surname</label>
+          <input id="ra_last_name" name="last_name" type="text" required maxlength="60" autocomplete="family-name" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div class="sm:col-span-1">
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_suffix">Suffix <span class="text-zinc-400 font-normal">(optional)</span></label>
+          <input id="ra_suffix" name="suffix" type="text" autocomplete="honorific-suffix" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" placeholder="Jr., III" />
+        </div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_email">Email</label>
+          <input id="ra_email" name="email" type="email" required autocomplete="email" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="ra_contact">Contact Number <span class="text-zinc-400 font-normal">(11 digits)</span></label>
+          <input id="ra_contact" name="contact_number" type="text" inputmode="numeric" maxlength="11" pattern="[0-9]{11}" placeholder="09123456789" class="js-ph-contact w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+      </div>
+      <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-2">
+        <button type="button" id="btnCancelRegisterAdmin" class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+        <button type="submit" id="btnSubmitRegisterAdmin" class="rounded-xl bg-orange-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-orange-700 border border-orange-600">Create admin</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Edit teacher / admin modal -->
+<div id="modalEditStaff" class="fixed inset-0 z-[60] hidden items-center justify-center p-4 bg-zinc-900/50 backdrop-blur-sm" aria-hidden="true">
+  <div class="w-full max-w-md rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden" role="dialog" aria-labelledby="modalEditStaffTitle">
+    <div class="px-5 py-4 border-b border-zinc-200 flex items-center justify-between">
+      <h4 id="modalEditStaffTitle" class="text-lg font-bold text-zinc-900">Edit teacher</h4>
+      <button type="button" id="btnCloseEditStaff" class="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 transition-colors" aria-label="Close">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="formEditStaff" class="p-5 space-y-4 max-h-[min(70vh,520px)] overflow-y-auto">
+      <input type="hidden" id="st_user_id" name="user_id" value="" />
+      <div id="editStaffErr" class="hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_first_name">First name</label>
+          <input id="st_first_name" name="first_name" type="text" required maxlength="60" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_middle_name">Middle name <span class="text-zinc-400 font-normal">(optional)</span></label>
+          <input id="st_middle_name" name="middle_name" type="text" maxlength="60" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_last_name">Surname</label>
+          <input id="st_last_name" name="last_name" type="text" required maxlength="60" class="js-person-name w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_suffix">Suffix <span class="text-zinc-400 font-normal">(optional)</span></label>
+          <input id="st_suffix" name="suffix" type="text" maxlength="30" placeholder="Jr., III" class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_email">Email</label>
+          <input id="st_email" name="email" type="email" required class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-zinc-600 mb-1" for="st_contact">Contact Number <span class="text-zinc-400 font-normal">(11 digits)</span></label>
+          <input id="st_contact" name="contact_number" type="text" inputmode="numeric" maxlength="11" pattern="[0-9]{11}" placeholder="09123456789" class="js-ph-contact w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-400" />
+        </div>
+      </div>
+      <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-2">
+        <button type="button" id="btnCancelEditStaff" class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+        <button type="submit" id="btnSubmitEditStaff" class="rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-sky-700 border border-sky-600">Save changes</button>
       </div>
     </form>
   </div>
@@ -814,9 +934,14 @@ render_header('Users & Roles', $user);
     </div>
     <form id="formImportStudents" class="p-5 space-y-4">
       <p class="text-sm text-zinc-600">
-        Upload school CSV/XLSX matching Excel columns:
-        <span class="font-semibold text-zinc-800">Student No, Surname, First Name, Middle Name, Program, Year, Block</span>.
-        All sheets are imported (e.g. <code class="text-xs bg-zinc-100 px-1 rounded">BSIT-BA</code> and <code class="text-xs bg-zinc-100 px-1 rounded">BSIT-SD</code>).
+        Upload school CSV/XLSX. Two layouts are accepted:
+        <span class="font-semibold text-zinc-800">BSIT</span> columns
+        <span class="font-semibold text-zinc-800">Student No, Surname, First Name, Middle Name, Program, Year, Block</span>
+        (sheets like <code class="text-xs bg-zinc-100 px-1 rounded">BSIT-BA</code> /
+        <code class="text-xs bg-zinc-100 px-1 rounded">BSIT-SD</code>),
+        or <span class="font-semibold text-zinc-800">BSCS</span> pages
+        <span class="font-semibold text-zinc-800">Student No, Student's Name</span>
+        with year/block in the sheet name (e.g. <code class="text-xs bg-zinc-100 px-1 rounded">BSCS-DS 1A</code>).
         Block <code class="text-xs bg-zinc-100 px-1 rounded">--</code> stays irregular (Year still kept).
         Missing sections are created automatically. Re-import overwrites existing roster rows (and linked account names) from the file.
         Students stay “Awaiting signup” until they create an app account.
@@ -919,6 +1044,25 @@ render_header('Users & Roles', $user);
      }, 3000);
   }
 
+  function bindStaffFieldGuards(root) {
+    if (!root) return;
+    root.querySelectorAll('.js-person-name').forEach((el) => {
+      el.addEventListener('input', () => {
+        const next = el.value.replace(/[0-9]/g, '').replace(/[^\p{L}\s.'-]/gu, '');
+        if (el.value !== next) el.value = next;
+      });
+    });
+    root.querySelectorAll('.js-ph-contact').forEach((el) => {
+      el.addEventListener('input', () => {
+        const next = el.value.replace(/\D/g, '').slice(0, 11);
+        if (el.value !== next) el.value = next;
+      });
+    });
+  }
+  bindStaffFieldGuards(document.getElementById('formRegisterTeacher'));
+  bindStaffFieldGuards(document.getElementById('formRegisterAdmin'));
+  bindStaffFieldGuards(document.getElementById('formEditStaff'));
+
   const modalReg = document.getElementById('modalRegisterTeacher');
   const formReg = document.getElementById('formRegisterTeacher');
   const regErr = document.getElementById('regTeacherErr');
@@ -942,11 +1086,45 @@ render_header('Users & Roles', $user);
   document.getElementById('btnCloseRegisterTeacher')?.addEventListener('click', closeModalReg);
   document.getElementById('btnCancelRegisterTeacher')?.addEventListener('click', closeModalReg);
   modalReg?.addEventListener('click', (e) => { if (e.target === modalReg) closeModalReg(); });
+
+  const modalRegAdmin = document.getElementById('modalRegisterAdmin');
+  const formRegAdmin = document.getElementById('formRegisterAdmin');
+  const regAdminErr = document.getElementById('regAdminErr');
+
+  function openModalRegAdmin() {
+    if (!modalRegAdmin) return;
+    modalRegAdmin.classList.remove('hidden');
+    modalRegAdmin.classList.add('flex');
+    modalRegAdmin.setAttribute('aria-hidden', 'false');
+    document.getElementById('ra_first_name')?.focus();
+  }
+  function closeModalRegAdmin() {
+    if (!modalRegAdmin) return;
+    modalRegAdmin.classList.add('hidden');
+    modalRegAdmin.classList.remove('flex');
+    modalRegAdmin.setAttribute('aria-hidden', 'true');
+    if (regAdminErr) {
+      regAdminErr.classList.add('hidden');
+      regAdminErr.textContent = '';
+    }
+    formRegAdmin?.reset();
+  }
+
+  document.getElementById('btnOpenRegisterAdmin')?.addEventListener('click', openModalRegAdmin);
+  document.getElementById('btnCloseRegisterAdmin')?.addEventListener('click', closeModalRegAdmin);
+  document.getElementById('btnCancelRegisterAdmin')?.addEventListener('click', closeModalRegAdmin);
+  modalRegAdmin?.addEventListener('click', (e) => { if (e.target === modalRegAdmin) closeModalRegAdmin(); });
+
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (modalReg && !modalReg.classList.contains('hidden')) closeModalReg();
+    if (modalRegAdmin && !modalRegAdmin.classList.contains('hidden')) closeModalRegAdmin();
     if (modalImport && !modalImport.classList.contains('hidden')) closeModalImport();
     if (modalEdit && !modalEdit.classList.contains('hidden')) closeModalEdit();
+    if (typeof closeModalStaff === 'function') {
+      const modalStaffEl = document.getElementById('modalEditStaff');
+      if (modalStaffEl && !modalStaffEl.classList.contains('hidden')) closeModalStaff();
+    }
   });
 
   const modalImport = document.getElementById('modalImportStudents');
@@ -1158,11 +1336,125 @@ render_header('Users & Roles', $user);
         if (!data.ok) throw new Error(data.error || 'Archive failed');
         showToast(data.message || 'Student moved to Archive.');
         tr.remove();
-        const totalEl = document.getElementById('panelTotal');
-        if (totalEl) {
-          const n = Math.max(0, (parseInt(totalEl.textContent, 10) || 0) - 1);
-          totalEl.textContent = String(n);
+        if (typeof applyUserSearch === 'function') {
+          applyUserSearch();
+        } else {
+          const totalEl = document.getElementById('panelTotal');
+          if (totalEl) {
+            const n = Math.max(0, (parseInt(totalEl.textContent, 10) || 0) - 1);
+            totalEl.textContent = String(n);
+          }
         }
+      } catch (err) {
+        showToast(err.message || 'Archive failed', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  const modalStaff = document.getElementById('modalEditStaff');
+  const formStaff = document.getElementById('formEditStaff');
+  const editStaffErr = document.getElementById('editStaffErr');
+  function openModalStaff() {
+    if (!modalStaff) return;
+    editStaffErr?.classList.add('hidden');
+    modalStaff.classList.remove('hidden');
+    modalStaff.classList.add('flex');
+    modalStaff.setAttribute('aria-hidden', 'false');
+  }
+  function closeModalStaff() {
+    if (!modalStaff) return;
+    modalStaff.classList.add('hidden');
+    modalStaff.classList.remove('flex');
+    modalStaff.setAttribute('aria-hidden', 'true');
+    editStaffErr?.classList.add('hidden');
+    formStaff?.reset();
+  }
+  document.getElementById('btnCloseEditStaff')?.addEventListener('click', closeModalStaff);
+  document.getElementById('btnCancelEditStaff')?.addEventListener('click', closeModalStaff);
+  modalStaff?.addEventListener('click', (e) => { if (e.target === modalStaff) closeModalStaff(); });
+
+  document.querySelectorAll('.btnEditStaff').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const role = (tr.dataset.role || 'teacher').toLowerCase();
+      const title = document.getElementById('modalEditStaffTitle');
+      if (title) title.textContent = role === 'admin' ? 'Edit admin' : 'Edit teacher';
+      document.getElementById('st_user_id').value = tr.dataset.userId || '';
+      document.getElementById('st_first_name').value = tr.dataset.firstName || '';
+      document.getElementById('st_middle_name').value = tr.dataset.middleName || '';
+      document.getElementById('st_last_name').value = tr.dataset.lastName || '';
+      document.getElementById('st_suffix').value = tr.dataset.suffix || '';
+      document.getElementById('st_email').value = tr.dataset.email || '';
+      document.getElementById('st_contact').value = tr.dataset.contact || '';
+      openModalStaff();
+    });
+  });
+
+  formStaff?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    editStaffErr?.classList.add('hidden');
+    const submitBtn = document.getElementById('btnSubmitEditStaff');
+    const prev = submitBtn?.textContent || 'Save changes';
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+    try {
+      const res = await fetch('/api/staff_user_update.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          csrf_token: window.CSRF_TOKEN || '',
+          user_id: document.getElementById('st_user_id').value,
+          first_name: document.getElementById('st_first_name').value,
+          middle_name: document.getElementById('st_middle_name').value,
+          last_name: document.getElementById('st_last_name').value,
+          suffix: document.getElementById('st_suffix').value,
+          email: document.getElementById('st_email').value,
+          contact_number: document.getElementById('st_contact').value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) throw new Error(data.error || 'Update failed');
+      showToast('Account updated.');
+      closeModalStaff();
+      setTimeout(() => window.location.reload(), 400);
+    } catch (err) {
+      if (editStaffErr) {
+        editStaffErr.textContent = err.message || 'Update failed';
+        editStaffErr.classList.remove('hidden');
+      }
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = prev; }
+    }
+  });
+
+  document.querySelectorAll('.btnArchiveStaff').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const uid = tr.dataset.userId || '';
+      const role = (tr.dataset.role || 'teacher').toLowerCase();
+      const name = [tr.dataset.lastName, tr.dataset.firstName].filter(Boolean).join(', ') || (tr.dataset.email || 'this account');
+      const noun = role === 'admin' ? 'admin' : 'teacher';
+      if (!window.confirm('Move ' + noun + ' ' + name + ' to Archive?\n\nThey will not be able to log in until restored.')) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/staff_user_archive.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            csrf_token: window.CSRF_TOKEN || '',
+            user_id: uid,
+            action: 'archive',
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.ok) throw new Error(data.error || 'Archive failed');
+        showToast(data.message || 'Account moved to Archive.');
+        tr.remove();
+        if (typeof applyUserSearch === 'function') applyUserSearch();
       } catch (err) {
         showToast(err.message || 'Archive failed', true);
       } finally {
@@ -1207,6 +1499,45 @@ render_header('Users & Roles', $user);
       submitBtn.textContent = prev;
     }
   });
+
+  formRegAdmin?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (regAdminErr) {
+      regAdminErr.classList.add('hidden');
+      regAdminErr.textContent = '';
+    }
+    const fd = new FormData(formRegAdmin);
+    const submitBtn = document.getElementById('btnSubmitRegisterAdmin');
+    const prev = submitBtn?.textContent || 'Create admin';
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Creating…'; }
+    try {
+      const res = await fetch('/api/users_register_admin.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          csrf_token: window.CSRF_TOKEN,
+          first_name: fd.get('first_name'),
+          middle_name: fd.get('middle_name'),
+          last_name: fd.get('last_name'),
+          suffix: fd.get('suffix'),
+          contact_number: fd.get('contact_number'),
+          email: fd.get('email'),
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Registration failed');
+      showToast('Admin account created. Credentials were emailed.');
+      closeModalRegAdmin();
+      setTimeout(() => window.location.reload(), 400);
+    } catch (err) {
+      if (regAdminErr) {
+        regAdminErr.textContent = err.message || 'Failed';
+        regAdminErr.classList.remove('hidden');
+      }
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = prev; }
+    }
+  });
   // --- Tabs Navigation JS ---
   const tabTeachers = document.getElementById('tabTeachers');
   const tabStudents = document.getElementById('tabStudents');
@@ -1214,6 +1545,7 @@ render_header('Users & Roles', $user);
   
   const actionTeacher = document.getElementById('actionTeacher');
   const actionStudent = document.getElementById('actionStudent');
+  const actionAdmin = document.getElementById('actionAdmin');
   const exportStudents = document.getElementById('exportStudents');
   const exportTeachers = document.getElementById('exportTeachers');
   
@@ -1223,6 +1555,9 @@ render_header('Users & Roles', $user);
   
   const panelTitle = document.getElementById('panelTitle');
   const panelTotal = document.getElementById('panelTotal');
+  const panelCsCount = document.getElementById('panelCsCount');
+  const panelItCount = document.getElementById('panelItCount');
+  const panelProgramCounts = document.getElementById('panelProgramCounts');
   const userSearch = document.getElementById('userSearch');
   const tbBadgeT = tabTeachers.querySelector('span');
   const tbBadgeS = tabStudents.querySelector('span');
@@ -1235,6 +1570,13 @@ render_header('Users & Roles', $user);
     return null;
   }
 
+  function programBucket(program) {
+    const p = String(program || '').toUpperCase().replace(/\s+/g, ' ').trim();
+    if (p === 'BSCS' || p === 'CS') return 'cs';
+    if (p !== '' && p !== '—' && (p.includes('IT') || p.startsWith('BSIT'))) return 'it';
+    return '';
+  }
+
   function applyUserSearch() {
     const raw = (userSearch?.value || '').trim().toLowerCase();
     const q = raw;
@@ -1242,6 +1584,8 @@ render_header('Users & Roles', $user);
     const tbl = activeTable();
     if (!tbl) return;
     let visible = 0;
+    let csVisible = 0;
+    let itVisible = 0;
     tbl.querySelectorAll('tbody tr').forEach((tr) => {
       if (tr.querySelector('td[colspan]')) {
         // empty-state row
@@ -1267,9 +1611,16 @@ render_header('Users & Roles', $user);
         }
       }
       tr.classList.toggle('hidden', !show);
-      if (show) visible++;
+      if (show) {
+        visible++;
+        const bucket = programBucket(tr.dataset.program || '');
+        if (bucket === 'cs') csVisible++;
+        if (bucket === 'it') itVisible++;
+      }
     });
     if (panelTotal) panelTotal.textContent = String(visible);
+    if (panelCsCount) panelCsCount.textContent = String(csVisible);
+    if (panelItCount) panelItCount.textContent = String(itVisible);
   }
 
   function resetTabs() {
@@ -1286,6 +1637,7 @@ render_header('Users & Roles', $user);
       [tableTeachers, tableStudents, tableAdmins].forEach(tbl => tbl.classList.add('hidden'));
       actionTeacher.classList.add('hidden');
       actionStudent.classList.add('hidden');
+      actionAdmin?.classList.add('hidden');
       exportStudents?.classList.add('hidden');
       exportTeachers?.classList.add('hidden');
   }
@@ -1302,6 +1654,7 @@ render_header('Users & Roles', $user);
           actionTeacher.classList.remove('hidden');
           exportTeachers?.classList.remove('hidden');
           tableTeachers.classList.remove('hidden');
+          panelProgramCounts?.classList.add('hidden');
           panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center"><svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg></div> Teacher Management`;
           if (userSearch) userSearch.placeholder = 'Search name, email, contact…';
           applyUserSearch();
@@ -1318,6 +1671,7 @@ render_header('Users & Roles', $user);
           actionStudent.classList.remove('hidden');
           exportStudents?.classList.remove('hidden');
           tableStudents.classList.remove('hidden');
+          panelProgramCounts?.classList.remove('hidden');
           panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center"><svg class="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg></div> Student Management`;
           if (userSearch) userSearch.placeholder = 'Search student no, surname, first name, email…';
           applyUserSearch();
@@ -1332,8 +1686,10 @@ render_header('Users & Roles', $user);
           tbBadgeA.classList.replace('border-zinc-200','border-orange-200');
           
           tableAdmins.classList.remove('hidden');
+          actionAdmin?.classList.remove('hidden');
+          panelProgramCounts?.classList.add('hidden');
           panelTitle.innerHTML = `<div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center shrink-0"><svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg></div> <span class="truncate">System Administrators</span>`;
-          if (userSearch) userSearch.placeholder = 'Search name, email…';
+          if (userSearch) userSearch.placeholder = 'Search name, email, contact…';
           applyUserSearch();
       });
 

@@ -87,14 +87,14 @@ if ($fresh) {
     json_response($response, $http >= 400 ? $http : 200);
 }
 
-$cached = api_cache_read($cacheKey, 15);
+$cached = api_cache_read($cacheKey, 40);
 if (is_array($cached) && ($cached['ok'] ?? false) === true) {
     json_response($cached, 200);
 }
 
 $gotLock = api_cache_try_lock($cacheKey);
 if (!$gotLock) {
-    $stale = api_cache_read_stale($cacheKey, 15, 20);
+    $stale = api_cache_read_stale($cacheKey, 40, 45);
     if (is_array($stale) && ($stale['ok'] ?? false) === true) {
         json_response($stale, 200);
     }

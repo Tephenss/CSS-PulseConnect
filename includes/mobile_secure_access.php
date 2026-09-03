@@ -345,13 +345,31 @@ function mobile_secure_storage_path_allowed(
     $isAdmin = mobile_secure_is_admin_role($role) || $role === 'admin';
 
     if ($bucket === 'avatars') {
-        // Own avatar only: profiles/{userId}.ext or media/avatars/profiles/{userId}.ext
+        // Own avatar: profiles/{userId}.ext or media/avatars/profiles/{userId}.ext
         $base = basename(str_replace('\\', '/', $path));
         if ($base !== '' && str_starts_with(strtolower($base), strtolower($userId) . '.')) {
             return true;
         }
-        return str_contains($normalized, '/' . $userId . '/')
-            || str_contains($normalized, '/' . $userId . '.');
+        if (str_contains($normalized, '/' . $userId . '/')
+            || str_contains($normalized, '/' . $userId . '.')) {
+            return true;
+        }
+        // Teachers/admins need participant photos on roster + scanner.
+        // Canonical profile objects only — never arbitrary bucket paths.
+        if ($isAdmin || $role === 'teacher') {
+            $object = ltrim(str_replace('\\', '/', $path), '/');
+            if (str_starts_with($object, 'media/avatars/')) {
+                $object = substr($object, strlen('media/avatars/'));
+            }
+            if (str_starts_with($object, 'avatars/')) {
+                $object = substr($object, strlen('avatars/'));
+            }
+            return (bool) preg_match(
+                '#^profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpe?g|png|webp)$#i',
+                $object
+            );
+        }
+        return false;
     }
 
     if ($bucket === 'proposal-documents') {

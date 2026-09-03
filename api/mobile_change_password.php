@@ -210,8 +210,8 @@ $newPassword = (string) ($data['new_password'] ?? '');
 if ($changeToken === '' || $newPassword === '') {
     json_response(['ok' => false, 'error' => 'Missing verification token or new password.'], 400);
 }
-if (mb_strlen($newPassword) < 8) {
-    json_response(['ok' => false, 'error' => 'Password must be at least 8 characters.'], 400);
+if (!is_strong_password($newPassword)) {
+    json_response(['ok' => false, 'error' => password_policy_error()], 400);
 }
 
 $headers = mobile_api_supabase_headers();

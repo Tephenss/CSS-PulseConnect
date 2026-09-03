@@ -15,7 +15,7 @@ require_once __DIR__ . '/includes/registration_access.php';
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
 
-$select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type,cover_image_url';
+$select = 'select=id,title,description,location,start_at,end_at,status,event_for,event_type,cover_image_url,registered_count';
 $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $select . '&order=start_at.asc';
 $url = $base . '&or=(status.eq.published,status.eq.finished)&limit=200';
 
@@ -55,7 +55,7 @@ if ($events === []) {
       $catalogIds
     ));
     $hydrateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-      . '?select=id,cover_image_url,status,start_at,end_at,early_out_enabled_at'
+      . '?select=id,cover_image_url,status,start_at,end_at,early_out_enabled_at,registered_count'
       . '&id=in.(' . $inList . ')'
       . '&limit=' . count($catalogIds);
     $hydrateRes = supabase_request('GET', $hydrateUrl, $headers);
@@ -100,6 +100,9 @@ if ($events === []) {
       }
       if (array_key_exists('early_out_enabled_at', $truth)) {
         $eventRow['early_out_enabled_at'] = $truth['early_out_enabled_at'];
+      }
+      if (array_key_exists('registered_count', $truth)) {
+        $eventRow['registered_count'] = $truth['registered_count'];
       }
       $eventRow['status'] = 'published';
     }
@@ -184,17 +187,61 @@ usort($finishedEvents, static function (array $a, array $b): int {
   return strcmp((string) ($b['end_at'] ?? $b['start_at'] ?? ''), (string) ($a['end_at'] ?? $a['start_at'] ?? ''));
 });
 
+$eventIdList = [];
+foreach (array_merge($publishedEvents, $finishedEvents) as $eventRow) {
+  if (!is_array($eventRow)) {
+    continue;
+  }
+  $eid = trim((string) ($eventRow['id'] ?? ''));
+  if ($eid !== '') {
+    $eventIdList[$eid] = true;
+  }
+}
+if ($eventIdList !== []) {
+  $inList = implode(',', array_map(
+    static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+    array_keys($eventIdList)
+  ));
+  $countUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+    . '?select=id,registered_count'
+    . '&id=in.(' . $inList . ')'
+    . '&limit=' . count($eventIdList);
+  $countRes = supabase_request('GET', $countUrl, $headers);
+  if ($countRes['ok']) {
+    $countRows = json_decode((string) ($countRes['body'] ?? ''), true);
+    $countsById = [];
+    if (is_array($countRows)) {
+      foreach ($countRows as $countRow) {
+        if (!is_array($countRow)) {
+          continue;
+        }
+        $cid = trim((string) ($countRow['id'] ?? ''));
+        if ($cid !== '') {
+          $countsById[$cid] = max(0, (int) ($countRow['registered_count'] ?? 0));
+        }
+      }
+    }
+    $applyRegisteredCounts = static function (array &$rows) use ($countsById): void {
+      foreach ($rows as &$row) {
+        if (!is_array($row)) {
+          continue;
+        }
+        $eid = trim((string) ($row['id'] ?? ''));
+        if ($eid !== '' && isset($countsById[$eid])) {
+          $row['registered_count'] = $countsById[$eid];
+        }
+      }
+      unset($row);
+    };
+    $applyRegisteredCounts($publishedEvents);
+    $applyRegisteredCounts($finishedEvents);
+  }
+}
+
 $renderEventCard = static function (array $e, bool $isFinished): void {
   $status = $isFinished ? 'finished' : (string) ($e['status'] ?? '');
-
-  $statusConfig = match ($status) {
-    'published' => ['bg' => 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', 'dot' => '#10b981'],
-    'finished'  => ['bg' => 'bg-zinc-500/10 text-zinc-600 border-zinc-500/20',     'dot' => '#71717a'],
-    'pending'   => ['bg' => 'bg-amber-500/10 text-amber-700 border-amber-500/20',   'dot' => '#f59e0b'],
-    'approved'  => ['bg' => 'bg-sky-500/10 text-sky-700 border-sky-500/20',         'dot' => '#0ea5e9'],
-    'expired'   => ['bg' => 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20',     'dot' => '#a1a1aa'],
-    default     => ['bg' => 'bg-zinc-500/10 text-zinc-700 border-zinc-500/20',     'dot' => '#a1a1aa'],
-  };
+  $registeredCount = max(0, (int) ($e['registered_count'] ?? 0));
+  $registrationBadge = htmlspecialchars(format_event_registration_total($registeredCount, $e) . ' Registered');
 
   $rawDate       = (string) ($e['start_at'] ?? '');
   $formattedDate = $rawDate !== '' ? format_date_local($rawDate, 'M d, Y - g:i A') : 'TBA';
@@ -206,7 +253,6 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
   $desc          = htmlspecialchars((string) ($e['description'] ?? 'No description provided for this event.'));
   $location      = htmlspecialchars((string) ($e['location'] ?? 'Location TBA'));
   $evType        = htmlspecialchars((string) ($e['event_type'] ?? ''));
-  $statusLabel   = htmlspecialchars($status);
   $searchBlob = strtolower(trim(implode(' ', array_filter([
       (string) ($e['title'] ?? ''),
       (string) ($e['location'] ?? ''),
@@ -225,9 +271,11 @@ $renderEventCard = static function (array $e, bool $isFinished): void {
         <h4 class="text-lg font-bold text-neutral-800 line-clamp-1 flex-1 tracking-tight">
           <?= $title ?>
         </h4>
-        <span class="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider rounded-full border px-2.5 py-0.5 <?= $statusConfig['bg'] ?>">
-          <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:<?= $statusConfig['dot'] ?>"></span>
-          <?= $statusLabel ?>
+        <span class="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider rounded-full border px-2.5 py-0.5 bg-emerald-500/10 text-emerald-700 border-emerald-500/20 whitespace-nowrap">
+          <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+          </svg>
+          <?= $registrationBadge ?>
         </span>
       </div>
 

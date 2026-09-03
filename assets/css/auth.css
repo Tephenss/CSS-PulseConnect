@@ -434,3 +434,8 @@
   24.5% { opacity: 0; transform: translateX(-50%) scaleY(1); }
   100% { opacity: 0; }
 }
+
+.pw-meter [data-pw-rule].pw-rule-met {
+  color: #4ade80;
+  font-weight: 700;
+}

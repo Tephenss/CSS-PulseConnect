@@ -22,7 +22,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(['ok' => false, 'error' => 'Method not allowed'], 405);
 }
 
-$user = require_role(['admin', 'teacher']);
+// Background poll: keep the PHP session alive, but do not force OTP/IP
+// re-verify here (that was logging idle users out when the IP flapped).
+$user = require_role(['admin', 'teacher'], false);
 $limit = isset($_GET['limit']) ? max(1, min(100, (int) $_GET['limit'])) : 10;
 $skipCache = isset($_GET['fresh']) && (string) $_GET['fresh'] === '1';
 $userId = trim((string) ($user['id'] ?? ''));

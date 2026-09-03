@@ -89,12 +89,24 @@ $eventQuestionsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions'
 $eventQuestionsRes = supabase_request('GET', $eventQuestionsUrl, $headers);
 $eventQuestionRows = $eventQuestionsRes['ok'] ? json_decode((string) $eventQuestionsRes['body'], true) : [];
 $eventQuestions = is_array($eventQuestionRows) ? $eventQuestionRows : [];
+$eventQuestions = evaluation_sort_questions_by_type($eventQuestions);
 foreach ($eventQuestions as $question) {
-    $groupKey = 'Questions';
+    $isRating = strtolower(trim((string) ($question['field_type'] ?? 'text'))) === 'rating';
+    $groupKey = $isRating ? 'Rating (1–5)' : 'Comment / Text';
     if (!isset($eventQuestionGroups[$groupKey])) {
         $eventQuestionGroups[$groupKey] = [];
     }
     $eventQuestionGroups[$groupKey][] = $question;
+}
+
+// Persist rating-then-comment order so mobile/web forms stay grouped.
+if ($tab === 'questions' && count($eventQuestions) > 0) {
+    evaluation_renormalize_question_sort_orders(
+        'evaluation_questions',
+        'event_id',
+        $eventId,
+        $headers
+    );
 }
 
 if ($usesSessions) {
@@ -122,6 +134,7 @@ if ($usesSessions) {
         $sessionQuestions = is_array($sessionQuestionRows) ? $sessionQuestionRows : [];
     }
 
+    $sessionQuestions = evaluation_sort_questions_by_type($sessionQuestions);
     foreach ($sessionQuestions as $question) {
         $sid = (string) ($question['session_id'] ?? '');
         if ($sid === '') {
@@ -130,11 +143,30 @@ if ($usesSessions) {
         if (!isset($sessionQuestionGroups[$sid])) {
             $sessionQuestionGroups[$sid] = [];
         }
-        $groupKey = 'Questions';
+        $isRating = strtolower(trim((string) ($question['field_type'] ?? 'text'))) === 'rating';
+        $groupKey = $isRating ? 'Rating (1–5)' : 'Comment / Text';
         if (!isset($sessionQuestionGroups[$sid][$groupKey])) {
             $sessionQuestionGroups[$sid][$groupKey] = [];
         }
         $sessionQuestionGroups[$sid][$groupKey][] = $question;
+    }
+
+    if ($tab === 'questions') {
+        $renormSessions = [];
+        foreach ($sessionQuestions as $question) {
+            $sid = trim((string) ($question['session_id'] ?? ''));
+            if ($sid !== '') {
+                $renormSessions[$sid] = true;
+            }
+        }
+        foreach (array_keys($renormSessions) as $sid) {
+            evaluation_renormalize_question_sort_orders(
+                'event_session_evaluation_questions',
+                'session_id',
+                (string) $sid,
+                $headers
+            );
+        }
     }
 
     foreach ($sessions as $session) {
@@ -215,6 +247,37 @@ render_header('Evaluation Management', $user);
             </button>
           </div>
 
+          <div class="newQuestionCard hidden relative bg-emerald-50/50 rounded-3xl border-2 border-emerald-500/30 p-6 shadow-sm mb-4" data-target="event">
+            <form class="qForm flex flex-col md:flex-row gap-5 items-start" data-session-id="">
+              <input type="hidden" name="event_id" value="<?= htmlspecialchars($eventId) ?>" />
+              <input type="hidden" name="session_id" value="" />
+              <input type="hidden" name="required" value="true" />
+              <input type="hidden" name="sort_order" value="<?= count($eventQuestions) + 1 ?>" />
+
+              <div class="flex-1 w-full space-y-4">
+                <div>
+                  <input type="text" name="question_text" required class="w-full text-lg font-bold text-emerald-900 border-none bg-transparent placeholder-emerald-400 outline-none focus:ring-0 px-0" placeholder="Type your new question here..." />
+                  <div class="h-px bg-emerald-200 w-full mt-1"></div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="text-[11px] font-black uppercase tracking-widest text-emerald-600">Select Type:</span>
+                  <select name="field_type" class="px-3 py-1.5 rounded-lg bg-white border border-emerald-200 text-sm font-bold text-emerald-800 outline-none focus:ring-2 focus:ring-emerald-500/30">
+                    <option value="rating">Likert (1-5 Scale)</option>
+                    <option value="text">Comment / Text</option>
+                  </select>
+                </div>
+                <div class="qMsg text-sm font-bold text-emerald-600 hidden">Saving...</div>
+              </div>
+
+              <div class="flex items-center gap-4 shrink-0 md:border-l md:border-emerald-200 md:pl-6 h-full mt-auto">
+                <button type="button" class="btnCancelAdd py-2.5 px-4 text-sm font-bold text-zinc-500 hover:text-zinc-800 transition-colors">Cancel</button>
+                <button type="submit" class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition-all">
+                  Save Question
+                </button>
+              </div>
+            </form>
+          </div>
+
           <?php if (count($eventQuestions) === 0): ?>
             <div class="text-center py-10 rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50">
               <p class="text-sm font-semibold text-zinc-500">No event-level questions yet.</p>
@@ -222,10 +285,12 @@ render_header('Evaluation Management', $user);
             </div>
           <?php endif; ?>
 
-          <?php foreach ($eventQuestionGroups as $groupQuestions): ?>
+          <?php foreach ($eventQuestionGroups as $groupLabel => $groupQuestions): ?>
             <div class="rounded-3xl border border-zinc-200 bg-zinc-50/70 p-4 mb-4">
               <div class="mb-4 flex items-center justify-between gap-3">
-                <div class="rounded-full bg-white px-3 py-1 text-xs font-bold text-zinc-500 border border-zinc-200">
+                <div class="rounded-full bg-white px-3 py-1 text-xs font-bold text-zinc-700 border border-zinc-200">
+                  <?= htmlspecialchars((string) $groupLabel) ?>
+                  <span class="text-zinc-400 font-semibold">·</span>
                   <?= count($groupQuestions) ?> question<?= count($groupQuestions) === 1 ? '' : 's' ?>
                 </div>
               </div>
@@ -263,37 +328,6 @@ render_header('Evaluation Management', $user);
               </div>
             </div>
           <?php endforeach; ?>
-
-          <div class="newQuestionCard hidden relative bg-emerald-50/50 rounded-3xl border-2 border-emerald-500/30 p-6 shadow-sm" data-target="event">
-            <form class="qForm flex flex-col md:flex-row gap-5 items-start" data-session-id="">
-              <input type="hidden" name="event_id" value="<?= htmlspecialchars($eventId) ?>" />
-              <input type="hidden" name="session_id" value="" />
-              <input type="hidden" name="required" value="true" />
-              <input type="hidden" name="sort_order" value="<?= count($eventQuestions) + 1 ?>" />
-
-              <div class="flex-1 w-full space-y-4">
-                <div>
-                  <input type="text" name="question_text" required class="w-full text-lg font-bold text-emerald-900 border-none bg-transparent placeholder-emerald-400 outline-none focus:ring-0 px-0" placeholder="Type your new question here..." />
-                  <div class="h-px bg-emerald-200 w-full mt-1"></div>
-                </div>
-                <div class="flex items-center gap-3">
-                  <span class="text-[11px] font-black uppercase tracking-widest text-emerald-600">Select Type:</span>
-                  <select name="field_type" class="px-3 py-1.5 rounded-lg bg-white border border-emerald-200 text-sm font-bold text-emerald-800 outline-none focus:ring-2 focus:ring-emerald-500/30">
-                    <option value="rating">Likert (1-5 Scale)</option>
-                    <option value="text">Comment / Text</option>
-                  </select>
-                </div>
-                <div class="qMsg text-sm font-bold text-emerald-600 hidden">Saving...</div>
-              </div>
-
-              <div class="flex items-center gap-4 shrink-0 md:border-l md:border-emerald-200 md:pl-6 h-full mt-auto">
-                <button type="button" class="btnCancelAdd py-2.5 px-4 text-sm font-bold text-zinc-500 hover:text-zinc-800 transition-colors">Cancel</button>
-                <button type="submit" class="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition-all">
-                  Save Question
-                </button>
-              </div>
-            </form>
-          </div>
         </div>
 
         <?php if ($usesSessions): ?>
@@ -313,6 +347,37 @@ render_header('Evaluation Management', $user);
                 </button>
               </div>
 
+              <div class="newQuestionCard hidden relative bg-indigo-50/50 rounded-3xl border-2 border-indigo-500/30 p-6 shadow-sm mb-4" data-target="<?= htmlspecialchars($sid) ?>">
+                <form class="qForm flex flex-col md:flex-row gap-5 items-start" data-session-id="<?= htmlspecialchars($sid) ?>">
+                  <input type="hidden" name="event_id" value="<?= htmlspecialchars($eventId) ?>" />
+                  <input type="hidden" name="session_id" value="<?= htmlspecialchars($sid) ?>" />
+                  <input type="hidden" name="required" value="true" />
+                  <input type="hidden" name="sort_order" value="<?= (int) ($sessionQuestionCounts[$sid] ?? 0) + 1 ?>" />
+
+                  <div class="flex-1 w-full space-y-4">
+                    <div>
+                      <input type="text" name="question_text" required class="w-full text-lg font-bold text-indigo-900 border-none bg-transparent placeholder-indigo-400 outline-none focus:ring-0 px-0" placeholder="Type your new question here..." />
+                      <div class="h-px bg-indigo-200 w-full mt-1"></div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <span class="text-[11px] font-black uppercase tracking-widest text-indigo-600">Select Type:</span>
+                      <select name="field_type" class="px-3 py-1.5 rounded-lg bg-white border border-indigo-200 text-sm font-bold text-indigo-800 outline-none focus:ring-2 focus:ring-indigo-500/30">
+                        <option value="rating">Likert (1-5 Scale)</option>
+                        <option value="text">Comment / Text</option>
+                      </select>
+                    </div>
+                    <div class="qMsg text-sm font-bold text-indigo-600 hidden">Saving...</div>
+                  </div>
+
+                  <div class="flex items-center gap-4 shrink-0 md:border-l md:border-indigo-200 md:pl-6 h-full mt-auto">
+                    <button type="button" class="btnCancelAdd py-2.5 px-4 text-sm font-bold text-zinc-500 hover:text-zinc-800 transition-colors">Cancel</button>
+                    <button type="submit" class="py-2.5 px-6 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-lg shadow-indigo-600/20 transition-all">
+                      Save Question
+                    </button>
+                  </div>
+                </form>
+              </div>
+
               <?php if (empty($sessionGroups)): ?>
                 <div class="text-center py-10 rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50">
                   <p class="text-sm font-semibold text-zinc-500">No questions yet for this seminar.</p>
@@ -320,10 +385,12 @@ render_header('Evaluation Management', $user);
                 </div>
               <?php endif; ?>
 
-              <?php foreach ($sessionGroups as $groupQuestions): ?>
+              <?php foreach ($sessionGroups as $groupLabel => $groupQuestions): ?>
                 <div class="rounded-3xl border border-zinc-200 bg-zinc-50/70 p-4 mb-4">
                   <div class="mb-4 flex items-center justify-between gap-3">
-                    <div class="rounded-full bg-white px-3 py-1 text-xs font-bold text-zinc-500 border border-zinc-200">
+                    <div class="rounded-full bg-white px-3 py-1 text-xs font-bold text-zinc-700 border border-zinc-200">
+                      <?= htmlspecialchars((string) $groupLabel) ?>
+                      <span class="text-zinc-400 font-semibold">·</span>
                       <?= count($groupQuestions) ?> question<?= count($groupQuestions) === 1 ? '' : 's' ?>
                     </div>
                   </div>
@@ -361,37 +428,6 @@ render_header('Evaluation Management', $user);
                   </div>
                 </div>
               <?php endforeach; ?>
-
-              <div class="newQuestionCard hidden relative bg-indigo-50/50 rounded-3xl border-2 border-indigo-500/30 p-6 shadow-sm" data-target="<?= htmlspecialchars($sid) ?>">
-                <form class="qForm flex flex-col md:flex-row gap-5 items-start" data-session-id="<?= htmlspecialchars($sid) ?>">
-                  <input type="hidden" name="event_id" value="<?= htmlspecialchars($eventId) ?>" />
-                  <input type="hidden" name="session_id" value="<?= htmlspecialchars($sid) ?>" />
-                  <input type="hidden" name="required" value="true" />
-                  <input type="hidden" name="sort_order" value="<?= (int) ($sessionQuestionCounts[$sid] ?? 0) + 1 ?>" />
-
-                  <div class="flex-1 w-full space-y-4">
-                    <div>
-                      <input type="text" name="question_text" required class="w-full text-lg font-bold text-indigo-900 border-none bg-transparent placeholder-indigo-400 outline-none focus:ring-0 px-0" placeholder="Type your new question here..." />
-                      <div class="h-px bg-indigo-200 w-full mt-1"></div>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="text-[11px] font-black uppercase tracking-widest text-indigo-600">Select Type:</span>
-                      <select name="field_type" class="px-3 py-1.5 rounded-lg bg-white border border-indigo-200 text-sm font-bold text-indigo-800 outline-none focus:ring-2 focus:ring-indigo-500/30">
-                        <option value="rating">Likert (1-5 Scale)</option>
-                        <option value="text">Comment / Text</option>
-                      </select>
-                    </div>
-                    <div class="qMsg text-sm font-bold text-indigo-600 hidden">Saving...</div>
-                  </div>
-
-                  <div class="flex items-center gap-4 shrink-0 md:border-l md:border-indigo-200 md:pl-6 h-full mt-auto">
-                    <button type="button" class="btnCancelAdd py-2.5 px-4 text-sm font-bold text-zinc-500 hover:text-zinc-800 transition-colors">Cancel</button>
-                    <button type="submit" class="py-2.5 px-6 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-lg shadow-indigo-600/20 transition-all">
-                      Save Question
-                    </button>
-                  </div>
-                </form>
-              </div>
             </div>
           <?php endforeach; ?>
         <?php endif; ?>
@@ -416,6 +452,11 @@ render_header('Evaluation Management', $user);
       if (!card) return;
       card.classList.remove('hidden');
       button.classList.add('hidden');
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const input = card.querySelector('input[name="question_text"]');
+      if (input) {
+        setTimeout(() => input.focus(), 50);
+      }
     });
   });
 
@@ -520,10 +561,36 @@ render_header('Evaluation Management', $user);
 
     const label = exportBtn.querySelector('.export-pdf-label');
     const defaultLabel = label ? label.textContent : 'Export as PDF';
+    const exportUrl = exportBtn.getAttribute('data-export-url') || '';
     let exportFrame = null;
     let exportTimeout = null;
+    let exportStarted = false;
+    let warmedUp = false;
+
+    function warmUpExport() {
+      if (warmedUp || !exportUrl) return;
+      warmedUp = true;
+
+      if (!document.querySelector('link[data-pdf-preload="html2pdf"]')) {
+        const scriptPreload = document.createElement('link');
+        scriptPreload.rel = 'preload';
+        scriptPreload.as = 'script';
+        scriptPreload.href = '/assets/js/html2pdf.bundle.min.js';
+        scriptPreload.setAttribute('data-pdf-preload', 'html2pdf');
+        document.head.appendChild(scriptPreload);
+      }
+
+      if (!document.querySelector('link[data-pdf-prefetch="export"]')) {
+        const pagePrefetch = document.createElement('link');
+        pagePrefetch.rel = 'prefetch';
+        pagePrefetch.href = exportUrl;
+        pagePrefetch.setAttribute('data-pdf-prefetch', 'export');
+        document.head.appendChild(pagePrefetch);
+      }
+    }
 
     function resetExportButton() {
+      exportStarted = false;
       if (exportTimeout) {
         clearTimeout(exportTimeout);
         exportTimeout = null;
@@ -536,18 +603,66 @@ render_header('Evaluation Management', $user);
       if (label) label.textContent = defaultLabel;
     }
 
+    function armExportTimeout(ms) {
+      if (exportTimeout) {
+        clearTimeout(exportTimeout);
+      }
+      exportTimeout = window.setTimeout(function () {
+        resetExportButton();
+        alert('PDF export timed out. Please try again.');
+      }, ms);
+    }
+
+    function downloadBlobInParent(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename || 'event-feedback.pdf';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    warmUpExport();
+    exportBtn.addEventListener('mouseenter', warmUpExport, { once: true });
+
     window.addEventListener('message', function (event) {
       if (event.origin !== window.location.origin) return;
-      const type = event.data && event.data.type;
-      if (type === 'feedback-pdf-done' || type === 'feedback-pdf-error') {
+      const data = event.data || {};
+      const type = data.type;
+
+      if (type === 'feedback-pdf-started') {
+        exportStarted = true;
+        armExportTimeout(90000);
+        return;
+      }
+
+      if (type === 'feedback-pdf-blob') {
+        if (data.blob instanceof Blob) {
+          downloadBlobInParent(data.blob, data.filename || 'event-feedback.pdf');
+        }
         resetExportButton();
+        return;
+      }
+
+      if (type === 'feedback-pdf-done') {
+        resetExportButton();
+        return;
+      }
+
+      if (type === 'feedback-pdf-error') {
+        resetExportButton();
+        const msg = data.message ? String(data.message) : '';
+        alert(msg || 'Could not generate PDF. Please try again.');
       }
     });
 
     exportBtn.addEventListener('click', function () {
       if (exportBtn.disabled) return;
-      const exportUrl = exportBtn.getAttribute('data-export-url');
       if (!exportUrl) return;
+
+      warmUpExport();
 
       if (exportTimeout) {
         clearTimeout(exportTimeout);
@@ -558,17 +673,18 @@ render_header('Evaluation Management', $user);
         exportFrame = null;
       }
 
+      exportStarted = false;
       exportBtn.disabled = true;
       if (label) label.textContent = 'Generating PDF...';
 
       exportFrame = document.createElement('iframe');
       exportFrame.setAttribute('aria-hidden', 'true');
       exportFrame.setAttribute('tabindex', '-1');
-      exportFrame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1200px;height:900px;border:0;visibility:hidden';
-      exportFrame.src = exportUrl;
+      exportFrame.style.cssText = 'position:fixed;left:0;top:0;width:1100px;height:1400px;border:0;opacity:0;pointer-events:none;z-index:-1';
+      exportFrame.src = exportUrl + (exportUrl.indexOf('?') >= 0 ? '&' : '?') + '_ts=' + Date.now();
       document.body.appendChild(exportFrame);
 
-      exportTimeout = window.setTimeout(resetExportButton, 120000);
+      armExportTimeout(60000);
     });
   })();
 </script>

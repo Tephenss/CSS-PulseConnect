@@ -382,10 +382,14 @@ switch ($action) {
                         $checkedOut = certificate_auto_checked_out_session_ids($sessions, $userId, $readHeaders);
                         $final = evaluation_final_seminar_for_event($eid);
                         $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
-                        // 2+ seminars: wait for final seminar out (not Seminar 1 alone).
-                        $ok = $finalId !== ''
-                            ? in_array($finalId, $checkedOut, true)
-                            : ($checkedOut !== []);
+                        // 2 seminars: wait for Seminar 2 out — never open on Seminar 1 alone.
+                        if ($finalId !== '') {
+                            $ok = in_array($finalId, $checkedOut, true);
+                        } elseif (evaluation_event_expects_two_seminars($eid)) {
+                            $ok = false;
+                        } else {
+                            $ok = $checkedOut !== [];
+                        }
                         if (!$ok) {
                             json_response([
                                 'ok' => false,

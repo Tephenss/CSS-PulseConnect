@@ -663,16 +663,28 @@ function send_teacher_account_credentials_email(
     string $fullName,
     string $plainPassword
 ): bool {
+    return send_staff_account_credentials_email($recipientEmail, $fullName, $plainPassword, 'teacher');
+}
+
+function send_staff_account_credentials_email(
+    string $recipientEmail,
+    string $fullName,
+    string $plainPassword,
+    string $roleNoun = 'teacher'
+): bool {
     $to = trim($recipientEmail);
     if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
         return false;
     }
 
-    $safeName = trim($fullName) !== '' ? trim($fullName) : 'Teacher';
-    $subject = 'PulseCONNECT Teacher Account Credentials';
+    $roleKey = strtolower(trim($roleNoun)) === 'admin' ? 'admin' : 'teacher';
+    $roleLabel = $roleKey === 'admin' ? 'Admin' : 'Teacher';
+    $roleLower = $roleKey === 'admin' ? 'admin' : 'teacher';
+    $safeName = trim($fullName) !== '' ? trim($fullName) : $roleLabel;
+    $subject = 'PulseCONNECT ' . $roleLabel . ' Account Credentials';
 
     $textMessage = "Hello {$safeName},\n\n"
-        . "Your teacher account has been created.\n\n"
+        . "Your {$roleLower} account has been created.\n\n"
         . "Login credentials:\n"
         . "Email: {$to}\n"
         . "Temporary Password: {$plainPassword}\n\n"
@@ -685,11 +697,11 @@ function send_teacher_account_credentials_email(
         . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;border:1px solid #E4E4E7;">'
         . '<tr><td style="background:#111827;padding:20px 24px;">'
         . '<h1 style="margin:0;font-size:20px;color:#FFFFFF;">PulseCONNECT</h1>'
-        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">Teacher Account Credentials</p>'
+        . '<p style="margin:6px 0 0 0;font-size:12px;color:#D4D4D8;">' . htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8') . ' Account Credentials</p>'
         . '</td></tr>'
         . '<tr><td style="padding:24px;">'
         . '<p style="margin:0 0 10px 0;font-size:14px;color:#3F3F46;">Hello <strong>' . htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
-        . '<p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;color:#18181B;">Your teacher account has been created. Use the credentials below to log in:</p>'
+        . '<p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;color:#18181B;">Your ' . htmlspecialchars($roleLower, ENT_QUOTES, 'UTF-8') . ' account has been created. Use the credentials below to log in:</p>'
         . '<div style="border:1px solid #E4E4E7;border-radius:12px;padding:14px 16px;background:#FAFAFA;">'
         . '<div style="font-size:12px;color:#71717A;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px;">Login Credentials</div>'
         . '<div style="font-size:14px;color:#18181B;margin:0 0 6px 0;"><strong>Email:</strong> ' . htmlspecialchars($to, ENT_QUOTES, 'UTF-8') . '</div>'

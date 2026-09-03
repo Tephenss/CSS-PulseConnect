@@ -19,21 +19,39 @@ declare(strict_types=1);
  *     cookies don't collide with any other app running on localhost.
  *  3. SameSite=Strict      → browser won't forward the cookie cross-context.
  *  4. HttpOnly             → JS can't read the session ID.
+ *  5. Longer GC lifetime   → Hostinger's default session.gc_maxlifetime is 1440s
+ *     (24 min). Idle users then look "logged out" even though they never clicked
+ *     Logout. Keep session files for a school day; daily OTP at 12:00 AM Manila
+ *     still applies on the next real page load.
  */
+function session_gc_maxlifetime_seconds(): int
+{
+    return 12 * 3600; // 12 hours
+}
+
 function session_bootstrap(): void
 {
     if (session_status() === PHP_SESSION_ACTIVE) {
         return; // already started — nothing to do
     }
 
-    // 1. Isolated save path inside the project directory.
+    $gcLifetime = session_gc_maxlifetime_seconds();
+    @ini_set('session.gc_maxlifetime', (string) $gcLifetime);
+    @ini_set('session.cookie_lifetime', '0');
+
+    // 1. Isolated save path inside the project directory (not Hostinger /tmp,
+    // which some plans wipe on a short timer regardless of gc_maxlifetime).
     $savePath = __DIR__ . '/../sessions';
     if (!is_dir($savePath)) {
         @mkdir($savePath, 0750, true);
     }
     $resolvedSavePath = realpath($savePath);
-    // realpath() can return false on some hosts if the dir is not readable yet.
-    session_save_path($resolvedSavePath !== false ? $resolvedSavePath : $savePath);
+    $usePath = $resolvedSavePath !== false ? $resolvedSavePath : $savePath;
+    if (is_dir($usePath) && is_writable($usePath)) {
+        session_save_path($usePath);
+    } else {
+        error_log('session_bootstrap: sessions/ is not writable; PHP may use a host tmp dir with a short GC');
+    }
 
     // 2. Unique cookie name so we don't collide with XAMPP or other apps on localhost.
     session_name('PCSS');

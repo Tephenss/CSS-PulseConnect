@@ -187,7 +187,9 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
             $outWin = attendance_check_out_window(
                 $endAt,
                 isset($session['early_out_enabled_at']) ? (string) $session['early_out_enabled_at'] : null,
-                $nowUtc
+                $nowUtc,
+                parse_iso_datetime((string) ($session['start_at'] ?? '')),
+                max(1, (int) ($session['scan_window_minutes'] ?? $windowMinutes ?? 30))
             );
             $outMeta = $meta + [
                 'out_window' => $outWin,
@@ -408,7 +410,9 @@ function resolve_simple_event_scan_context(array $event, DateTimeImmutable $nowU
         $outWin = attendance_check_out_window(
             $endAt,
             isset($event['early_out_enabled_at']) ? (string) $event['early_out_enabled_at'] : null,
-            $nowUtc
+            $nowUtc,
+            parse_iso_datetime((string) ($event['start_at'] ?? '')),
+            $windowMinutes
         );
         if (($outWin['open'] ?? false) === true) {
             return [

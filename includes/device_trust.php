@@ -23,51 +23,73 @@ function device_trust_write_headers(): array
     ];
 }
 
-/**
- * Client public IP used as the trust key (shared across browsers on the same network).
- *
- * Hostinger/LiteSpeed often sets both REMOTE_ADDR and X-Forwarded-For; preferring an
- * unstable XFF chain caused mid-day "reverify" false positives. Prefer the edge
- * connection IP first, then CF, then the left-most public XFF hop.
- */
-function device_trust_client_ip(): string
+function device_trust_parse_ip(string $raw): string
 {
-    $candidates = [];
+    $raw = trim($raw);
+    if ($raw === '') {
+        return '';
+    }
+    if (preg_match('/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/', $raw, $m)) {
+        $raw = $m[1];
+    }
+    if (preg_match('/^\[([^\]]+)\]:\d+$/', $raw, $m)) {
+        $raw = $m[1];
+    }
+    if (!filter_var($raw, FILTER_VALIDATE_IP)) {
+        return '';
+    }
 
-    $candidates[] = trim((string) ($_SERVER['REMOTE_ADDR'] ?? ''));
-    $candidates[] = trim((string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
+    return strtolower($raw);
+}
 
+/**
+ * All distinct client IPs on this request (Cloudflare first, then XFF, then edge).
+ *
+ * @return list<string>
+ */
+function device_trust_client_ip_list(): array
+{
+    $raws = [];
+    $raws[] = (string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? '');
+    $raws[] = (string) ($_SERVER['HTTP_X_REAL_IP'] ?? '');
     $forwarded = trim((string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''));
     if ($forwarded !== '') {
         foreach (explode(',', $forwarded) as $part) {
-            $candidates[] = trim($part);
+            $raws[] = trim($part);
         }
     }
-    $candidates[] = trim((string) ($_SERVER['HTTP_X_REAL_IP'] ?? ''));
+    $raws[] = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
 
+    $out = [];
+    $seen = [];
+    foreach ($raws as $raw) {
+        $ip = device_trust_parse_ip($raw);
+        if ($ip === '' || isset($seen[$ip])) {
+            continue;
+        }
+        $seen[$ip] = true;
+        $out[] = $ip;
+    }
+
+    return $out;
+}
+
+/**
+ * Client public IP used as the trust key (shared across browsers on the same network).
+ *
+ * Prefer CF-Connecting-IP (real visitor) over LiteSpeed REMOTE_ADDR so Hostinger
+ * POST vs GET hops do not look like a new network after OTP.
+ */
+function device_trust_client_ip(): string
+{
     $public = '';
     $any = '';
-    foreach ($candidates as $raw) {
-        if ($raw === '') {
-            continue;
-        }
-        // Strip optional port (e.g. IPv4:port).
-        if (preg_match('/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/', $raw, $m)) {
-            $raw = $m[1];
-        }
-        // [IPv6]:port
-        if (preg_match('/^\[([^\]]+)\]:\d+$/', $raw, $m)) {
-            $raw = $m[1];
-        }
-        if (!filter_var($raw, FILTER_VALIDATE_IP)) {
-            continue;
-        }
-        $raw = strtolower($raw);
+    foreach (device_trust_client_ip_list() as $ip) {
         if ($any === '') {
-            $any = $raw;
+            $any = $ip;
         }
-        if (filter_var($raw, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-            $public = $raw;
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            $public = $ip;
             break;
         }
     }
@@ -77,7 +99,7 @@ function device_trust_client_ip(): string
 
 /**
  * Normalize an IP into the trusted_devices.device_key value.
- * IPv6 uses /64 so privacy-address rotations on the same network do not force re-OTP.
+ * IPv4 uses /24 and IPv6 uses /64 so the same network is trusted after one OTP.
  */
 function device_trust_ip_key(?string $ip = null): string
 {
@@ -98,7 +120,55 @@ function device_trust_ip_key(?string $ip = null): string
         return 'ip6:' . $ip;
     }
 
+    $parts = explode('.', $ip);
+    if (count($parts) === 4) {
+        return 'ip:' . $parts[0] . '.' . $parts[1] . '.' . $parts[2] . '.0/24';
+    }
+
     return 'ip:' . $ip;
+}
+
+function device_trust_exact_ip_key(string $ip): string
+{
+    $ip = strtolower(trim($ip));
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        return '';
+    }
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+        return 'ip6:' . $ip;
+    }
+
+    return 'ip:' . $ip;
+}
+
+/**
+ * Network + exact keys for every IP on this request (Hostinger proxy / CF hops).
+ *
+ * @return list<string>
+ */
+function device_trust_request_keys(): array
+{
+    $keys = [];
+    $seen = [];
+    $ips = device_trust_client_ip_list();
+    if ($ips === []) {
+        $fallback = device_trust_client_ip();
+        if ($fallback !== '') {
+            $ips[] = $fallback;
+        }
+    }
+    foreach ($ips as $ip) {
+        foreach ([device_trust_ip_key($ip), device_trust_exact_ip_key($ip)] as $key) {
+            $key = strtolower(trim($key));
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $keys[] = $key;
+        }
+    }
+
+    return $keys;
 }
 
 /**
@@ -117,9 +187,30 @@ function device_trust_ensure_web_key(): string
 function device_trust_status(string $userId, string $deviceKey = ''): ?bool
 {
     $userId = trim($userId);
-    $deviceKey = strtolower(trim($deviceKey !== '' ? $deviceKey : device_trust_ip_key()));
-    if ($userId === '' || $deviceKey === '') {
+    $keys = [];
+    if (trim($deviceKey) !== '') {
+        $keys[] = strtolower(trim($deviceKey));
+    }
+    foreach (device_trust_request_keys() as $key) {
+        $keys[] = $key;
+    }
+    $unique = [];
+    $seen = [];
+    foreach ($keys as $key) {
+        $key = strtolower(trim($key));
+        if ($key === '' || isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $unique[] = $key;
+    }
+    if ($userId === '' || $unique === []) {
         return false;
+    }
+
+    $orParts = [];
+    foreach (array_slice($unique, 0, 12) as $key) {
+        $orParts[] = 'device_key.eq.' . rawurlencode($key);
     }
 
     $res = supabase_request(
@@ -127,7 +218,7 @@ function device_trust_status(string $userId, string $deviceKey = ''): ?bool
         rtrim(SUPABASE_URL, '/') . '/rest/v1/trusted_devices'
             . '?select=id'
             . '&user_id=eq.' . rawurlencode($userId)
-            . '&device_key=eq.' . rawurlencode($deviceKey)
+            . '&or=(' . implode(',', $orParts) . ')'
             . '&limit=1',
         device_trust_headers()
     );
@@ -219,26 +310,60 @@ function device_trust_upsert(
     ];
 }
 
+/**
+ * Trust every network key visible on this HTTP request (OTP once per network).
+ *
+ * @return array{ok:bool,error?:string,missing_table?:bool}
+ */
+function device_trust_upsert_request(string $userId, string $platform = 'web'): array
+{
+    $keys = device_trust_request_keys();
+    if ($keys === []) {
+        return device_trust_upsert($userId, '', $platform, 'ip:' . device_trust_client_ip());
+    }
+
+    $anyOk = false;
+    $last = ['ok' => false, 'error' => 'No keys'];
+    foreach (array_slice($keys, 0, 8) as $key) {
+        $last = device_trust_upsert($userId, $key, $platform, $key);
+        if (($last['ok'] ?? false) === true) {
+            $anyOk = true;
+        }
+    }
+
+    return $anyOk ? ['ok' => true] : $last;
+}
+
 function device_trust_touch(string $userId, string $deviceKey = ''): void
 {
     $userId = trim($userId);
-    $deviceKey = strtolower(trim($deviceKey !== '' ? $deviceKey : device_trust_ip_key()));
-    if ($userId === '' || $deviceKey === '') {
-        return;
+    $keys = [];
+    if (trim($deviceKey) !== '') {
+        $keys[] = strtolower(trim($deviceKey));
     }
-
-    supabase_request(
-        'PATCH',
-        rtrim(SUPABASE_URL, '/') . '/rest/v1/trusted_devices'
-            . '?user_id=eq.' . rawurlencode($userId)
-            . '&device_key=eq.' . rawurlencode($deviceKey),
-        [
-            'Content-Type: application/json',
-            'Accept: application/json',
-            'apikey: ' . SUPABASE_KEY,
-            'Authorization: Bearer ' . SUPABASE_KEY,
-            'Prefer: return=minimal',
-        ],
-        json_encode(['last_seen_at' => gmdate('c')], JSON_UNESCAPED_SLASHES)
-    );
+    foreach (device_trust_request_keys() as $key) {
+        $keys[] = $key;
+    }
+    $seen = [];
+    foreach ($keys as $key) {
+        $key = strtolower(trim($key));
+        if ($key === '' || isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        supabase_request(
+            'PATCH',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/trusted_devices'
+                . '?user_id=eq.' . rawurlencode($userId)
+                . '&device_key=eq.' . rawurlencode($key),
+            [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'apikey: ' . SUPABASE_KEY,
+                'Authorization: Bearer ' . SUPABASE_KEY,
+                'Prefer: return=minimal',
+            ],
+            json_encode(['last_seen_at' => gmdate('c')], JSON_UNESCAPED_SLASHES)
+        );
+    }
 }

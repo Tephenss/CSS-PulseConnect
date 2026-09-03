@@ -16,6 +16,7 @@ require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/event_attendance_windows.php';
 require_once __DIR__ . '/../includes/mobile_scan_write.php';
 require_once __DIR__ . '/../includes/evaluation_notifications.php';
+require_once __DIR__ . '/../includes/storage_signed.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -211,6 +212,17 @@ if (is_array($userRow)) {
         $participantName = $suffix;
     }
     $participantPhoto = trim((string) ($userRow['photo_url'] ?? ''));
+    if (function_exists('storage_resolve_user_avatar_url')) {
+        $signed = storage_resolve_user_avatar_url($userId, $participantPhoto, 14400);
+        if ($signed !== '') {
+            $participantPhoto = $signed;
+        }
+    } elseif ($participantPhoto !== '' && function_exists('storage_resolve_avatar_url')) {
+        $signed = storage_resolve_avatar_url($participantPhoto, 14400);
+        if ($signed !== '') {
+            $participantPhoto = $signed;
+        }
+    }
     $participantStudentNo = trim((string) ($userRow['student_id'] ?? ''));
 }
 
@@ -331,7 +343,15 @@ if ($usesSessions) {
             continue;
         }
         $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-        $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
+        $startAt = parse_iso_datetime((string) ($session['start_at'] ?? ''));
+        $grace = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+        $outWin = attendance_check_out_window(
+            $endAt,
+            $session['early_out_enabled_at'] ?? null,
+            $scanAt,
+            $startAt,
+            $grace
+        );
         if (($outWin['open'] ?? false) === true) {
             $outCandidates[] = [
                 'session' => $session,
@@ -384,6 +404,54 @@ if ($usesSessions) {
         ]);
     }
 
+    // Already timed in, time-out not open yet: do not jump to the next
+    // seminar's "too early to time in" (e.g. Seminar 2 at 7:00 AM).
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $sid = (string) ($session['id'] ?? '');
+        if ($sid === '') {
+            continue;
+        }
+        $existing = $bySession[$sid] ?? null;
+        if (!is_array($existing) || !$isPresent($existing)) {
+            continue;
+        }
+        if (trim((string) ($existing['check_out_at'] ?? '')) !== '') {
+            continue;
+        }
+        $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
+        $startAt = parse_iso_datetime((string) ($session['start_at'] ?? ''));
+        $grace = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+        $outWin = attendance_check_out_window(
+            $endAt,
+            $session['early_out_enabled_at'] ?? null,
+            $scanAt,
+            $startAt,
+            $grace
+        );
+        $sessName = trim((string) (build_session_display_name($session) ?: ($session['title'] ?? 'Seminar')));
+        if ($sessName === '') {
+            $sessName = 'Seminar';
+        }
+        $endLabel = attendance_format_manila_time($endAt);
+        $msg = 'Already timed in for ' . $sessName . '.';
+        if (($outWin['status'] ?? '') === 'too_early_checkout' && $endLabel !== '') {
+            $msg .= ' Too early to time out. Time-out opens at the seminar end (' . $endLabel . ').';
+        } else {
+            $msg .= ' ' . (string) ($outWin['message'] ?? 'Too early to time out.');
+        }
+        $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), $msg, 409, [
+            'session_id' => $sid,
+            'session_name' => $sessName,
+            'session_start_at' => trim((string) ($session['start_at'] ?? '')),
+            'session_end_at' => trim((string) ($session['end_at'] ?? '')),
+            'action' => 'check_out',
+            'already_timed_in' => true,
+        ]);
+    }
+
     // Try time-in for open session.
     $inResolve = attendance_resolve_session_check_in($sessions, $scanAt);
     $inStatus = (string) ($inResolve['status'] ?? 'closed');
@@ -407,16 +475,17 @@ if ($usesSessions) {
         if ($isPresent($existing)) {
             // Checked in but out window not open.
             $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-            $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
-            $endLabel = attendance_format_manila_time($endAt);
-            $msg = 'Already timed in for ' . $sessionName . '.';
-            if (($outWin['status'] ?? '') === 'too_early_checkout') {
-                $msg .= $endLabel !== ''
-                    ? (' Time-out opens at the seminar end (' . $endLabel . ').')
-                    : ' Time-out is not open yet.';
-            } else {
-                $msg .= ' ' . (string) ($outWin['message'] ?? 'Time-out is not open yet.');
-            }
+            $startAt = parse_iso_datetime((string) ($session['start_at'] ?? ''));
+            $grace = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+            $outWin = attendance_check_out_window(
+                $endAt,
+                $session['early_out_enabled_at'] ?? null,
+                $scanAt,
+                $startAt,
+                $grace
+            );
+            $msg = 'Already timed in for ' . $sessionName . '. '
+                . (string) ($outWin['message'] ?? 'Time-out is not open yet.');
             $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), $msg, 409, [
                 'session_id' => $sessionId,
                 'action' => 'check_out',
@@ -441,7 +510,15 @@ if ($usesSessions) {
                     continue;
                 }
                 $endAt = parse_iso_datetime((string) ($session['end_at'] ?? ''));
-                $outWin = attendance_check_out_window($endAt, $session['early_out_enabled_at'] ?? null, $scanAt);
+                $startAt = parse_iso_datetime((string) ($session['start_at'] ?? ''));
+                $grace = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+                $outWin = attendance_check_out_window(
+                    $endAt,
+                    $session['early_out_enabled_at'] ?? null,
+                    $scanAt,
+                    $startAt,
+                    $grace
+                );
                 if (($outWin['open'] ?? false) !== true) {
                     continue;
                 }
@@ -482,7 +559,15 @@ if ($usesSessions) {
                     break;
                 }
                 $endAt = parse_iso_datetime((string) ($sess['end_at'] ?? ''));
-                $outWin = attendance_check_out_window($endAt, $sess['early_out_enabled_at'] ?? null, $scanAt);
+                $startAt = parse_iso_datetime((string) ($sess['start_at'] ?? ''));
+                $grace = max(1, (int) ($sess['scan_window_minutes'] ?? 30));
+                $outWin = attendance_check_out_window(
+                    $endAt,
+                    $sess['early_out_enabled_at'] ?? null,
+                    $scanAt,
+                    $startAt,
+                    $grace
+                );
                 $sessName = trim((string) (build_session_display_name($sess) ?: ($sess['title'] ?? 'Seminar')));
                 if ($sessName === '') {
                     $sessName = 'Seminar';
@@ -617,7 +702,15 @@ if ($alreadyOut) {
 
 if ($alreadyIn) {
     $endAt = parse_iso_datetime((string) ($event['end_at'] ?? ''));
-    $outWin = attendance_check_out_window($endAt, $event['early_out_enabled_at'] ?? null, $scanAt);
+    $eventStartAt = parse_iso_datetime((string) ($event['start_at'] ?? ''));
+    $eventGrace = simple_event_grace_minutes($event);
+    $outWin = attendance_check_out_window(
+        $endAt,
+        $event['early_out_enabled_at'] ?? null,
+        $scanAt,
+        $eventStartAt,
+        $eventGrace
+    );
     if (($outWin['open'] ?? false) !== true) {
         $respond(false, (string) ($outWin['status'] ?? 'too_early_checkout'), (string) ($outWin['message'] ?? 'Time-out is not open yet.'), 409, ['action' => 'check_out']);
     }
@@ -647,7 +740,13 @@ if ($alreadyIn) {
 }
 
 $endAtForOut = parse_iso_datetime((string) ($event['end_at'] ?? ''));
-$outWinForAbsent = attendance_check_out_window($endAtForOut, $event['early_out_enabled_at'] ?? null, $scanAt);
+$outWinForAbsent = attendance_check_out_window(
+    $endAtForOut,
+    $event['early_out_enabled_at'] ?? null,
+    $scanAt,
+    parse_iso_datetime((string) ($event['start_at'] ?? '')),
+    simple_event_grace_minutes($event)
+);
 if (($outWinForAbsent['open'] ?? false) === true) {
     $respond(false, 'absent_no_time_in', 'Cannot time out — you have no time-in (marked absent).', 409, [
         'action' => 'check_out',

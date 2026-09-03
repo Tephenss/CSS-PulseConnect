@@ -21,6 +21,25 @@ if ($path === '') {
 }
 
 $root = __DIR__;
+
+// Fast favicon for browser tab icon while PHP pages are still loading.
+if ($path === '/favicon.ico') {
+    $icoPath = $root . DIRECTORY_SEPARATOR . 'favicon.ico';
+    if (is_file($icoPath)) {
+        header('Content-Type: image/x-icon');
+        header('Cache-Control: public, max-age=604800, immutable');
+        readfile($icoPath);
+        return true;
+    }
+    $pngPath = $root . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'favicon-32.png';
+    if (is_file($pngPath)) {
+        header('Content-Type: image/png');
+        header('Cache-Control: public, max-age=604800, immutable');
+        readfile($pngPath);
+        return true;
+    }
+}
+
 $requested = $root . $path;
 
 // Let the built-in server handle real static files and existing scripts.
