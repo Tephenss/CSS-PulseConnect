@@ -62,11 +62,17 @@ $payload = [
     'reviewed_at' => null,
     'reviewed_by' => null,
     'decline_reason' => null,
+    'review_claimed_by' => null,
+    'review_claimed_at' => null,
     'updated_at' => $now,
 ];
 
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_student_submissions?on_conflict=event_id,student_id';
 $res = supabase_request('POST', $url, student_requirement_write_headers(), json_encode($payload, JSON_UNESCAPED_SLASHES));
+if (!$res['ok'] && (str_contains(strtolower((string) ($res['body'] ?? '')), 'review_claimed_by') || str_contains(strtolower((string) ($res['body'] ?? '')), 'review_claimed_at'))) {
+    unset($payload['review_claimed_by'], $payload['review_claimed_at']);
+    $res = supabase_request('POST', $url, student_requirement_write_headers(), json_encode($payload, JSON_UNESCAPED_SLASHES));
+}
 
 if (!$res['ok']) {
     json_response(['ok' => false, 'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to submit documents for review.')], 500);

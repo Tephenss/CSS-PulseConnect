@@ -53,8 +53,8 @@ if ($suffix !== '' && mb_strlen($suffix) > 30) {
 if (!is_valid_ph_contact($contactNumber, false)) {
     json_response(['ok' => false, 'error' => 'Contact number must be 11 digits (example: 09123456789).'], 400);
 }
-if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
+if ($email === '' || !is_valid_account_email($email)) {
+    json_response(['ok' => false, 'error' => 'Please enter a valid email address (example: name@gmail.com).'], 400);
 }
 
 $headers = [

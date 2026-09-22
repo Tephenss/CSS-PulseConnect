@@ -286,16 +286,32 @@ function admin_login_resend_seconds_remaining(string $userId, ?array $challenge 
         $res = supabase_request(
             'GET',
             rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
-                . '?select=last_sent_at'
+                . '?select=last_sent_at,created_at'
                 . '&user_id=eq.' . rawurlencode($userId)
+                . '&purpose=eq.login'
                 . '&limit=1',
             admin_login_headers()
         );
+        if (!($res['ok'] ?? false)) {
+            $res = supabase_request(
+                'GET',
+                rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
+                    . '?select=last_sent_at,created_at'
+                    . '&user_id=eq.' . rawurlencode($userId)
+                    . '&limit=1',
+                admin_login_headers()
+            );
+        }
         if ($res['ok'] ?? false) {
             $rows = json_decode((string) ($res['body'] ?? ''), true);
-            $dbTs = is_array($rows) && isset($rows[0])
-                ? admin_login_parse_sent_at(isset($rows[0]['last_sent_at']) ? (string) $rows[0]['last_sent_at'] : null)
-                : null;
+            $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+            $dbTs = null;
+            if (is_array($row)) {
+                $dbTs = admin_login_parse_sent_at((string) ($row['last_sent_at'] ?? ''));
+                if ($dbTs === null) {
+                    $dbTs = admin_login_parse_sent_at((string) ($row['created_at'] ?? ''));
+                }
+            }
             if ($dbTs !== null && ($lastSent === null || $dbTs > $lastSent)) {
                 $lastSent = $dbTs;
             }
@@ -422,7 +438,8 @@ function admin_login_issue_challenge(
     ?string &$error,
     ?string &$info,
     string $role = 'admin',
-    string $gateReason = ''
+    string $gateReason = '',
+    bool $forceSend = false
 ): bool
 {
     $userId = trim((string) ($user['id'] ?? ''));
@@ -437,6 +454,59 @@ function admin_login_issue_challenge(
 
     if ($userId === '' || $email === '') {
         $error = 'Missing account details. Please try again.';
+        return false;
+    }
+
+    $wait = admin_login_resend_seconds_remaining(
+        $userId,
+        (isset($_SESSION['admin_login_challenge']) && is_array($_SESSION['admin_login_challenge']))
+            ? $_SESSION['admin_login_challenge']
+            : null
+    );
+    $existing = admin_login_fetch_code_row($userId);
+    $existingCode = is_array($existing) ? trim((string) ($existing['code'] ?? '')) : '';
+    $existingExp = is_array($existing) ? strtotime((string) ($existing['expires_at'] ?? '')) : false;
+    $codeStillValid = preg_match('/^\d{6}$/', $existingCode) === 1
+        && $existingExp !== false
+        && time() <= $existingExp;
+
+    $prevIssued = 0;
+    if (isset($_SESSION['admin_login_challenge']) && is_array($_SESSION['admin_login_challenge'])) {
+        $prevId = trim((string) ($_SESSION['admin_login_challenge']['id'] ?? ''));
+        if ($prevId === $userId) {
+            $prevIssued = (int) ($_SESSION['admin_login_challenge']['issued_at'] ?? 0);
+        }
+    }
+    $issuedAt = $prevIssued > 0
+        ? $prevIssued
+        : ($wait > 0 ? (time() - (admin_login_resend_cooldown_seconds() - $wait)) : time());
+
+    $restoreChallenge = static function () use ($userId, $fullName, $email, $role, $gateReason, $issuedAt): void {
+        $_SESSION['admin_login_challenge'] = [
+            'id' => $userId,
+            'full_name' => $fullName !== '' ? $fullName : ($role === 'teacher' ? 'Teacher' : 'Admin'),
+            'email' => $email,
+            'role' => $role,
+            'issued_at' => $issuedAt,
+            'gate_reason' => $gateReason,
+        ];
+    };
+
+    $maskedEmail = preg_replace('/(^.).*(@.*$)/', '$1••••$2', $email) ?: $email;
+
+    // Back / refresh / login again must NOT mint a new email while a code is still valid.
+    if (!$forceSend && $codeStillValid) {
+        $restoreChallenge();
+        $info = 'Use the 6-digit code already sent to ' . $maskedEmail . '.';
+        if ($wait > 0) {
+            $info .= ' A new code can be requested in ' . $wait . 's.';
+        }
+        return true;
+    }
+
+    if ($wait > 0) {
+        $restoreChallenge();
+        $error = 'Please wait ' . $wait . 's before requesting another verification code.';
         return false;
     }
 
@@ -482,19 +552,22 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     $sessionUser = (isset($_SESSION['user']) && is_array($_SESSION['user'])) ? $_SESSION['user'] : null;
     $sessionUserId = is_array($sessionUser) ? trim((string) ($sessionUser['id'] ?? '')) : '';
 
+    // Explicit cancel only — Back must not delete the OTP or reset cooldown.
+    if (isset($_GET['reset']) && (string) $_GET['reset'] === '1') {
+        unset($_SESSION['admin_login_challenge']);
+        $challenge = null;
+        header('Location: /login');
+        exit;
+    }
+
     if ($challenge !== null && $sessionUserId !== '' && trim((string) ($challenge['id'] ?? '')) !== $sessionUserId) {
         unset($_SESSION['admin_login_challenge']);
         $challenge = null;
     }
 
     if ($challenge !== null && !$isVerificationStep) {
-        admin_login_delete_code((string) ($challenge['id'] ?? ''));
-        unset($_SESSION['admin_login_challenge']);
-        $challenge = null;
-        if (!empty($_GET)) {
-            header('Location: /login');
-            exit;
-        }
+        header('Location: /login?step=verify');
+        exit;
     } elseif ($challenge === null && $isVerificationStep && $sessionUser === null) {
         header('Location: /login');
         exit;
@@ -558,7 +631,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 'id' => $challenge['id'] ?? '',
                                 'full_name' => $challenge['full_name'] ?? '',
                                 'email' => $challenge['email'] ?? '',
-                            ], $error, $info, $resendRole, (string) ($challenge['gate_reason'] ?? ''));
+                            ], $error, $info, $resendRole, (string) ($challenge['gate_reason'] ?? ''), true);
                             $challenge = $_SESSION['admin_login_challenge'] ?? $challenge;
                             if ($error === null) {
                                 header('Location: /login?step=verify');
@@ -736,8 +809,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
 
                                 $gateReason = !$trustedIp ? 'new_ip' : 'daily';
+                                $existingChallengeId = is_array($challenge)
+                                    ? trim((string) ($challenge['id'] ?? ''))
+                                    : '';
+                                if ($existingChallengeId === $userId) {
+                                    header('Location: /login?step=verify', true, 303);
+                                    exit;
+                                }
                                 if (admin_login_issue_challenge($user, $error, $info, $role, $gateReason)) {
-                                    header('Location: /login?step=verify');
+                                    header('Location: /login?step=verify', true, 303);
                                     exit;
                                 }
                             } else {
@@ -916,6 +996,9 @@ if ($isVerificationMode && is_array($challenge)) {
                             <p id="resendCooldownHint" class="mt-2 text-center text-[11px] text-zinc-500 <?= $resendCooldownRemaining > 0 ? '' : 'hidden' ?>">
                                 Wait before requesting another code.
                             </p>
+                            <p class="mt-3 text-center text-[11px]">
+                                <a href="/login?reset=1" class="text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline">Use a different account</a>
+                            </p>
                         </div>
                     <?php else: ?>
                         <input type="hidden" name="auth_step" value="credentials" />
@@ -971,6 +1054,10 @@ if ($isVerificationMode && is_array($challenge)) {
             var hidden = document.getElementById('verification_code');
             var form = root ? root.closest('form') : null;
             if (!root || !hidden || !form) return;
+
+            if (window.history && typeof window.history.replaceState === 'function') {
+                window.history.replaceState(null, document.title, '/login?step=verify');
+            }
 
             var boxes = Array.prototype.slice.call(root.querySelectorAll('.otp-box'));
             if (boxes.length !== 6) return;

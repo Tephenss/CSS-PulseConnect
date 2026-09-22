@@ -14,6 +14,8 @@ require_once __DIR__ . '/includes/event_sessions.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/document_review_access.php';
+require_once __DIR__ . '/includes/document_review_claim.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -42,11 +44,12 @@ if (!is_array($event)) {
 }
 
 $isCreator = (string) ($event['created_by'] ?? '') === $userId;
-if ($role === 'teacher' && !$isCreator) {
+if (!event_user_can_review_documents($eventId, $userId, $role, $isCreator)) {
     http_response_code(403);
-    echo 'Only the event creator can review student documents.';
+    echo 'You do not have Document Review access for this event.';
     exit;
 }
+$canManageReviewers = $role === 'admin' || $isCreator;
 
 $requirements = fetch_student_requirements_map([$eventId], $headers)[$eventId] ?? [];
 if ($requirements === []) {
@@ -125,6 +128,23 @@ usort($reviewRows, static function (array $a, array $b): int {
     return $bTime <=> $aTime;
 });
 
+$reviewerIds = [];
+foreach ($reviewRows as $row) {
+    $rid = trim((string) ($row['submission']['reviewed_by'] ?? ''));
+    if ($rid !== '') {
+        $reviewerIds[] = $rid;
+    }
+    $cid = trim((string) ($row['submission']['review_claimed_by'] ?? ''));
+    if ($cid !== '') {
+        $reviewerIds[] = $cid;
+    }
+}
+$reviewerProfiles = document_review_load_user_profiles($reviewerIds);
+$grantedReviewers = $canManageReviewers ? event_document_reviewers_list($eventId) : [];
+$eligibleTeachers = $canManageReviewers
+    ? document_review_eligible_teachers($eventId, (string) ($event['created_by'] ?? ''))
+    : [];
+
 $pendingCount = 0;
 $approvedCount = 0;
 $declinedCount = 0;
@@ -141,10 +161,22 @@ foreach ($reviewRows as $row) {
 
 render_header('Document Review', $user);
 
+$shareAccessButtonHtml = '';
+if ($canManageReviewers) {
+    $grantedCount = count($grantedReviewers);
+    $shareAccessButtonHtml = '<button type="button" id="btnOpenReviewAccess"'
+        . ' class="rounded-xl border border-sky-200 bg-sky-600 text-white px-4 py-2 text-sm font-semibold hover:bg-sky-700 transition shadow-sm inline-flex items-center gap-2">'
+        . '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>'
+        . 'Share access'
+        . '<span data-share-count class="rounded-full bg-white/20 px-1.5 py-0.5 text-[11px] font-bold leading-none' . ($grantedCount > 0 ? '' : ' hidden') . '">' . (int) $grantedCount . '</span>'
+        . '</button>';
+}
+
 render_event_page_header([
     'back_href' => $backHref,
     'title' => (string) ($event['title'] ?? 'Event'),
     'subtitle' => 'Review student document submissions before they can register.',
+    'actions_html' => $shareAccessButtonHtml,
 ]);
 
 render_event_tabs([
@@ -229,6 +261,25 @@ foreach ($reviewRows as $row) {
             ? format_date_local((string) $submission['submitted_at'], 'M j, Y g:i A')
             : '',
         'decline_reason' => trim((string) ($submission['decline_reason'] ?? '')),
+        'reviewed_by_name' => (static function () use ($submission, $reviewerProfiles): string {
+            $rid = trim((string) ($submission['reviewed_by'] ?? ''));
+            if ($rid === '' || !isset($reviewerProfiles[$rid])) {
+                return '';
+            }
+            return document_review_teacher_display_name($reviewerProfiles[$rid]);
+        })(),
+        'claim_active' => document_review_claim_is_active($submission),
+        'claimed_by_me' => document_review_claim_held_by($submission, $userId),
+        'claimed_by_name' => (static function () use ($submission, $reviewerProfiles): string {
+            if (!document_review_claim_is_active($submission)) {
+                return '';
+            }
+            $cid = trim((string) ($submission['review_claimed_by'] ?? ''));
+            if ($cid === '' || !isset($reviewerProfiles[$cid])) {
+                return '';
+            }
+            return document_review_teacher_display_name($reviewerProfiles[$cid]);
+        })(),
         'documents' => $docItems,
     ];
 }
@@ -256,6 +307,7 @@ foreach ($reviewRows as $row) {
       class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20">
       <option value="all">All statuses</option>
       <option value="pending_review" selected>Pending only</option>
+      <option value="in_review">In review now</option>
       <option value="approved">Approved only</option>
       <option value="declined">Declined only</option>
     </select>
@@ -278,6 +330,7 @@ foreach ($reviewRows as $row) {
             <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500 min-w-[180px]">Student</th>
             <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500 hidden md:table-cell">ID / Section</th>
             <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500">Status</th>
+            <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500 hidden xl:table-cell">Reviewed by</th>
             <th class="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500 hidden lg:table-cell">Submitted</th>
             <th class="px-3 py-2 text-center text-[11px] font-bold uppercase tracking-wider text-zinc-500 w-16">Action</th>
           </tr>
@@ -322,8 +375,18 @@ foreach ($reviewRows as $row) {
                   : '—';
               $searchBlob = strtolower(trim($displayName . ' ' . $email . ' ' . $studentNo . ' ' . $sectionName));
               $declineReason = trim((string) ($submission['decline_reason'] ?? ''));
+              $reviewedById = trim((string) ($submission['reviewed_by'] ?? ''));
+              $reviewedByName = ($reviewedById !== '' && isset($reviewerProfiles[$reviewedById]))
+                  ? document_review_teacher_display_name($reviewerProfiles[$reviewedById])
+                  : '';
+              $claimActive = $status === 'pending_review' && document_review_claim_is_active($submission);
+              $claimedByMe = $claimActive && document_review_claim_held_by($submission, $userId);
+              $claimedById = trim((string) ($submission['review_claimed_by'] ?? ''));
+              $claimedByName = ($claimActive && $claimedById !== '' && isset($reviewerProfiles[$claimedById]))
+                  ? document_review_teacher_display_name($reviewerProfiles[$claimedById])
+                  : '';
             ?>
-            <tr class="review-row hover:bg-zinc-50/80" data-status="<?= htmlspecialchars($status) ?>" data-search="<?= htmlspecialchars($searchBlob) ?>">
+            <tr class="review-row hover:bg-zinc-50/80" data-status="<?= htmlspecialchars($status) ?>" data-search="<?= htmlspecialchars($searchBlob) ?>" data-in-review="<?= $claimActive ? '1' : '0' ?>">
               <td class="px-3 py-2 text-xs text-zinc-400 font-medium"><?= (int) ($index + 1) ?></td>
               <td class="px-3 py-2 min-w-0">
                 <div class="font-semibold text-zinc-900 truncate max-w-[220px]" title="<?= htmlspecialchars($displayName) ?>"><?= htmlspecialchars($displayName) ?></div>
@@ -342,9 +405,20 @@ foreach ($reviewRows as $row) {
                   <?php if ($status === 'declined' && $declineReason !== ''): ?>title="<?= htmlspecialchars($declineReason) ?>"<?php endif; ?>>
                   <?= htmlspecialchars($statusLabel) ?>
                 </span>
+                <?php if ($claimActive): ?>
+                  <div class="mt-1 text-[11px] font-semibold <?= $claimedByMe ? 'text-sky-700' : 'text-violet-700' ?>" title="<?= htmlspecialchars($claimedByName !== '' ? $claimedByName : 'Another teacher') ?>">
+                    <?= $claimedByMe ? 'You are reviewing' : 'In review' ?>
+                    <?php if (!$claimedByMe && $claimedByName !== ''): ?>
+                      · <?= htmlspecialchars($claimedByName) ?>
+                    <?php endif; ?>
+                  </div>
+                <?php endif; ?>
                 <?php if ($status === 'declined' && $declineReason !== ''): ?>
                   <div class="mt-1 max-w-[140px] truncate text-[11px] text-red-600" title="<?= htmlspecialchars($declineReason) ?>"><?= htmlspecialchars($declineReason) ?></div>
                 <?php endif; ?>
+              </td>
+              <td class="px-3 py-2 text-xs text-zinc-500 hidden xl:table-cell">
+                <?= $reviewedByName !== '' ? htmlspecialchars($reviewedByName) : '—' ?>
               </td>
               <td class="px-3 py-2 text-xs text-zinc-500 whitespace-nowrap hidden lg:table-cell"><?= htmlspecialchars($submittedLabel) ?></td>
               <td class="px-3 py-2 text-center">
@@ -366,6 +440,80 @@ foreach ($reviewRows as $row) {
   </div>
 <?php endif; ?>
 
+<?php if ($canManageReviewers): ?>
+<div id="reviewAccessModal" class="fixed inset-0 z-[60] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="w-full max-w-md max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-zinc-200 shrink-0">
+      <div class="min-w-0">
+        <h3 class="text-lg font-bold text-zinc-900">Share Document Review</h3>
+        <p class="mt-1 text-sm text-zinc-500">Give other teachers access so they can help review submissions.</p>
+      </div>
+      <button type="button" id="btnCloseReviewAccess" class="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition" title="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+      <div class="rounded-xl border border-zinc-100 bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600 leading-relaxed">
+        First Approve or Decline that saves wins. While a teacher has a student open, others will see <span class="font-semibold text-zinc-800">In review</span> and cannot take the same student.
+      </div>
+      <div>
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-xs font-bold uppercase tracking-wide text-zinc-500">Add teachers</label>
+          <button type="button" id="btnSelectAllEligible" class="text-[11px] font-semibold text-sky-700 hover:text-sky-800">Select all</button>
+        </div>
+        <input type="search" id="reviewAccessSearch" placeholder="Search name or email…"
+          class="mt-2 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20">
+        <div id="reviewEligibleList" class="mt-2 max-h-48 overflow-y-auto rounded-xl border border-zinc-200 divide-y divide-zinc-100">
+          <?php if ($eligibleTeachers === []): ?>
+            <p id="reviewEligibleEmpty" class="px-3 py-6 text-center text-sm text-zinc-400">All eligible teachers already have access.</p>
+          <?php else: ?>
+            <p id="reviewEligibleEmpty" class="hidden px-3 py-6 text-center text-sm text-zinc-400">All eligible teachers already have access.</p>
+            <?php foreach ($eligibleTeachers as $teacher): ?>
+              <?php
+                $tid = (string) ($teacher['id'] ?? '');
+                $tname = (string) ($teacher['name'] ?? 'Teacher');
+                $temail = (string) ($teacher['email'] ?? '');
+              ?>
+              <label class="review-eligible-row flex items-start gap-3 bg-white px-3 py-2.5 cursor-pointer hover:bg-zinc-50"
+                data-teacher-id="<?= htmlspecialchars($tid) ?>"
+                data-search="<?= htmlspecialchars(strtolower(trim($tname . ' ' . $temail))) ?>">
+                <input type="checkbox" class="review-eligible-check mt-1 h-4 w-4 rounded border-zinc-300 text-sky-600 focus:ring-sky-500"
+                  value="<?= htmlspecialchars($tid) ?>">
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-semibold text-zinc-800"><?= htmlspecialchars($tname) ?></span>
+                  <span class="block truncate text-xs text-zinc-500"><?= htmlspecialchars($temail !== '' ? $temail : '—') ?></span>
+                </span>
+              </label>
+            <?php endforeach; ?>
+          <?php endif; ?>
+        </div>
+        <p id="reviewEligibleFilterEmpty" class="hidden mt-2 text-xs text-zinc-400">No teachers match your search.</p>
+        <button type="button" id="btnGrantReviewAccess" class="mt-3 w-full rounded-lg border border-sky-600 bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700 transition disabled:opacity-50">Grant selected</button>
+      </div>
+      <div>
+        <div class="text-xs font-bold uppercase tracking-wide text-zinc-500">Teachers with access</div>
+        <p id="reviewGrantedEmpty" class="mt-2 rounded-xl border border-dashed border-zinc-200 px-3 py-6 text-center text-sm text-zinc-400<?= $grantedReviewers === [] ? '' : ' hidden' ?>">No other teachers have Document Review access yet.</p>
+        <ul id="reviewGrantedList" class="mt-2 divide-y divide-zinc-100 rounded-xl border border-zinc-200 overflow-hidden<?= $grantedReviewers === [] ? ' hidden' : '' ?>">
+          <?php foreach ($grantedReviewers as $granted): ?>
+            <li class="review-granted-row flex items-center justify-between gap-3 bg-white px-3 py-2.5" data-teacher-id="<?= htmlspecialchars((string) ($granted['teacher_id'] ?? '')) ?>">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold text-zinc-800"><?= htmlspecialchars((string) ($granted['name'] ?? 'Teacher')) ?></div>
+                <div class="truncate text-xs text-zinc-500"><?= htmlspecialchars((string) ($granted['email'] ?? '')) ?></div>
+              </div>
+              <button type="button"
+                class="btn-revoke-review-access shrink-0 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                data-teacher-id="<?= htmlspecialchars((string) ($granted['teacher_id'] ?? '')) ?>">
+                Remove
+              </button>
+            </li>
+          <?php endforeach; ?>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
+
 <div id="reviewModal" class="fixed inset-0 z-[60] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
   <div class="w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
     <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-zinc-200 shrink-0">
@@ -374,6 +522,8 @@ foreach ($reviewRows as $row) {
         <p id="reviewModalMeta" class="mt-1 text-sm text-zinc-500"></p>
         <div class="mt-2 flex flex-wrap items-center gap-2">
           <span id="reviewModalStatus" class="inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"></span>
+          <span id="reviewModalReviewer" class="text-xs text-zinc-500"></span>
+          <span id="reviewModalLock" class="hidden text-xs font-semibold text-sky-700"></span>
           <span id="reviewModalSubmitted" class="text-xs text-zinc-400"></span>
         </div>
       </div>
@@ -424,6 +574,62 @@ foreach ($reviewRows as $row) {
   const EVENT_ID = <?= json_encode($eventId, JSON_UNESCAPED_SLASHES) ?>;
   const REVIEW_DATA = <?= json_encode($reviewModalData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
   let activeReviewStudentId = '';
+  let reviewClaimTimer = null;
+  let reviewClaimHeld = false;
+
+  async function reviewClaimRequest(studentId, action) {
+    const res = await fetch('/api/student_requirements_review_claim.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: EVENT_ID,
+        student_id: studentId,
+        action,
+        csrf_token: window.CSRF_TOKEN,
+      }),
+    });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = {};
+    }
+    if (!data.ok) {
+      const err = new Error(data.error || 'Unable to lock this student for review.');
+      err.conflict = !!data.conflict || res.status === 409;
+      throw err;
+    }
+    return data;
+  }
+
+  function stopReviewClaimHeartbeat() {
+    if (reviewClaimTimer) {
+      clearInterval(reviewClaimTimer);
+      reviewClaimTimer = null;
+    }
+  }
+
+  function startReviewClaimHeartbeat(studentId) {
+    stopReviewClaimHeartbeat();
+    reviewClaimTimer = setInterval(() => {
+      reviewClaimRequest(studentId, 'heartbeat').catch((error) => {
+        stopReviewClaimHeartbeat();
+        alert(error.message || 'Another teacher took this student. Closing…');
+        window.location.reload();
+      });
+    }, 45000);
+  }
+
+  async function releaseReviewClaim(studentId) {
+    if (!studentId || !reviewClaimHeld) return;
+    reviewClaimHeld = false;
+    stopReviewClaimHeartbeat();
+    try {
+      await reviewClaimRequest(studentId, 'release');
+    } catch (e) {
+      // Closing should still succeed even if the lock already expired.
+    }
+  }
 
   async function reviewSubmission(studentId, action, reason = '') {
     const res = await fetch('/api/student_requirements_review.php', {
@@ -439,7 +645,38 @@ foreach ($reviewRows as $row) {
     });
     const data = await res.json();
     if (!data.ok) {
-      throw new Error(data.error || 'Review failed.');
+      const err = new Error(data.error || 'Review failed.');
+      err.conflict = !!data.conflict || res.status === 409;
+      throw err;
+    }
+    return data;
+  }
+
+  function handleReviewConflict(error, btn) {
+    const message = error?.message || 'Review failed.';
+    alert(message);
+    if (error?.conflict || /^Already /i.test(message)) {
+      window.location.reload();
+      return;
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  async function setReviewAccess(teacherIds, enabled) {
+    const ids = Array.isArray(teacherIds) ? teacherIds : [teacherIds];
+    const res = await fetch('/api/event_document_review_access.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: EVENT_ID,
+        teacher_ids: ids,
+        enabled,
+        csrf_token: window.CSRF_TOKEN,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      throw new Error(data.error || 'Failed to update access.');
     }
     return data;
   }
@@ -448,6 +685,8 @@ foreach ($reviewRows as $row) {
   const reviewModalName = document.getElementById('reviewModalName');
   const reviewModalMeta = document.getElementById('reviewModalMeta');
   const reviewModalStatus = document.getElementById('reviewModalStatus');
+  const reviewModalReviewer = document.getElementById('reviewModalReviewer');
+  const reviewModalLock = document.getElementById('reviewModalLock');
   const reviewModalSubmitted = document.getElementById('reviewModalSubmitted');
   const reviewModalDeclineReason = document.getElementById('reviewModalDeclineReason');
   const reviewModalDocuments = document.getElementById('reviewModalDocuments');
@@ -583,6 +822,18 @@ foreach ($reviewRows as $row) {
     if (reviewModalSubmitted) {
       reviewModalSubmitted.textContent = data.submitted_at ? `Submitted ${data.submitted_at}` : '';
     }
+    if (reviewModalReviewer) {
+      reviewModalReviewer.textContent = data.reviewed_by_name ? `Reviewed by ${data.reviewed_by_name}` : '';
+    }
+    if (reviewModalLock) {
+      if (status === 'pending_review') {
+        reviewModalLock.textContent = 'Locked for you — close this panel so another teacher can take the next student.';
+        reviewModalLock.classList.remove('hidden');
+      } else {
+        reviewModalLock.textContent = '';
+        reviewModalLock.classList.add('hidden');
+      }
+    }
 
     if (reviewModalDeclineReason) {
       if (status === 'declined' && data.decline_reason) {
@@ -610,21 +861,56 @@ foreach ($reviewRows as $row) {
     reviewModal.classList.add('flex');
   }
 
-  function closeReviewModal() {
+  async function closeReviewModal(opts = {}) {
+    const keepLock = !!opts.keepLock;
+    const claimedStudentId = activeReviewStudentId;
     if (!reviewModal) return;
     reviewModal.classList.add('hidden');
     reviewModal.classList.remove('flex');
+    if (!keepLock) {
+      await releaseReviewClaim(claimedStudentId);
+    } else {
+      stopReviewClaimHeartbeat();
+      reviewClaimHeld = false;
+    }
     activeReviewStudentId = '';
     resetReviewDeclineForm();
   }
 
   document.querySelectorAll('.btn-view-review').forEach((button) => {
-    button.addEventListener('click', () => {
-      openReviewModal(button.dataset.studentId || '');
+    button.addEventListener('click', async () => {
+      const studentId = button.dataset.studentId || '';
+      const data = REVIEW_DATA[studentId];
+      if (!studentId || !data) return;
+
+      if (activeReviewStudentId && activeReviewStudentId !== studentId) {
+        await releaseReviewClaim(activeReviewStudentId);
+      }
+
+      if ((data.status || 'pending_review') === 'pending_review') {
+        button.disabled = true;
+        try {
+          await reviewClaimRequest(studentId, 'claim');
+          reviewClaimHeld = true;
+        } catch (error) {
+          button.disabled = false;
+          alert(error.message || 'Another teacher is already reviewing this student.');
+          if (error.conflict) {
+            window.location.reload();
+          }
+          return;
+        }
+        button.disabled = false;
+        startReviewClaimHeartbeat(studentId);
+      }
+
+      openReviewModal(studentId);
     });
   });
 
-  document.getElementById('btnCloseReviewModal')?.addEventListener('click', closeReviewModal);
+  document.getElementById('btnCloseReviewModal')?.addEventListener('click', () => {
+    closeReviewModal();
+  });
   reviewModal?.addEventListener('click', (event) => {
     if (event.target === reviewModal) closeReviewModal();
   });
@@ -637,10 +923,11 @@ foreach ($reviewRows as $row) {
     btnReviewModalApprove.disabled = true;
     try {
       await reviewSubmission(activeReviewStudentId, 'approve');
+      reviewClaimHeld = false;
+      stopReviewClaimHeartbeat();
       window.location.reload();
     } catch (error) {
-      alert(error.message || 'Failed to approve.');
-      btnReviewModalApprove.disabled = false;
+      handleReviewConflict(error, btnReviewModalApprove);
     }
   });
 
@@ -665,10 +952,11 @@ foreach ($reviewRows as $row) {
     btnReviewConfirmDecline.disabled = true;
     try {
       await reviewSubmission(activeReviewStudentId, 'decline', reason);
+      reviewClaimHeld = false;
+      stopReviewClaimHeartbeat();
       window.location.reload();
     } catch (error) {
-      alert(error.message || 'Failed to decline.');
-      btnReviewConfirmDecline.disabled = false;
+      handleReviewConflict(error, btnReviewConfirmDecline);
     }
   });
 
@@ -686,7 +974,10 @@ foreach ($reviewRows as $row) {
     reviewRows.forEach((row) => {
       const rowStatus = row.dataset.status || '';
       const rowSearch = row.dataset.search || '';
-      const statusMatch = status === 'all' || rowStatus === status;
+      const inReview = row.dataset.inReview === '1';
+      const statusMatch = status === 'all'
+        || (status === 'in_review' && inReview)
+        || (status !== 'in_review' && rowStatus === status);
       const searchMatch = query === '' || rowSearch.includes(query);
       const show = statusMatch && searchMatch;
       row.classList.toggle('hidden', !show);
@@ -704,6 +995,180 @@ foreach ($reviewRows as $row) {
   reviewSearch?.addEventListener('input', applyReviewFilters);
   reviewStatusFilter?.addEventListener('change', applyReviewFilters);
   applyReviewFilters();
+
+  const reviewAccessModal = document.getElementById('reviewAccessModal');
+  const reviewEligibleList = document.getElementById('reviewEligibleList');
+  const reviewEligibleEmpty = document.getElementById('reviewEligibleEmpty');
+  const reviewEligibleFilterEmpty = document.getElementById('reviewEligibleFilterEmpty');
+  const reviewGrantedList = document.getElementById('reviewGrantedList');
+  const reviewGrantedEmpty = document.getElementById('reviewGrantedEmpty');
+  const reviewAccessSearch = document.getElementById('reviewAccessSearch');
+
+  function openReviewAccessModal() {
+    if (!reviewAccessModal) return;
+    reviewAccessModal.classList.remove('hidden');
+    reviewAccessModal.classList.add('flex');
+  }
+  function closeReviewAccessModal() {
+    if (!reviewAccessModal) return;
+    reviewAccessModal.classList.add('hidden');
+    reviewAccessModal.classList.remove('flex');
+  }
+
+  function updateShareAccessCount() {
+    const count = document.querySelectorAll('.review-granted-row').length;
+    const badge = document.querySelector('[data-share-count]');
+    if (!badge) return;
+    badge.textContent = String(count);
+    badge.classList.toggle('hidden', count === 0);
+  }
+
+  function refreshEligibleEmpty() {
+    const rows = document.querySelectorAll('.review-eligible-row');
+    if (reviewEligibleEmpty) {
+      reviewEligibleEmpty.classList.toggle('hidden', rows.length > 0);
+    }
+  }
+
+  function refreshGrantedEmpty() {
+    const hasGranted = document.querySelectorAll('.review-granted-row').length > 0;
+    reviewGrantedEmpty?.classList.toggle('hidden', hasGranted);
+    reviewGrantedList?.classList.toggle('hidden', !hasGranted);
+    updateShareAccessCount();
+  }
+
+  function applyEligibleSearch() {
+    const query = (reviewAccessSearch?.value || '').trim().toLowerCase();
+    const rows = Array.from(document.querySelectorAll('.review-eligible-row'));
+    let visible = 0;
+    rows.forEach((row) => {
+      const match = query === '' || (row.dataset.search || '').includes(query);
+      row.classList.toggle('hidden', !match);
+      if (match) visible++;
+    });
+    const hasRows = rows.length > 0;
+    reviewEligibleFilterEmpty?.classList.toggle('hidden', !hasRows || visible > 0 || query === '');
+  }
+
+  function eligibleRowHtml(teacher) {
+    const id = escapeHtml(teacher.teacher_id || teacher.id || '');
+    const name = escapeHtml(teacher.name || 'Teacher');
+    const email = escapeHtml(teacher.email || '');
+    const search = escapeHtml(String((teacher.name || '') + ' ' + (teacher.email || '')).toLowerCase());
+    return `<label class="review-eligible-row flex items-start gap-3 bg-white px-3 py-2.5 cursor-pointer hover:bg-zinc-50" data-teacher-id="${id}" data-search="${search}">
+      <input type="checkbox" class="review-eligible-check mt-1 h-4 w-4 rounded border-zinc-300 text-sky-600 focus:ring-sky-500" value="${id}">
+      <span class="min-w-0">
+        <span class="block truncate text-sm font-semibold text-zinc-800">${name}</span>
+        <span class="block truncate text-xs text-zinc-500">${email || '—'}</span>
+      </span>
+    </label>`;
+  }
+
+  function grantedRowHtml(teacher) {
+    const id = escapeHtml(teacher.teacher_id || teacher.id || '');
+    const name = escapeHtml(teacher.name || 'Teacher');
+    const email = escapeHtml(teacher.email || '');
+    return `<li class="review-granted-row flex items-center justify-between gap-3 bg-white px-3 py-2.5" data-teacher-id="${id}">
+      <div class="min-w-0">
+        <div class="truncate text-sm font-semibold text-zinc-800">${name}</div>
+        <div class="truncate text-xs text-zinc-500">${email}</div>
+      </div>
+      <button type="button" class="btn-revoke-review-access shrink-0 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700" data-teacher-id="${id}">Remove</button>
+    </li>`;
+  }
+
+  function bindRevokeButtons(scope) {
+    (scope || document).querySelectorAll('.btn-revoke-review-access').forEach((button) => {
+      if (button.dataset.bound === '1') return;
+      button.dataset.bound = '1';
+      button.addEventListener('click', async () => {
+        const teacherId = String(button.dataset.teacherId || '').trim();
+        if (!teacherId) return;
+        if (!confirm('Remove Document Review access for this teacher?')) return;
+        button.disabled = true;
+        try {
+          const data = await setReviewAccess([teacherId], false);
+          const teacher = (data.teachers && data.teachers[0]) || { teacher_id: teacherId, name: 'Teacher', email: '' };
+          button.closest('.review-granted-row')?.remove();
+          if (reviewEligibleList) {
+            reviewEligibleEmpty?.classList.add('hidden');
+            reviewEligibleList.insertAdjacentHTML('beforeend', eligibleRowHtml(teacher));
+          }
+          refreshGrantedEmpty();
+          refreshEligibleEmpty();
+          applyEligibleSearch();
+        } catch (error) {
+          alert(error.message || 'Failed to remove access.');
+          button.disabled = false;
+        }
+      });
+    });
+  }
+
+  document.getElementById('btnOpenReviewAccess')?.addEventListener('click', openReviewAccessModal);
+  document.getElementById('btnCloseReviewAccess')?.addEventListener('click', closeReviewAccessModal);
+  reviewAccessModal?.addEventListener('click', (event) => {
+    if (event.target === reviewAccessModal) closeReviewAccessModal();
+  });
+  reviewAccessSearch?.addEventListener('input', applyEligibleSearch);
+
+  document.getElementById('btnSelectAllEligible')?.addEventListener('click', () => {
+    const visible = Array.from(document.querySelectorAll('.review-eligible-row')).filter((row) => !row.classList.contains('hidden'));
+    const checks = visible.map((row) => row.querySelector('.review-eligible-check')).filter(Boolean);
+    const allOn = checks.length > 0 && checks.every((box) => box.checked);
+    checks.forEach((box) => { box.checked = !allOn; });
+  });
+
+  document.getElementById('btnGrantReviewAccess')?.addEventListener('click', async () => {
+    const selected = Array.from(document.querySelectorAll('.review-eligible-check:checked'))
+      .map((box) => String(box.value || '').trim())
+      .filter(Boolean);
+    if (selected.length === 0) {
+      alert('Check at least one teacher.');
+      return;
+    }
+    const btn = document.getElementById('btnGrantReviewAccess');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await setReviewAccess(selected, true);
+      const granted = Array.isArray(data.teachers) ? data.teachers : [];
+      granted.forEach((teacher) => {
+        const id = String(teacher.teacher_id || '');
+        document.querySelector('.review-eligible-row[data-teacher-id="' + CSS.escape(id) + '"]')?.remove();
+        if (reviewGrantedList) {
+          reviewGrantedList.insertAdjacentHTML('beforeend', grantedRowHtml(teacher));
+        }
+      });
+      bindRevokeButtons(reviewGrantedList);
+      refreshGrantedEmpty();
+      refreshEligibleEmpty();
+      applyEligibleSearch();
+      if (reviewAccessSearch) reviewAccessSearch.value = '';
+      applyEligibleSearch();
+    } catch (error) {
+      alert(error.message || 'Failed to grant access.');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  bindRevokeButtons(reviewGrantedList);
+
+  window.addEventListener('pagehide', () => {
+    if (!reviewClaimHeld || !activeReviewStudentId) return;
+    const body = JSON.stringify({
+      event_id: EVENT_ID,
+      student_id: activeReviewStudentId,
+      action: 'release',
+      csrf_token: window.CSRF_TOKEN,
+    });
+    fetch('/api/student_requirements_review_claim.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  });
 </script>
 
 <?php render_footer(); ?>

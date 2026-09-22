@@ -61,6 +61,8 @@ $payload = [
     'reviewed_at' => null,
     'reviewed_by' => null,
     'decline_reason' => null,
+    'review_claimed_by' => null,
+    'review_claimed_at' => null,
     'updated_at' => $now,
 ];
 
@@ -69,6 +71,13 @@ $res = supabase_request('POST', $url, array_merge(mobile_api_supabase_headers(),
     'Content-Type: application/json',
     'Prefer: resolution=merge-duplicates,return=representation',
 ]), json_encode($payload, JSON_UNESCAPED_SLASHES));
+if (!$res['ok'] && (str_contains(strtolower((string) ($res['body'] ?? '')), 'review_claimed_by') || str_contains(strtolower((string) ($res['body'] ?? '')), 'review_claimed_at'))) {
+    unset($payload['review_claimed_by'], $payload['review_claimed_at']);
+    $res = supabase_request('POST', $url, array_merge(mobile_api_supabase_headers(), [
+        'Content-Type: application/json',
+        'Prefer: resolution=merge-duplicates,return=representation',
+    ]), json_encode($payload, JSON_UNESCAPED_SLASHES));
+}
 
 if (!$res['ok']) {
     json_response(['ok' => false, 'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Failed to submit documents for review.')], 500);

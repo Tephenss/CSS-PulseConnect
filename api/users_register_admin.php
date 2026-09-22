@@ -50,8 +50,8 @@ if ($suffix !== '' && mb_strlen($suffix) > 30) {
 if (!is_valid_ph_contact($contactNumber, false)) {
     json_response(['ok' => false, 'error' => 'Contact number must be 11 digits (example: 09123456789).'], 400);
 }
-if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
+if ($email === '' || !is_valid_account_email($email)) {
+    json_response(['ok' => false, 'error' => 'Please enter a valid email address (example: name@gmail.com).'], 400);
 }
 
 function generate_admin_temp_password(int $length = 12): string
@@ -129,7 +129,7 @@ if (!$res['ok']) {
     }
     json_response([
         'ok' => false,
-        'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Could not create admin account'),
+        'error' => staff_user_write_error($res, 'Could not create admin account'),
     ], 500);
 }
 

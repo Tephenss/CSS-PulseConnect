@@ -189,6 +189,16 @@ if (!function_exists('render_event_tabs')) {
         $isEventCreator = (bool) ($options['is_event_creator'] ?? false);
         $isPaidEvent = (bool) ($options['is_paid_event'] ?? false);
         $canManageExtras = $role === 'admin' || $isEventCreator;
+        $canReviewDocuments = $canManageExtras;
+        if (!$canReviewDocuments && $hasStudentRequirements && $role === 'teacher') {
+            if (!function_exists('event_teacher_can_review_documents')) {
+                require_once __DIR__ . '/document_review_access.php';
+            }
+            $sessionUid = trim((string) ($_SESSION['user']['id'] ?? ''));
+            if ($sessionUid !== '') {
+                $canReviewDocuments = event_teacher_can_review_documents($eventId, $sessionUid);
+            }
+        }
 
         if ($role === 'student') {
             return;
@@ -204,7 +214,7 @@ if (!function_exists('render_event_tabs')) {
             echo event_tab_link_html($paymentsHref, 'Payments', $currentTab === 'payments');
         }
 
-        if ($canManageExtras && $hasStudentRequirements) {
+        if ($hasStudentRequirements && ($canManageExtras || $canReviewDocuments)) {
             echo event_tab_link_html(
                 $documentReviewHref,
                 'Document Review',

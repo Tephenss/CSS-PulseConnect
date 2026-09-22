@@ -11,9 +11,12 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/event_targeting.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
+require_once __DIR__ . '/../includes/document_review_access.php';
+require_once __DIR__ . '/../includes/document_review_claim.php';
 
-$user = require_role(['teacher']);
+$user = require_role(['admin', 'teacher']);
 $userId = trim((string) ($user['id'] ?? ''));
+$role = strtolower(trim((string) ($user['role'] ?? '')));
 $eventId = trim((string) ($_GET['event_id'] ?? ''));
 
 if ($eventId === '') {
@@ -33,8 +36,9 @@ if (!is_array($event)) {
     json_response(['ok' => false, 'error' => 'Event not found.'], 404);
 }
 
-if (trim((string) ($event['created_by'] ?? '')) !== $userId) {
-    json_response(['ok' => false, 'error' => 'Only the event creator can review student documents.'], 403);
+$isCreator = trim((string) ($event['created_by'] ?? '')) === $userId;
+if (!event_user_can_review_documents($eventId, $userId, $role, $isCreator)) {
+    json_response(['ok' => false, 'error' => 'You do not have Document Review access for this event.'], 403);
 }
 
 $requirements = fetch_student_requirements_map([$eventId], $headers)[$eventId] ?? [];
@@ -104,6 +108,19 @@ usort($reviewRows, static function (array $a, array $b): int {
     return $bTime <=> $aTime;
 });
 
+$reviewerIds = [];
+foreach ($reviewRows as $row) {
+    $rid = trim((string) ($row['submission']['reviewed_by'] ?? ''));
+    if ($rid !== '') {
+        $reviewerIds[] = $rid;
+    }
+    $cid = trim((string) ($row['submission']['review_claimed_by'] ?? ''));
+    if ($cid !== '') {
+        $reviewerIds[] = $cid;
+    }
+}
+$reviewerProfiles = document_review_load_user_profiles($reviewerIds);
+
 $pendingCount = 0;
 $approvedCount = 0;
 $declinedCount = 0;
@@ -169,6 +186,11 @@ foreach ($reviewRows as $row) {
         ];
     }
 
+    $reviewerId = trim((string) ($submission['reviewed_by'] ?? ''));
+    $reviewerName = ($reviewerId !== '' && isset($reviewerProfiles[$reviewerId]))
+        ? document_review_teacher_display_name($reviewerProfiles[$reviewerId])
+        : '';
+
     $submissions[$studentId] = [
         'student_id' => $studentId,
         'display_name' => (string) ($student['display_name'] ?? 'Student'),
@@ -185,6 +207,20 @@ foreach ($reviewRows as $row) {
             ? format_date_local((string) $submission['submitted_at'], 'M j, Y g:i A')
             : '',
         'decline_reason' => trim((string) ($submission['decline_reason'] ?? '')),
+        'reviewed_by' => $reviewerId,
+        'reviewed_by_name' => $reviewerName,
+        'claim_active' => $status === 'pending_review' && document_review_claim_is_active($submission),
+        'claimed_by_me' => $status === 'pending_review' && document_review_claim_held_by($submission, $userId),
+        'claimed_by_name' => (static function () use ($status, $submission, $reviewerProfiles): string {
+            if ($status !== 'pending_review' || !document_review_claim_is_active($submission)) {
+                return '';
+            }
+            $cid = trim((string) ($submission['review_claimed_by'] ?? ''));
+            if ($cid === '' || !isset($reviewerProfiles[$cid])) {
+                return '';
+            }
+            return document_review_teacher_display_name($reviewerProfiles[$cid]);
+        })(),
         'documents' => $docItems,
     ];
 }

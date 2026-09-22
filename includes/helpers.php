@@ -36,6 +36,48 @@ function is_valid_ph_contact(string $digits, bool $required = false): bool
     return strlen($digits) === 11 && ctype_digit($digits);
 }
 
+function is_valid_account_email(string $email): bool
+{
+    $email = strtolower(trim($email));
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+    if (!preg_match('/^[^@\s]+@([a-z0-9-]+\.)+[a-z]{2,24}$/i', $email)) {
+        return false;
+    }
+    $host = strtolower((string) substr((string) strrchr($email, '@'), 1));
+    if (str_starts_with($host, 'gmail.') && $host !== 'gmail.com') {
+        return false;
+    }
+    if (str_starts_with($host, 'googlemail.') && $host !== 'googlemail.com') {
+        return false;
+    }
+    if (str_starts_with($host, 'yahoo.') && $host !== 'yahoo.com' && $host !== 'yahoo.com.ph') {
+        return false;
+    }
+
+    return true;
+}
+
+function staff_user_write_error(array $res, string $fallback): string
+{
+    $body = strtolower((string) ($res['body'] ?? ''));
+    if (
+        str_contains($body, 'duplicate')
+        || str_contains($body, 'unique')
+        || str_contains($body, '23505')
+    ) {
+        return 'That email is already in use.';
+    }
+
+    return build_error(
+        $res['body'] ?? null,
+        (int) ($res['status'] ?? 0),
+        $res['error'] ?? null,
+        $fallback
+    );
+}
+
 function clean_text(string $v): string
 {
     return trim($v);

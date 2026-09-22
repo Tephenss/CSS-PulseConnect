@@ -1468,6 +1468,12 @@ render_header('Users & Roles', $user);
     regErr.classList.add('hidden');
     regErr.textContent = '';
     const fd = new FormData(formReg);
+    const email = String(fd.get('email') || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email) || /^[^@]+@gmail\.(?!com$)/i.test(email)) {
+      regErr.textContent = 'Please enter a valid email address (example: name@gmail.com).';
+      regErr.classList.remove('hidden');
+      return;
+    }
     const submitBtn = document.getElementById('btnSubmitRegisterTeacher');
     const prev = submitBtn.textContent;
     submitBtn.disabled = true;
@@ -1507,6 +1513,14 @@ render_header('Users & Roles', $user);
       regAdminErr.textContent = '';
     }
     const fd = new FormData(formRegAdmin);
+    const email = String(fd.get('email') || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email) || /^[^@]+@gmail\.(?!com$)/i.test(email)) {
+      if (regAdminErr) {
+        regAdminErr.textContent = 'Please enter a valid email address (example: name@gmail.com).';
+        regAdminErr.classList.remove('hidden');
+      }
+      return;
+    }
     const submitBtn = document.getElementById('btnSubmitRegisterAdmin');
     const prev = submitBtn?.textContent || 'Create admin';
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Creating…'; }

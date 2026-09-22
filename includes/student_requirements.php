@@ -202,17 +202,20 @@ function fetch_student_submissions_map(array $eventIds, array $headers, ?string 
     }
 
     $inList = '(' . implode(',', array_map('rawurlencode', array_unique($eventIds))) . ')';
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_student_submissions'
-        . '?select=id,event_id,student_id,status,submitted_at,reviewed_at,reviewed_by,decline_reason,created_at,updated_at'
-        . '&event_id=in.' . $inList;
-
+    $selectBase = 'id,event_id,student_id,status,submitted_at,reviewed_at,reviewed_by,decline_reason,created_at,updated_at';
+    $selectClaim = $selectBase . ',review_claimed_by,review_claimed_at';
+    $urlSuffix = '&event_id=in.' . $inList;
     if ($studentId !== null && trim($studentId) !== '') {
-        $url .= '&student_id=eq.' . rawurlencode(trim($studentId));
+        $urlSuffix .= '&student_id=eq.' . rawurlencode(trim($studentId));
     }
+    $urlSuffix .= '&order=submitted_at.desc,created_at.desc';
 
-    $url .= '&order=submitted_at.desc,created_at.desc';
-
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_student_submissions?select=' . $selectClaim . $urlSuffix;
     $res = supabase_request('GET', $url, $headers);
+    if (!($res['ok'] ?? false) && (str_contains((string) ($res['body'] ?? ''), 'review_claimed_by') || str_contains((string) ($res['body'] ?? ''), 'review_claimed_at'))) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_student_submissions?select=' . $selectBase . $urlSuffix;
+        $res = supabase_request('GET', $url, $headers);
+    }
     if (!$res['ok']) {
         return [];
     }

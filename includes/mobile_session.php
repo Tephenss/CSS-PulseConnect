@@ -6,6 +6,9 @@ require_once __DIR__ . '/supabase.php';
 
 const MOBILE_SESSION_TTL_DAYS = 30;
 
+/** Skip last_seen PATCH if the session was touched within this window. */
+const MOBILE_SESSION_LAST_SEEN_MIN_SECONDS = 300;
+
 function mobile_session_hash_token(string $token): string
 {
     return hash('sha256', $token);
@@ -123,14 +126,24 @@ function mobile_session_lookup(string $token): ?array
     }
 
     $tokenHash = mobile_session_hash_token($token);
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/mobile_sessions'
-        . '?select=id,user_id,expires_at,revoked_at'
+    $userEmbed = 'users(' . mobile_user_public_fields() . ')';
+    $selectWithUser = 'id,user_id,expires_at,revoked_at,last_seen_at,' . $userEmbed;
+    $selectPlain = 'id,user_id,expires_at,revoked_at,last_seen_at';
+    $urlWithUser = rtrim(SUPABASE_URL, '/') . '/rest/v1/mobile_sessions'
+        . '?select=' . rawurlencode($selectWithUser)
         . '&token_hash=eq.' . rawurlencode($tokenHash)
         . '&limit=1';
 
-    $res = supabase_request('GET', $url, mobile_api_supabase_headers());
+    $res = supabase_request('GET', $urlWithUser, mobile_api_supabase_headers());
     if (!$res['ok']) {
-        return null;
+        $urlPlain = rtrim(SUPABASE_URL, '/') . '/rest/v1/mobile_sessions'
+            . '?select=' . rawurlencode($selectPlain)
+            . '&token_hash=eq.' . rawurlencode($tokenHash)
+            . '&limit=1';
+        $res = supabase_request('GET', $urlPlain, mobile_api_supabase_headers());
+        if (!$res['ok']) {
+            return null;
+        }
     }
 
     $rows = json_decode((string) $res['body'], true);
@@ -155,9 +168,33 @@ function mobile_session_lookup(string $token): ?array
         return null;
     }
 
-    // Touch last_seen (best-effort).
+    $embedded = $row['users'] ?? null;
+    unset($row['users']);
+    if (is_array($embedded)) {
+        if (isset($embedded[0]) && is_array($embedded[0])) {
+            $embedded = $embedded[0];
+        }
+        if (isset($embedded['id']) && is_string($embedded['id']) && $embedded['id'] !== '') {
+            $row['_user'] = mobile_user_strip_secrets($embedded);
+        }
+    }
+
     $sessionId = trim((string) ($row['id'] ?? ''));
-    if ($sessionId !== '') {
+    $shouldTouch = true;
+    $lastSeenRaw = trim((string) ($row['last_seen_at'] ?? ''));
+    if ($lastSeenRaw !== '') {
+        try {
+            $lastSeen = new DateTimeImmutable($lastSeenRaw);
+            $age = $now->getTimestamp() - $lastSeen->getTimestamp();
+            if ($age >= 0 && $age < MOBILE_SESSION_LAST_SEEN_MIN_SECONDS) {
+                $shouldTouch = false;
+            }
+        } catch (Throwable $e) {
+            $shouldTouch = true;
+        }
+    }
+
+    if ($shouldTouch && $sessionId !== '') {
         supabase_request(
             'PATCH',
             rtrim(SUPABASE_URL, '/') . '/rest/v1/mobile_sessions?id=eq.' . rawurlencode($sessionId),
@@ -228,17 +265,26 @@ function mobile_api_require_user(array $data = []): array
         json_response(['ok' => false, 'error' => 'user_id does not match mobile session.'], 403);
     }
 
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-        . '?select=' . rawurlencode(mobile_user_public_fields())
-        . '&id=eq.' . rawurlencode($userId)
-        . '&limit=1';
-    $res = supabase_request('GET', $url, mobile_api_supabase_headers());
-    if (!$res['ok']) {
-        json_response(['ok' => false, 'error' => 'Failed to load user session.'], 500);
+    $user = null;
+    if (isset($session['_user']) && is_array($session['_user'])) {
+        $embeddedId = trim((string) ($session['_user']['id'] ?? ''));
+        if ($embeddedId !== '' && hash_equals($userId, $embeddedId)) {
+            $user = $session['_user'];
+        }
     }
+    if ($user === null) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+            . '?select=' . rawurlencode(mobile_user_public_fields())
+            . '&id=eq.' . rawurlencode($userId)
+            . '&limit=1';
+        $res = supabase_request('GET', $url, mobile_api_supabase_headers());
+        if (!$res['ok']) {
+            json_response(['ok' => false, 'error' => 'Failed to load user session.'], 500);
+        }
 
-    $rows = json_decode((string) $res['body'], true);
-    $user = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+        $rows = json_decode((string) $res['body'], true);
+        $user = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+    }
     if ($user === null) {
         json_response(['ok' => false, 'error' => 'User not found for session.'], 401);
     }

@@ -10,11 +10,18 @@ require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/email_notifications.php';
 
 $user = require_role(['admin']);
+$actorId = trim((string) ($user['id'] ?? ''));
 $data = require_post_json();
 require_csrf_from_json($data);
+
+$clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+if (!api_rate_limit_allow('users_register_teacher:' . $actorId . ':' . $clientIp, 20, 3600)) {
+    json_response(['ok' => false, 'error' => 'Too many teacher registrations. Try again later.'], 429);
+}
 
 $firstName = isset($data['first_name']) ? clean_string((string) $data['first_name']) : '';
 $middleName = isset($data['middle_name']) ? clean_string((string) $data['middle_name']) : '';
@@ -39,8 +46,22 @@ if ($suffix !== '' && mb_strlen($suffix) > 30) {
 if (!is_valid_ph_contact($contactNumber, false)) {
     json_response(['ok' => false, 'error' => 'Contact number must be 11 digits (example: 09123456789).'], 400);
 }
-if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    json_response(['ok' => false, 'error' => 'Please enter a valid email address.'], 400);
+if ($email === '' || !is_valid_account_email($email)) {
+    json_response(['ok' => false, 'error' => 'Please enter a valid email address (example: name@gmail.com).'], 400);
+}
+
+$authHeaders = [
+    'Accept: application/json',
+    'apikey: ' . SUPABASE_KEY,
+    'Authorization: Bearer ' . SUPABASE_KEY,
+];
+$dupUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+    . '?select=id,email&email=eq.' . rawurlencode($email)
+    . '&limit=1';
+$dupRes = supabase_request('GET', $dupUrl, $authHeaders);
+$dupRows = $dupRes['ok'] ? json_decode((string) ($dupRes['body'] ?? ''), true) : [];
+if (is_array($dupRows) && isset($dupRows[0]) && is_array($dupRows[0])) {
+    json_response(['ok' => false, 'error' => 'That email is already in use.'], 409);
 }
 
 function generate_teacher_temp_password(int $length = 12): string
@@ -100,7 +121,7 @@ $res = supabase_request('POST', $url, $headers, json_encode([$payload], JSON_UNE
 if (!$res['ok']) {
     json_response([
         'ok' => false,
-        'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Could not create teacher account'),
+        'error' => staff_user_write_error($res, 'Could not create teacher account'),
     ], 500);
 }
 
