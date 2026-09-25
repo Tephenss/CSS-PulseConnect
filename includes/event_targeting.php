@@ -16,17 +16,79 @@ function extract_section_name(mixed $rawSections): string
     return '';
 }
 
+function student_section_label(array $row): string
+{
+    $sectionName = strtoupper(trim((string) ($row['section_name'] ?? '')));
+    if ($sectionName === '') {
+        $sectionName = strtoupper(extract_section_name($row['sections'] ?? null));
+    }
+    return $sectionName;
+}
+
+function student_section_is_irregular(array $row): bool
+{
+    if (!empty($row['is_irregular'])) {
+        return true;
+    }
+    $sectionName = student_section_label($row);
+    return $sectionName === 'IRREGULAR' || str_contains($sectionName, 'IRREGULAR');
+}
+
+/**
+ * Copy roster course/year onto a users row so targeting does not treat
+ * the IRREGULAR section name as a course or as a missing year.
+ *
+ * @param array<string,mixed> $row
+ * @param array<string,mixed>|null $roster
+ * @return array<string,mixed>
+ */
+function event_targeting_apply_roster(array $row, ?array $roster): array
+{
+    if (is_array($roster) && $roster !== []) {
+        if (!empty($roster['is_irregular'])) {
+            $row['is_irregular'] = true;
+        }
+        $year = $roster['year_level'] ?? null;
+        if ($year !== null && $year !== '') {
+            $yearInt = (int) $year;
+            if ($yearInt >= 1 && $yearInt <= 4) {
+                $row['year_level'] = (string) $yearInt;
+            }
+        }
+        $program = strtoupper(trim((string) ($roster['program_label'] ?? '')));
+        $courseCode = strtoupper(trim((string) ($roster['course_code'] ?? '')));
+        if ($program !== '' && $program !== 'IRREGULAR') {
+            $row['course'] = $program;
+        } elseif ($courseCode !== '' && $courseCode !== 'IRREGULAR') {
+            $row['course'] = $courseCode;
+        }
+    }
+
+    if (student_section_is_irregular($row)) {
+        $row['is_irregular'] = true;
+    }
+
+    return $row;
+}
+
 function normalize_student_course_code(array $row): string
 {
     $rawCourse = strtoupper(trim((string) ($row['course'] ?? '')));
-    if (in_array($rawCourse, ['IT', 'BSIT'], true)) {
+    if ($rawCourse === 'IRREGULAR' || str_contains($rawCourse, 'IRREGULAR')) {
+        $rawCourse = '';
+    }
+    if (in_array($rawCourse, ['IT', 'BSIT'], true) || str_starts_with($rawCourse, 'BSIT')) {
         return 'BSIT';
     }
-    if (in_array($rawCourse, ['CS', 'BSCS'], true)) {
+    if (in_array($rawCourse, ['CS', 'BSCS'], true) || str_starts_with($rawCourse, 'BSCS')) {
         return 'BSCS';
     }
 
-    $sectionName = strtoupper(extract_section_name($row['sections'] ?? null));
+    if (student_section_is_irregular($row)) {
+        return '';
+    }
+
+    $sectionName = student_section_label($row);
     if (str_starts_with($sectionName, 'BSIT')) {
         return 'BSIT';
     }
@@ -39,7 +101,22 @@ function normalize_student_course_code(array $row): string
 
 function extract_student_year_level(array $row): string
 {
+    $direct = trim((string) ($row['year_level'] ?? ''));
+    if (in_array($direct, ['1', '2', '3', '4'], true)) {
+        return $direct;
+    }
+    if (preg_match('/^[1-4]$/', $direct) === 1) {
+        return $direct;
+    }
+
+    if (student_section_is_irregular($row)) {
+        return '';
+    }
+
     $sectionName = trim(extract_section_name($row['sections'] ?? null));
+    if ($sectionName === '') {
+        $sectionName = trim((string) ($row['section_name'] ?? ''));
+    }
     if ($sectionName === '') {
         return '';
     }
@@ -70,6 +147,10 @@ function extract_student_specialization(array $row): string
         if (preg_match('/\bBSIT\s*[-_]?\s*BA\b/', $rawCourse)) {
             return 'BA';
         }
+    }
+
+    if (student_section_is_irregular($row)) {
+        return '';
     }
 
     $sectionName = strtoupper(extract_section_name($row['sections'] ?? null));

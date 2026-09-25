@@ -184,6 +184,24 @@ if ($session === null) {
 }
 
 $publicUser = mobile_user_strip_secrets($user);
+if ($role === 'student') {
+    $roster = student_roster_fetch_by_user_id((string) ($publicUser['id'] ?? ''));
+    if ($roster === null) {
+        $sno = student_roster_normalize_no((string) ($publicUser['student_id'] ?? ''));
+        if ($sno !== '') {
+            $roster = student_roster_fetch_by_no($sno);
+        }
+    }
+    if ($roster !== null) {
+        require_once __DIR__ . '/../includes/event_targeting.php';
+        $publicUser = event_targeting_apply_roster($publicUser, $roster);
+        $year = extract_student_year_level($publicUser);
+        if ($year !== '') {
+            $publicUser['year_level'] = $year;
+        }
+        $publicUser['is_irregular'] = student_section_is_irregular($publicUser) || !empty($roster['is_irregular']);
+    }
+}
 
 json_response([
     'ok' => true,

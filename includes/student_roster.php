@@ -389,6 +389,90 @@ if (!function_exists('student_roster_fetch_by_no')) {
     }
 }
 
+if (!function_exists('student_roster_fetch_by_user_id')) {
+    /**
+     * @return array<string,mixed>|null
+     */
+    function student_roster_fetch_by_user_id(string $userId, bool $includeArchived = false): ?array
+    {
+        $userId = trim($userId);
+        if ($userId === '') {
+            return null;
+        }
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+            . '?select=id,student_no,full_name_raw,first_name,middle_name,last_name,suffix,'
+            . 'course_code,program_label,year_level,block,is_irregular,section_id,user_id,archived_at'
+            . '&user_id=eq.' . rawurlencode($userId)
+            . ($includeArchived ? '' : '&archived_at=is.null')
+            . '&limit=1';
+        $res = supabase_request('GET', $url, student_roster_supabase_headers());
+        $rows = $res['ok'] ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if ((!is_array($rows) || $rows === []) && !$includeArchived && !$res['ok']) {
+            $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+                . '?select=id,student_no,full_name_raw,first_name,middle_name,last_name,suffix,'
+                . 'course_code,program_label,year_level,block,is_irregular,section_id,user_id'
+                . '&user_id=eq.' . rawurlencode($userId)
+                . '&limit=1';
+            $fallbackRes = supabase_request('GET', $fallbackUrl, student_roster_supabase_headers());
+            $rows = $fallbackRes['ok'] ? json_decode((string) ($fallbackRes['body'] ?? ''), true) : [];
+        }
+        $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+        if ($row !== null && !$includeArchived && !empty($row['archived_at'])) {
+            return null;
+        }
+        return $row;
+    }
+}
+
+if (!function_exists('student_roster_fetch_map_by_user_ids')) {
+    /**
+     * @param list<string> $userIds
+     * @return array<string,array<string,mixed>>
+     */
+    function student_roster_fetch_map_by_user_ids(array $userIds): array
+    {
+        $ids = [];
+        foreach ($userIds as $id) {
+            $trim = trim((string) $id);
+            if ($trim !== '') {
+                $ids[$trim] = true;
+            }
+        }
+        $idList = array_keys($ids);
+        if ($idList === []) {
+            return [];
+        }
+
+        $mapped = [];
+        foreach (array_chunk($idList, 80) as $chunk) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+                . '?select=user_id,student_no,course_code,program_label,year_level,is_irregular,block'
+                . '&user_id=in.(' . implode(',', array_map('rawurlencode', $chunk)) . ')'
+                . '&archived_at=is.null'
+                . '&limit=5000';
+            $res = supabase_request('GET', $url, student_roster_supabase_headers());
+            if (!($res['ok'] ?? false)) {
+                continue;
+            }
+            $rows = json_decode((string) ($res['body'] ?? ''), true);
+            if (!is_array($rows)) {
+                continue;
+            }
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $uid = trim((string) ($row['user_id'] ?? ''));
+                if ($uid !== '') {
+                    $mapped[$uid] = $row;
+                }
+            }
+        }
+
+        return $mapped;
+    }
+}
+
 if (!function_exists('student_roster_public_preview')) {
     /**
      * Safe fields for Create Account preview (no internal ids beyond what's needed).

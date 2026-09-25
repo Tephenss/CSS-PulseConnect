@@ -87,7 +87,7 @@ if ($fresh) {
     json_response($response, $http >= 400 ? $http : 200);
 }
 
-$cached = api_cache_read($cacheKey, 40);
+$cached = api_cache_read($cacheKey, 90);
 if (is_array($cached) && ($cached['ok'] ?? false) === true) {
     json_response($cached, 200);
 }

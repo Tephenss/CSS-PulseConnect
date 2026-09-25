@@ -3,11 +3,15 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/mobile_api.php';
 require_once __DIR__ . '/supabase.php';
+require_once __DIR__ . '/api_cache.php';
 
 const MOBILE_SESSION_TTL_DAYS = 30;
 
 /** Skip last_seen PATCH if the session was touched within this window. */
 const MOBILE_SESSION_LAST_SEEN_MIN_SECONDS = 300;
+
+/** Reuse session+user lookup so scanner/BFF bursts do not GET mobile_sessions each time. */
+const MOBILE_SESSION_LOOKUP_CACHE_SECONDS = 45;
 
 function mobile_session_hash_token(string $token): string
 {
@@ -126,6 +130,21 @@ function mobile_session_lookup(string $token): ?array
     }
 
     $tokenHash = mobile_session_hash_token($token);
+    $cacheKey = 'mobile_session:' . $tokenHash;
+    $cached = api_cache_read($cacheKey, MOBILE_SESSION_LOOKUP_CACHE_SECONDS);
+    if (is_array($cached) && trim((string) ($cached['id'] ?? '')) !== '') {
+        $expiresRaw = (string) ($cached['expires_at'] ?? '');
+        try {
+            $expires = new DateTimeImmutable($expiresRaw);
+            $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+            if ($now <= $expires && empty($cached['revoked_at'])) {
+                return $cached;
+            }
+        } catch (Throwable $e) {
+            api_cache_delete($cacheKey);
+        }
+    }
+
     $userEmbed = 'users(' . mobile_user_public_fields() . ')';
     $selectWithUser = 'id,user_id,expires_at,revoked_at,last_seen_at,' . $userEmbed;
     $selectPlain = 'id,user_id,expires_at,revoked_at,last_seen_at';
@@ -207,7 +226,12 @@ function mobile_session_lookup(string $token): ?array
             ],
             json_encode(['last_seen_at' => $now->format(DATE_ATOM)], JSON_UNESCAPED_SLASHES)
         );
+        $row['last_seen_at'] = $now->format(DATE_ATOM);
     }
+
+    $store = $row;
+    unset($store['password'], $store['password_hash']);
+    api_cache_write($cacheKey, $store);
 
     return $row;
 }
@@ -220,6 +244,7 @@ function mobile_session_revoke(string $token): bool
     }
 
     $tokenHash = mobile_session_hash_token($token);
+    api_cache_delete('mobile_session:' . $tokenHash);
     $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format(DATE_ATOM);
     $res = supabase_request(
         'PATCH',

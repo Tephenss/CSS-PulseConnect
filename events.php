@@ -55,7 +55,7 @@ if ($events === []) {
       $catalogIds
     ));
     $hydrateUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-      . '?select=id,cover_image_url,status,start_at,end_at,early_out_enabled_at,registered_count'
+      . '?select=id,cover_image_url,status,start_at,end_at,early_out_enabled_at,registered_count,event_for,event_type,title,location'
       . '&id=in.(' . $inList . ')'
       . '&limit=' . count($catalogIds);
     $hydrateRes = supabase_request('GET', $hydrateUrl, $headers);
@@ -103,6 +103,18 @@ if ($events === []) {
       }
       if (array_key_exists('registered_count', $truth)) {
         $eventRow['registered_count'] = $truth['registered_count'];
+      }
+      if (array_key_exists('event_for', $truth)) {
+        $eventRow['event_for'] = $truth['event_for'];
+      }
+      if (array_key_exists('event_type', $truth)) {
+        $eventRow['event_type'] = $truth['event_type'];
+      }
+      if (trim((string) ($truth['title'] ?? '')) !== '') {
+        $eventRow['title'] = $truth['title'];
+      }
+      if (array_key_exists('location', $truth)) {
+        $eventRow['location'] = $truth['location'];
       }
       $eventRow['status'] = 'published';
     }

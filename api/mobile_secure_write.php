@@ -377,12 +377,24 @@ switch ($action) {
                         json_response(['ok' => false, 'error' => 'Event not found.'], 404);
                     }
                     $sessions = fetch_event_sessions($eid, $readHeaders);
-                    $usesSessions = event_uses_sessions(array_merge($eventRow, ['sessions' => $sessions]));
-                    if ($usesSessions) {
-                        $checkedOut = certificate_auto_checked_out_session_ids($sessions, $userId, $readHeaders);
+                    $validSessions = [];
+                    if (is_array($sessions)) {
+                        foreach ($sessions as $session) {
+                            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
+                                $validSessions[] = $session;
+                            }
+                        }
+                    }
+                    $usesSessions = event_uses_sessions(array_merge($eventRow, ['sessions' => $validSessions]))
+                        && $validSessions !== [];
+                    $simpleOut = certificate_auto_student_has_checkout_simple($eid, $userId, $readHeaders);
+                    // 2+ seminars: wait for the last seminar time-out.
+                    // 0–1 seminar / simple ticket flow: a simple-event check_out_at is enough
+                    // (nested PostgREST filters used to miss timed-out tickets).
+                    if ($usesSessions && count($validSessions) >= 2) {
+                        $checkedOut = certificate_auto_checked_out_session_ids($validSessions, $userId, $readHeaders);
                         $final = evaluation_final_seminar_for_event($eid);
                         $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
-                        // 2 seminars: wait for Seminar 2 out — never open on Seminar 1 alone.
                         if ($finalId !== '') {
                             $ok = in_array($finalId, $checkedOut, true);
                         } elseif (evaluation_event_expects_two_seminars($eid)) {
@@ -399,7 +411,16 @@ switch ($action) {
                                 'status' => 'checkout_required',
                             ], 403);
                         }
-                    } elseif (!certificate_auto_student_has_checkout_simple($eid, $userId, $readHeaders)) {
+                    } elseif ($usesSessions && !$simpleOut) {
+                        $checkedOut = certificate_auto_checked_out_session_ids($validSessions, $userId, $readHeaders);
+                        if ($checkedOut === []) {
+                            json_response([
+                                'ok' => false,
+                                'error' => 'Time-out required before submitting evaluation.',
+                                'status' => 'checkout_required',
+                            ], 403);
+                        }
+                    } elseif (!$simpleOut) {
                         json_response([
                             'ok' => false,
                             'error' => 'Time-out required before submitting evaluation.',
@@ -460,9 +481,21 @@ switch ($action) {
             $normalized[] = $row;
         }
 
+        $byKey = [];
+        foreach ($normalized as $row) {
+            $qid = trim((string) ($row['question_id'] ?? ''));
+            $sid = trim((string) ($row['student_id'] ?? ''));
+            if ($qid === '' || $sid === '') {
+                continue;
+            }
+            $byKey[$qid . '|' . $sid] = $row;
+        }
+        $normalized = array_values($byKey);
+
         $res = supabase_request(
             'POST',
-            rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table,
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+                . '?on_conflict=question_id,student_id',
             // Prefer is already on $writeHeaders — do not merge a second Prefer line.
             $writeHeaders,
             json_encode($normalized, JSON_UNESCAPED_SLASHES)

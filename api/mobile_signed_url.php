@@ -75,7 +75,10 @@ if ($bucket === 'avatars' && media_is_local_avatar_path($path)) {
 
 $signed = storage_create_signed_url($bucket, $path, $expires);
 if ($signed === null) {
-    json_response(['ok' => false, 'error' => 'Failed to create signed URL.'], 500);
+    json_response([
+        'ok' => false,
+        'error' => $bucket === 'avatars' ? 'Avatar file not found.' : 'Failed to create signed URL.',
+    ], $bucket === 'avatars' ? 404 : 500);
 }
 
 json_response([

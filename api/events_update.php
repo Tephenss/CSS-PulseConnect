@@ -413,6 +413,21 @@ if ($role === 'teacher' && $studentRequirementsProvided) {
 require_once __DIR__ . '/../includes/api_cache.php';
 api_cache_bump_generation('manage_events');
 
+if (is_array($event)) {
+    $catalogEvent = array_merge(
+        is_array($currentEvent) ? $currentEvent : [],
+        $fields,
+        $event
+    );
+    $catalogEvent['id'] = $eventId;
+    try {
+        require_once __DIR__ . '/../includes/firestore_catalog.php';
+        firestore_catalog_sync_event($catalogEvent);
+    } catch (Throwable $e) {
+        error_log('events_update catalog sync: ' . $e->getMessage());
+    }
+}
+
 $push = null;
 if (is_array($registrationExtendNotify)) {
     try {

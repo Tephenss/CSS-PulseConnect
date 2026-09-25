@@ -75,9 +75,14 @@ function storage_create_signed_url(string $bucket, string $objectPath, int $expi
         'Authorization: Bearer ' . SUPABASE_KEY,
     ];
 
+    if ($bucket === 'avatars' && storage_avatar_path_is_known_miss($objectPath)) {
+        return null;
+    }
+
     $payload = json_encode(['expiresIn' => $expiresInSeconds]);
     $res = supabase_request('POST', $url, $headers, $payload);
     if (!($res['ok'] ?? false)) {
+        storage_remember_avatar_miss_from_path($bucket, $objectPath);
         return null;
     }
 
@@ -143,8 +148,7 @@ function storage_avatar_url_from_bucket(string $objectPath, int $expiresInSecond
     }
 
     $signed = storage_create_signed_url('avatars', $objectPath, $expiresInSeconds);
-    if ($signed === null && preg_match('#^profiles/([0-9a-fA-F-]{36})\.#', $objectPath, $m)) {
-        // Stored extension may differ from the recorded one (jpg vs png/webp).
+    if ($signed === null && preg_match('#(?:^|/)profiles/([0-9a-fA-F-]{36})\.#', $objectPath, $m)) {
         $found = storage_find_user_avatar_path(strtolower((string) $m[1]));
         if ($found !== '' && $found !== $objectPath) {
             $objectPath = $found;
@@ -275,64 +279,63 @@ function storage_find_user_avatar_path(string $userId): string
     if ($userId === '' || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $userId)) {
         return '';
     }
-    if (!defined('SUPABASE_URL') || !defined('SUPABASE_KEY')) {
-        return '';
+
+    if (!function_exists('api_cache_read')) {
+        require_once __DIR__ . '/api_cache.php';
+    }
+    $cacheKey = 'avatar_path:' . $userId;
+    $cached = api_cache_read($cacheKey, 1800);
+    if (is_array($cached) && array_key_exists('path', $cached)) {
+        return trim((string) $cached['path']);
     }
 
-    $url = rtrim(SUPABASE_URL, '/') . '/storage/v1/object/list/avatars';
-    $headers = [
-        'Content-Type: application/json',
-        'Accept: application/json',
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY,
-    ];
-    $payload = json_encode([
-        'prefix' => 'profiles/',
-        'search' => $userId,
-        'limit' => 20,
-    ], JSON_UNESCAPED_SLASHES);
-    $res = supabase_request('POST', $url, $headers, $payload);
-    if (!($res['ok'] ?? false)) {
-        return '';
+    if (!function_exists('media_avatar_signed_url')) {
+        require_once __DIR__ . '/media_assets.php';
     }
 
-    $rows = json_decode((string) ($res['body'] ?? ''), true);
-    if (!is_array($rows)) {
-        return '';
+    $found = '';
+    foreach (['jpg', 'jpeg', 'png', 'webp'] as $ext) {
+        $candidate = 'profiles/' . $userId . '.' . $ext;
+        $local = media_avatar_signed_url('media/avatars/' . $candidate, 60);
+        if ($local !== '') {
+            $found = $candidate;
+            break;
+        }
     }
 
-    $allowed = ['jpg', 'jpeg', 'png', 'webp'];
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $name = trim((string) ($row['name'] ?? ''));
-        if ($name === '' || str_ends_with($name, '/')) {
-            continue;
-        }
+    // Do not Storage-list the bucket, and do not guess profiles/{id}.jpg —
+    // signing a missing object is a 400 warning every call (scanner/home loop).
+    // Empty path → callers show initials.
+    api_cache_write($cacheKey, ['path' => $found]);
+    return $found;
+}
 
-        $normalized = ltrim(str_replace('\\', '/', $name), '/');
-        if (str_starts_with($normalized, 'avatars/')) {
-            $normalized = substr($normalized, strlen('avatars/'));
-        }
-        $base = basename($normalized);
-        $dot = strrpos($base, '.');
-        if ($dot === false) {
-            continue;
-        }
-        $stem = strtolower(substr($base, 0, $dot));
-        $ext = strtolower(substr($base, $dot + 1));
-        if ($stem !== $userId || !in_array($ext, $allowed, true)) {
-            continue;
-        }
-
-        if (str_contains($normalized, '/')) {
-            return $normalized;
-        }
-        return 'profiles/' . $base;
+function storage_avatar_path_is_known_miss(string $objectPath): bool
+{
+    if (!preg_match('#(?:^|/)profiles/([0-9a-fA-F-]{36})\.#', $objectPath, $m)) {
+        return false;
     }
+    if (!function_exists('api_cache_read')) {
+        require_once __DIR__ . '/api_cache.php';
+    }
+    $cached = api_cache_read('avatar_path:' . strtolower((string) $m[1]), 1800);
+    return is_array($cached)
+        && array_key_exists('path', $cached)
+        && trim((string) $cached['path']) === '';
+}
 
-    return '';
+function storage_remember_avatar_miss_from_path(string $bucket, string $objectPath): void
+{
+    if (strtolower(trim($bucket)) !== 'avatars') {
+        return;
+    }
+    if (!preg_match('#(?:^|/)profiles/([0-9a-fA-F-]{36})\.#', $objectPath, $m)) {
+        return;
+    }
+    if (!function_exists('api_cache_write')) {
+        require_once __DIR__ . '/api_cache.php';
+    }
+    api_cache_write('avatar_path:' . strtolower((string) $m[1]), ['path' => '']);
 }
 
 /**

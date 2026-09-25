@@ -14,6 +14,224 @@ function smtp_get_last_error(): string
     return is_string($msg) ? $msg : '';
 }
 
+function smtp_set_last_reply(string $reply): void
+{
+    $GLOBALS['SMTP_LAST_REPLY'] = $reply;
+}
+
+function smtp_get_last_reply(): string
+{
+    $msg = $GLOBALS['SMTP_LAST_REPLY'] ?? '';
+    return is_string($msg) ? $msg : '';
+}
+
+function smtp_error_is_daily_limit(?string $raw = null): bool
+{
+    $raw = strtolower($raw ?? smtp_get_last_error());
+    return str_contains($raw, '5.4.5')
+        || str_contains($raw, 'daily user sending limit')
+        || str_contains($raw, 'sending limit exceeded')
+        || str_contains($raw, 'quota exceeded')
+        || str_contains($raw, 'too many messages');
+}
+
+function smtp_quota_session_key(string $provider): string
+{
+    return $provider === 'fallback' ? 'smtp_fallback_quota_until' : 'smtp_primary_quota_until';
+}
+
+function smtp_is_quota_blocked(string $provider): bool
+{
+    $globalKey = $provider === 'fallback' ? 'SMTP_FALLBACK_QUOTA_BLOCKED' : 'SMTP_PRIMARY_QUOTA_BLOCKED';
+    if (!empty($GLOBALS[$globalKey])) {
+        return true;
+    }
+    $sessionKey = smtp_quota_session_key($provider);
+    return isset($_SESSION[$sessionKey]) && (int) $_SESSION[$sessionKey] > time();
+}
+
+function smtp_mark_quota_blocked(string $provider): void
+{
+    $globalKey = $provider === 'fallback' ? 'SMTP_FALLBACK_QUOTA_BLOCKED' : 'SMTP_PRIMARY_QUOTA_BLOCKED';
+    $GLOBALS[$globalKey] = true;
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION[smtp_quota_session_key($provider)] = time() + 12 * 3600;
+    }
+}
+
+function pulseconnect_try_smtp(
+    string $host,
+    int $port,
+    string $encryption,
+    string $username,
+    string $password,
+    string $fromAddress,
+    string $fromName,
+    string $to,
+    string $subject,
+    string $body
+): bool {
+    $host = trim($host);
+    $username = trim($username);
+    $fromAddress = trim($fromAddress);
+    if ($host === '' || $username === '' || $password === '' || $fromAddress === '') {
+        return false;
+    }
+    $port = $port > 0 ? $port : 587;
+    return smtp_send_mail(
+        $host,
+        $port,
+        strtolower(trim($encryption)),
+        $username,
+        $password,
+        $fromAddress,
+        $fromName,
+        $to,
+        $subject,
+        $body
+    );
+}
+
+function pulseconnect_domain_from_address(): string
+{
+    $configured = defined('EMAIL_DOMAIN_SENDER') ? trim((string) EMAIL_DOMAIN_SENDER) : '';
+    if ($configured !== '' && filter_var($configured, FILTER_VALIDATE_EMAIL)) {
+        return $configured;
+    }
+    $primary = trim((string) EMAIL_SENDER_ADDRESS);
+    $at = strrpos($primary, '@');
+    $domain = $at !== false ? strtolower(substr($primary, $at + 1)) : '';
+    if ($primary !== '' && $domain !== '' && $domain !== 'gmail.com' && $domain !== 'googlemail.com') {
+        return $primary;
+    }
+    return 'noreply@ccspulseconnect.com';
+}
+
+function pulseconnect_native_mail(string $to, string $subject, string $body, string $fromAddress): bool
+{
+    $headers = build_multipart_headers($fromAddress);
+    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . $fromAddress);
+}
+
+function pulseconnect_deliver_email(
+    string $to,
+    string $subject,
+    string $body,
+    string $logContext = 'email'
+): bool {
+    $fromName = trim((string) SMTP_FROM_NAME);
+
+    // 1) Primary: Hostinger mailbox.
+    if (!smtp_is_quota_blocked('primary')) {
+        $ok = pulseconnect_try_smtp(
+            (string) SMTP_HOST,
+            (int) SMTP_PORT,
+            (string) SMTP_ENCRYPTION,
+            (string) SMTP_USERNAME,
+            (string) SMTP_PASSWORD,
+            (string) EMAIL_SENDER_ADDRESS,
+            $fromName,
+            $to,
+            $subject,
+            $body
+        );
+        if ($ok) {
+            return true;
+        }
+        $primaryError = smtp_get_last_error();
+        error_log('[SMTP] ' . $logContext . ' primary (Hostinger) failed: ' . ($primaryError !== '' ? $primaryError : 'unknown error'));
+        if (smtp_error_is_daily_limit($primaryError)) {
+            smtp_mark_quota_blocked('primary');
+        }
+    }
+
+    // 2) Standby: Gmail — only after Hostinger fails or is at limit.
+    if (!smtp_is_quota_blocked('fallback')) {
+        $fallbackFrom = defined('SMTP_FALLBACK_FROM')
+            ? trim((string) SMTP_FALLBACK_FROM)
+            : 'ccspulseconnect@gmail.com';
+        $ok = pulseconnect_try_smtp(
+            defined('SMTP_FALLBACK_HOST') ? (string) SMTP_FALLBACK_HOST : '',
+            defined('SMTP_FALLBACK_PORT') ? (int) SMTP_FALLBACK_PORT : 587,
+            defined('SMTP_FALLBACK_ENCRYPTION') ? (string) SMTP_FALLBACK_ENCRYPTION : 'tls',
+            defined('SMTP_FALLBACK_USERNAME') ? (string) SMTP_FALLBACK_USERNAME : '',
+            defined('SMTP_FALLBACK_PASSWORD') ? (string) SMTP_FALLBACK_PASSWORD : '',
+            $fallbackFrom,
+            $fromName,
+            $to,
+            $subject,
+            $body
+        );
+        if ($ok) {
+            return true;
+        }
+        $fallbackError = smtp_get_last_error();
+        error_log('[SMTP] ' . $logContext . ' fallback (Gmail) failed: ' . ($fallbackError !== '' ? $fallbackError : 'unknown error'));
+        if (smtp_error_is_daily_limit($fallbackError)) {
+            smtp_mark_quota_blocked('fallback');
+        }
+    }
+
+    // 3) Last resort on Hostinger: PHP mail() from the domain address.
+    $domainFrom = pulseconnect_domain_from_address();
+    if (pulseconnect_native_mail($to, $subject, $body, $domainFrom)) {
+        return true;
+    }
+
+    if (smtp_get_last_error() === '') {
+        smtp_set_last_error('All email transports failed (Hostinger SMTP, Gmail standby, mail())');
+    }
+    return false;
+}
+
+function smtp_user_facing_error(): string
+{
+    if (smtp_is_quota_blocked('primary') && smtp_is_quota_blocked('fallback')) {
+        return 'Email sending is temporarily unavailable (Hostinger and Gmail daily limits). Try again later.';
+    }
+    $raw = trim(smtp_get_last_error());
+    return $raw !== ''
+        ? 'Unable to send verification code email. Please try again later.'
+        : 'Unable to send verification code email. Please try again.';
+}
+
+function smtp_ehlo_hostname(): string
+{
+    $configured = defined('SMTP_EHLO_HOST') ? strtolower(trim((string) SMTP_EHLO_HOST)) : '';
+    if ($configured !== '' && $configured !== 'localhost' && !str_ends_with($configured, '.local')) {
+        return $configured;
+    }
+
+    $host = strtolower(trim((string) ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '')));
+    $host = (string) preg_replace('/:\\d+$/', '', $host);
+    if ($host !== '' && filter_var($host, FILTER_VALIDATE_IP)) {
+        return '[' . $host . ']';
+    }
+    if ($host !== '' && $host !== 'localhost' && str_contains($host, '.') && !str_ends_with($host, '.local')) {
+        return $host;
+    }
+
+    return 'ccspulseconnect.com';
+}
+
+function smtp_fail($socket, string $message): bool
+{
+    $reply = preg_replace('/\\s+/', ' ', trim(smtp_get_last_reply()));
+    $timedOut = false;
+    if (is_resource($socket)) {
+        $meta = @stream_get_meta_data($socket);
+        $timedOut = !empty($meta['timed_out']);
+        fclose($socket);
+    }
+    if ($timedOut && ($reply === null || $reply === '')) {
+        $message .= ' (timeout)';
+    } elseif (is_string($reply) && $reply !== '') {
+        $message .= ': ' . $reply;
+    }
+    smtp_set_last_error($message);
+    return false;
+}
+
 function send_student_application_status_email(
     string $recipientEmail,
     string $fullName,
@@ -27,7 +245,6 @@ function send_student_application_status_email(
 
     $safeName = trim($fullName) !== '' ? trim($fullName) : 'Student';
     $normalizedStatus = strtolower(trim($status));
-    $fromAddress = EMAIL_SENDER_ADDRESS;
 
     if ($normalizedStatus === 'approved') {
         $subject = 'CCS PulseConnect Application Approved';
@@ -69,46 +286,8 @@ function send_student_application_status_email(
         );
     }
 
-    $headers = build_multipart_headers($fromAddress);
-
-    // Prefer SMTP transport when configured, fallback to native mail().
-    $smtpHost = trim((string) SMTP_HOST);
-    $smtpUser = trim((string) SMTP_USERNAME);
-    $smtpPass = (string) SMTP_PASSWORD;
-    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
-        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
-        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
-        $smtpFromName = trim((string) SMTP_FROM_NAME);
-        $smtpResult = smtp_send_mail(
-            $smtpHost,
-            $smtpPort,
-            $smtpEncryption,
-            $smtpUser,
-            $smtpPass,
-            $fromAddress,
-            $smtpFromName,
-            $to,
-            $subject,
-            build_multipart_body($message, $htmlMessage)
-        );
-        if ($smtpResult) {
-            return true;
-        }
-        $smtpError = smtp_get_last_error();
-        if ($smtpError !== '') {
-            error_log('[SMTP] send_student_application_status_email failed: ' . $smtpError);
-        } else {
-            error_log('[SMTP] send_student_application_status_email failed: unknown error');
-        }
-    }
-
-    return @mail(
-        $to,
-        $subject,
-        build_multipart_body($message, $htmlMessage),
-        implode("\r\n", $headers),
-        '-f ' . $fromAddress
-    );
+    $body = build_multipart_body($message, $htmlMessage);
+    return pulseconnect_deliver_email($to, $subject, $body, 'send_student_application_status_email');
 }
 
 function smtp_ssl_context_options(string $host): array
@@ -166,10 +345,15 @@ function smtp_send_mail(
     string $rawBody
 ): bool {
     smtp_set_last_error('');
+    smtp_set_last_reply('');
     // Gmail App Passwords are often displayed with spaces (e.g. "xxxx xxxx xxxx xxxx").
     // Normalize credentials to avoid SMTP AUTH failures caused by whitespace.
     $username = trim($username);
     $password = preg_replace('/\s+/', '', (string) $password);
+    $fromAddress = trim($fromAddress);
+    $toAddress = trim($toAddress);
+    $ehloHost = smtp_ehlo_hostname();
+    $timeoutSeconds = 20;
 
     $transport = $encryption === 'ssl' ? 'ssl://' : '';
     $sslOpts = smtp_ssl_context_options($host);
@@ -179,7 +363,7 @@ function smtp_send_mail(
         $transport . $host . ':' . $port,
         $errno,
         $errstr,
-        12,
+        $timeoutSeconds,
         STREAM_CLIENT_CONNECT,
         $streamContext
     );
@@ -188,24 +372,19 @@ function smtp_send_mail(
         return false;
     }
 
-    stream_set_timeout($socket, 12);
+    stream_set_timeout($socket, $timeoutSeconds);
+    @stream_set_write_buffer($socket, 0);
     if (!smtp_expect($socket, [220])) {
-        smtp_set_last_error('No SMTP 220 greeting');
-        fclose($socket);
-        return false;
+        return smtp_fail($socket, 'No SMTP 220 greeting');
     }
 
-    if (!smtp_command($socket, 'EHLO pulseconnect.local', [250])) {
-        smtp_set_last_error('EHLO rejected');
-        fclose($socket);
-        return false;
+    if (!smtp_command($socket, 'EHLO ' . $ehloHost, [250])) {
+        return smtp_fail($socket, 'EHLO rejected');
     }
 
     if ($encryption === 'tls') {
         if (!smtp_command($socket, 'STARTTLS', [220])) {
-            smtp_set_last_error('STARTTLS rejected');
-            fclose($socket);
-            return false;
+            return smtp_fail($socket, 'STARTTLS rejected');
         }
 
         // Ensure SSL options apply to STARTTLS upgrade (not only initial connect).
@@ -257,7 +436,7 @@ function smtp_send_mail(
                 $transport . $host . ':' . $port,
                 $errno,
                 $errstr,
-                12,
+                $timeoutSeconds,
                 STREAM_CLIENT_CONNECT,
                 $streamContext
             );
@@ -265,14 +444,13 @@ function smtp_send_mail(
                 smtp_set_last_error("Connect failed ({$errno}): {$errstr}");
                 return false;
             }
-            stream_set_timeout($socket, 12);
+            stream_set_timeout($socket, $timeoutSeconds);
+            @stream_set_write_buffer($socket, 0);
             if (!smtp_expect($socket, [220])
-                || !smtp_command($socket, 'EHLO pulseconnect.local', [250])
+                || !smtp_command($socket, 'EHLO ' . $ehloHost, [250])
                 || !smtp_command($socket, 'STARTTLS', [220])
             ) {
-                smtp_set_last_error('TLS negotiation failed');
-                fclose($socket);
-                return false;
+                return smtp_fail($socket, 'TLS negotiation failed');
             }
             foreach ($sslOpts as $key => $value) {
                 @stream_context_set_option($socket, 'ssl', $key, $value);
@@ -288,43 +466,28 @@ function smtp_send_mail(
                 return false;
             }
         }
-        if (!smtp_command($socket, 'EHLO pulseconnect.local', [250])) {
-            smtp_set_last_error('EHLO after STARTTLS rejected');
-            fclose($socket);
-            return false;
+        if (!smtp_command($socket, 'EHLO ' . $ehloHost, [250])) {
+            return smtp_fail($socket, 'EHLO after STARTTLS rejected');
         }
     }
 
-    if (!smtp_command($socket, 'AUTH LOGIN', [334])) {
-        smtp_set_last_error('AUTH LOGIN rejected');
-        fclose($socket);
-        return false;
-    }
-    if (!smtp_command($socket, base64_encode($username), [334])) {
-        smtp_set_last_error('SMTP username rejected');
-        fclose($socket);
-        return false;
-    }
-    if (!smtp_command($socket, base64_encode($password), [235])) {
-        smtp_set_last_error('SMTP password rejected');
-        fclose($socket);
-        return false;
+    if (!smtp_authenticate($socket, $username, $password)) {
+        return smtp_fail($socket, smtp_get_last_error() !== '' ? smtp_get_last_error() : 'SMTP authentication failed');
     }
 
     if (!smtp_command($socket, 'MAIL FROM:<' . $fromAddress . '>', [250])) {
-        smtp_set_last_error('MAIL FROM rejected');
-        fclose($socket);
-        return false;
+        return smtp_fail($socket, 'MAIL FROM rejected');
     }
     if (!smtp_command($socket, 'RCPT TO:<' . $toAddress . '>', [250, 251])) {
-        smtp_set_last_error('RCPT TO rejected');
-        fclose($socket);
-        return false;
+        return smtp_fail($socket, 'RCPT TO rejected');
     }
     if (!smtp_command($socket, 'DATA', [354])) {
-        smtp_set_last_error('DATA rejected');
-        fclose($socket);
-        return false;
+        return smtp_fail($socket, 'DATA rejected');
+    }
+
+    $midHost = trim($ehloHost, '[]');
+    if ($midHost === '' || filter_var($midHost, FILTER_VALIDATE_IP)) {
+        $midHost = 'ccspulseconnect.com';
     }
 
     $headers = [];
@@ -334,17 +497,19 @@ function smtp_send_mail(
     $headers[] = 'MIME-Version: 1.0';
     $headers[] = 'Content-Type: multipart/alternative; boundary="' . EMAIL_ALT_BOUNDARY . '"';
     $headers[] = 'Date: ' . date(DATE_RFC2822);
+    $headers[] = 'Message-ID: <' . bin2hex(random_bytes(12)) . '@' . $midHost . '>';
     $headers[] = '';
     $headers[] = $rawBody;
 
     $data = implode("\r\n", $headers);
     // Dot-stuffing
     $data = preg_replace('/^\./m', '..', $data);
-    fwrite($socket, $data . "\r\n.\r\n");
+    if (fwrite($socket, $data . "\r\n.\r\n") === false) {
+        return smtp_fail($socket, 'Message body write failed');
+    }
+    fflush($socket);
     if (!smtp_expect($socket, [250])) {
-        smtp_set_last_error('Message body rejected');
-        fclose($socket);
-        return false;
+        return smtp_fail($socket, 'Message body rejected');
     }
 
     smtp_command($socket, 'QUIT', [221]);
@@ -362,25 +527,51 @@ function smtp_collect_openssl_errors(): string
     return implode(' | ', $errors);
 }
 
+function smtp_authenticate($socket, string $username, string $password): bool
+{
+    if (!smtp_command($socket, 'AUTH LOGIN', [334])) {
+        smtp_set_last_error('AUTH LOGIN rejected');
+        return false;
+    }
+    if (!smtp_command($socket, base64_encode($username), [334])) {
+        smtp_set_last_error('SMTP username rejected');
+        return false;
+    }
+    if (!smtp_command($socket, base64_encode($password), [235])) {
+        smtp_set_last_error('SMTP password rejected');
+        return false;
+    }
+    return true;
+}
+
 function smtp_command($socket, string $command, array $expectedCodes): bool
 {
-    fwrite($socket, $command . "\r\n");
+    if (fwrite($socket, $command . "\r\n") === false) {
+        smtp_set_last_reply('');
+        return false;
+    }
+    fflush($socket);
     return smtp_expect($socket, $expectedCodes);
 }
 
 function smtp_expect($socket, array $expectedCodes): bool
 {
+    smtp_set_last_reply('');
     $response = '';
     while (($line = fgets($socket, 515)) !== false) {
         $response .= $line;
-        if (strlen($line) < 4) {
+        $trimmed = rtrim($line, "\r\n");
+        $len = strlen($trimmed);
+        if ($len < 3 || !ctype_digit(substr($trimmed, 0, 3))) {
             continue;
         }
-        // Multi-line SMTP responses use hyphen after code.
-        if ($line[3] === ' ') {
-            break;
+        // Continuation lines use hyphen after the status code (250-...).
+        if ($len >= 4 && $trimmed[3] === '-') {
+            continue;
         }
+        break;
     }
+    smtp_set_last_reply(trim($response));
     if ($response === '') {
         return false;
     }
@@ -499,34 +690,8 @@ function send_admin_login_verification_email(
         . '</td></tr></table>'
         . '</body></html>';
 
-    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
     $body = build_multipart_body($textMessage, $htmlMessage);
-
-    $smtpHost = trim((string) SMTP_HOST);
-    $smtpUser = trim((string) SMTP_USERNAME);
-    $smtpPass = (string) SMTP_PASSWORD;
-    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
-        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
-        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
-        $smtpFromName = trim((string) SMTP_FROM_NAME);
-        $smtpResult = smtp_send_mail(
-            $smtpHost,
-            $smtpPort,
-            $smtpEncryption,
-            $smtpUser,
-            $smtpPass,
-            EMAIL_SENDER_ADDRESS,
-            $smtpFromName,
-            $to,
-            $subject,
-            $body
-        );
-        if ($smtpResult) {
-            return true;
-        }
-    }
-
-    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+    return pulseconnect_deliver_email($to, $subject, $body, 'send_admin_login_verification_email');
 }
 
 function send_teacher_login_verification_email(
@@ -564,34 +729,8 @@ function send_teacher_login_verification_email(
         . '</td></tr></table>'
         . '</body></html>';
 
-    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
     $body = build_multipart_body($textMessage, $htmlMessage);
-
-    $smtpHost = trim((string) SMTP_HOST);
-    $smtpUser = trim((string) SMTP_USERNAME);
-    $smtpPass = (string) SMTP_PASSWORD;
-    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
-        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
-        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
-        $smtpFromName = trim((string) SMTP_FROM_NAME);
-        $smtpResult = smtp_send_mail(
-            $smtpHost,
-            $smtpPort,
-            $smtpEncryption,
-            $smtpUser,
-            $smtpPass,
-            EMAIL_SENDER_ADDRESS,
-            $smtpFromName,
-            $to,
-            $subject,
-            $body
-        );
-        if ($smtpResult) {
-            return true;
-        }
-    }
-
-    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+    return pulseconnect_deliver_email($to, $subject, $body, 'send_teacher_login_verification_email');
 }
 
 function send_password_reset_code_email(
@@ -628,34 +767,8 @@ function send_password_reset_code_email(
         . '</td></tr></table>'
         . '</body></html>';
 
-    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
     $body = build_multipart_body($textMessage, $htmlMessage);
-
-    $smtpHost = trim((string) SMTP_HOST);
-    $smtpUser = trim((string) SMTP_USERNAME);
-    $smtpPass = (string) SMTP_PASSWORD;
-    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
-        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
-        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
-        $smtpFromName = trim((string) SMTP_FROM_NAME);
-        $smtpResult = smtp_send_mail(
-            $smtpHost,
-            $smtpPort,
-            $smtpEncryption,
-            $smtpUser,
-            $smtpPass,
-            EMAIL_SENDER_ADDRESS,
-            $smtpFromName,
-            $to,
-            $subject,
-            $body
-        );
-        if ($smtpResult) {
-            return true;
-        }
-    }
-
-    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+    return pulseconnect_deliver_email($to, $subject, $body, 'send_password_reset_code_email');
 }
 
 function send_teacher_account_credentials_email(
@@ -806,33 +919,7 @@ function send_multipart_email(
         return false;
     }
 
-    $headers = build_multipart_headers(EMAIL_SENDER_ADDRESS);
     $body = build_multipart_body($textMessage, $htmlMessage);
-
-    $smtpHost = trim((string) SMTP_HOST);
-    $smtpUser = trim((string) SMTP_USERNAME);
-    $smtpPass = (string) SMTP_PASSWORD;
-    if ($smtpHost !== '' && $smtpUser !== '' && $smtpPass !== '') {
-        $smtpPort = SMTP_PORT > 0 ? SMTP_PORT : 587;
-        $smtpEncryption = strtolower(trim((string) SMTP_ENCRYPTION));
-        $smtpFromName = trim((string) SMTP_FROM_NAME);
-        $smtpResult = smtp_send_mail(
-            $smtpHost,
-            $smtpPort,
-            $smtpEncryption,
-            $smtpUser,
-            $smtpPass,
-            EMAIL_SENDER_ADDRESS,
-            $smtpFromName,
-            $to,
-            $subject,
-            $body
-        );
-        if ($smtpResult) {
-            return true;
-        }
-    }
-
-    return @mail($to, $subject, $body, implode("\r\n", $headers), '-f ' . EMAIL_SENDER_ADDRESS);
+    return pulseconnect_deliver_email($to, $subject, $body, 'send_multipart_email');
 }
 

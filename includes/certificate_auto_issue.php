@@ -86,6 +86,151 @@ function certificate_auto_write_headers(): array
 }
 
 /**
+ * GET certificate rows; retry without optional columns if PostgREST rejects the select.
+ *
+ * @return list<array<string,mixed>>
+ */
+function certificate_auto_get_json_rows(string $url, array $headers, ?string $fallbackUrl = null): array
+{
+    $res = supabase_request('GET', $url, $headers);
+    $ok = !empty($res['ok']);
+    if (!$ok && $fallbackUrl) {
+        $res = supabase_request('GET', $fallbackUrl, $headers);
+        $ok = !empty($res['ok']);
+    }
+    if (!$ok) {
+        return [];
+    }
+    $rows = json_decode((string) ($res['body'] ?? ''), true);
+    return is_array($rows) ? $rows : [];
+}
+
+/**
+ * Issued certs + assigned registrar codes for this event, regardless of Simple vs Seminar.
+ *
+ * @param list<array<string,mixed>> $sessions
+ * @param array<string,string> $namesById
+ * @return list<array<string,mixed>>
+ */
+function certificate_auto_collect_issued_status_rows(
+    string $eventId,
+    array $sessions,
+    array &$namesById,
+    array $headers
+): array {
+    $eventId = trim($eventId);
+    $received = [];
+    $seen = [];
+    $add = static function (string $sid, string $code, string $issuedAt, string $seminarCode) use (&$received, &$seen, &$namesById): void {
+        $sid = trim($sid);
+        if ($sid === '' || isset($seen[$sid])) {
+            return;
+        }
+        $seen[$sid] = true;
+        $received[] = [
+            'student_id' => $sid,
+            'name' => $namesById[$sid] ?? '',
+            'certificate_code' => $code,
+            'issued_at' => $issuedAt,
+            'seminar_code' => $seminarCode,
+        ];
+    };
+
+    $base = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates';
+    $eventCerts = certificate_auto_get_json_rows(
+        $base . '?select=student_id,certificate_code,issued_at&event_id=eq.' . rawurlencode($eventId) . '&limit=2000',
+        $headers,
+        $base . '?select=student_id,certificate_code&event_id=eq.' . rawurlencode($eventId) . '&limit=2000'
+    );
+    foreach ($eventCerts as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $add(
+            (string) ($row['student_id'] ?? ''),
+            trim((string) ($row['certificate_code'] ?? '')),
+            trim((string) ($row['issued_at'] ?? '')),
+            ''
+        );
+    }
+
+    $sessionIds = [];
+    $sessionCodeById = [];
+    foreach ($sessions as $i => $s) {
+        if (!is_array($s)) {
+            continue;
+        }
+        $sid = trim((string) ($s['id'] ?? ''));
+        if ($sid === '') {
+            continue;
+        }
+        $sessionIds[] = $sid;
+        $sessionCodeById[$sid] = certificate_auto_seminar_code((int) $i);
+    }
+    if ($sessionIds !== []) {
+        $sessBase = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_certificates';
+        $inList = implode(',', $sessionIds);
+        $sessRows = certificate_auto_get_json_rows(
+            $sessBase . '?select=student_id,session_id,certificate_code,issued_at&session_id=in.(' . $inList . ')&limit=4000',
+            $headers,
+            $sessBase . '?select=student_id,session_id,certificate_code&session_id=in.(' . $inList . ')&limit=4000'
+        );
+        foreach ($sessRows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $sessId = trim((string) ($row['session_id'] ?? ''));
+            $add(
+                (string) ($row['student_id'] ?? ''),
+                trim((string) ($row['certificate_code'] ?? '')),
+                trim((string) ($row['issued_at'] ?? '')),
+                $sessionCodeById[$sessId] ?? ''
+            );
+        }
+    }
+
+    $poolUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_certificate_codes'
+        . '?select=assigned_to,code,assigned_at,status'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&status=eq.assigned'
+        . '&limit=2000';
+    $poolRows = certificate_auto_get_json_rows($poolUrl, $headers);
+    foreach ($poolRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $add(
+            (string) ($row['assigned_to'] ?? ''),
+            trim((string) ($row['code'] ?? '')),
+            trim((string) ($row['assigned_at'] ?? '')),
+            ''
+        );
+    }
+
+    $needNames = [];
+    foreach ($received as $row) {
+        $sid = (string) ($row['student_id'] ?? '');
+        if ($sid !== '' && ($namesById[$sid] ?? '') === '') {
+            $needNames[] = $sid;
+        }
+    }
+    if ($needNames !== []) {
+        $fetched = certificate_auto_fetch_student_names($needNames, $headers);
+        foreach ($fetched as $id => $nm) {
+            $namesById[$id] = $nm;
+        }
+        foreach ($received as $i => $row) {
+            $sid = (string) ($row['student_id'] ?? '');
+            if ($sid !== '' && ($namesById[$sid] ?? '') !== '') {
+                $received[$i]['name'] = $namesById[$sid];
+            }
+        }
+    }
+
+    return $received;
+}
+
+/**
  * True when PostgREST rejected a payload column (missing / schema cache).
  */
 function certificate_auto_is_missing_column(array $response, string $column): bool
@@ -183,25 +328,16 @@ function certificate_auto_resolve_session_template_id(string $sessionId, array $
 
 function certificate_auto_student_has_checkout_simple(string $eventId, string $studentId, array $headers): bool
 {
-    $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-        . '?select=check_out_at,tickets(event_registrations(student_id))'
-        . '&tickets.event_registrations.event_id=eq.' . rawurlencode($eventId)
-        . '&tickets.event_registrations.student_id=eq.' . rawurlencode($studentId)
-        . '&limit=5';
-    $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
-    if (!$attendanceRes['ok']) {
+    $eventId = trim($eventId);
+    $studentId = trim($studentId);
+    if ($eventId === '' || $studentId === '') {
         return false;
     }
-    $rows = json_decode((string) ($attendanceRes['body'] ?? ''), true);
-    if (!is_array($rows)) {
-        return false;
-    }
-    foreach ($rows as $row) {
-        if (is_array($row) && trim((string) ($row['check_out_at'] ?? '')) !== '') {
-            return true;
-        }
-    }
-    return false;
+    // Nested PostgREST filters on attendance→tickets→registrations often
+    // return no rows even when check_out_at is set. Use the same
+    // registration → ticket → attendance path as bulk prefetch.
+    $map = certificate_auto_prefetch_simple_checkouts($eventId, [$studentId], $headers);
+    return !empty($map[$studentId]);
 }
 
 /**
@@ -792,7 +928,17 @@ function certificate_auto_issue_for_student(string $eventId, string $studentId, 
     }
 
     $sessions = fetch_event_sessions($eventId, $headers);
-    $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+    $validSessions = [];
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
+                $validSessions[] = $session;
+            }
+        }
+    }
+    $sessions = $validSessions;
+    $usesSessions = $sessions !== []
+        && event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
 
     // No linked certificate / code pool — eval-only event; skip cert messaging.
     if (!certificate_auto_event_has_setup($eventId, $headers, $usesSessions, $sessions)) {
@@ -1051,7 +1197,18 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
     }
 
     $sessions = fetch_event_sessions($eventId, $headers);
-    $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+    $validSessions = [];
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
+                $validSessions[] = $session;
+            }
+        }
+    }
+    $sessions = $validSessions;
+    // Empty session list → simple-event certificates table, even if event_type is Seminar.
+    $usesSessions = $sessions !== []
+        && event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
 
     $regUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
         . '?select=student_id,registered_at'
@@ -1085,11 +1242,6 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         }
     }
     $ids = array_keys($studentIds);
-    if ($ids === []) {
-        return ['ok' => true, 'uses_sessions' => $usesSessions, 'received' => [], 'missing' => []];
-    }
-
-    // Names
     $namesById = [];
     $chunkSize = 80;
     for ($i = 0; $i < count($ids); $i += $chunkSize) {
@@ -1185,8 +1337,9 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
             $missingSessions = [];
             $receivedSessions = [];
 
-            foreach ($checkedOut as $sessId) {
+            foreach ($sessionIds as $sessId) {
                 $sessEvalOk = ($sessionEvalByKey[$studentId . '|' . $sessId] ?? false) === true;
+                $didCheckOut = in_array($sessId, $checkedOut, true);
                 $hasCert = isset($certsByStudentSession[$studentId][$sessId]);
                 if ($hasCert) {
                     $hasAnyCert = true;
@@ -1198,7 +1351,7 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                         'certificate_code' => (string) ($c['certificate_code'] ?? ''),
                         'issued_at' => (string) ($c['issued_at'] ?? ''),
                     ];
-                } elseif ($eventEvalOk && $sessEvalOk) {
+                } elseif ($didCheckOut && $eventEvalOk && $sessEvalOk) {
                     $missingSessions[] = [
                         'session_id' => $sessId,
                         'session_title' => $sessionTitles[$sessId] ?? 'Seminar',
@@ -1287,6 +1440,91 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                 'status' => 'missing',
                 'reason' => 'Evaluation complete — certificate not issued yet',
             ];
+        }
+    }
+
+    // Simple-event auto-issue writes public.certificates. Seminar-flagged events
+    // with no (or unused) sessions still land there — merge so Received matches auto-send.
+    $eventCertUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/certificates'
+        . '?select=student_id,certificate_code,issued_at'
+        . '&event_id=eq.' . rawurlencode($eventId)
+        . '&limit=2000';
+    $eventCertRes = supabase_request('GET', $eventCertUrl, $headers);
+    $eventCertRows = $eventCertRes['ok'] ? json_decode((string) ($eventCertRes['body'] ?? ''), true) : [];
+    $alreadyReceived = [];
+    foreach ($received as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $rid = trim((string) ($row['student_id'] ?? ''));
+        if ($rid !== '') {
+            $alreadyReceived[$rid] = true;
+        }
+    }
+    $extraNameIds = [];
+    if (is_array($eventCertRows)) {
+        foreach ($eventCertRows as $c) {
+            if (!is_array($c)) {
+                continue;
+            }
+            $st = trim((string) ($c['student_id'] ?? ''));
+            if ($st !== '' && !isset($namesById[$st])) {
+                $extraNameIds[$st] = true;
+            }
+        }
+    }
+    if ($extraNameIds !== []) {
+        $extraChunk = array_keys($extraNameIds);
+        $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+            . '?select=id,first_name,middle_name,last_name,suffix,email'
+            . '&id=in.(' . implode(',', array_map('rawurlencode', $extraChunk)) . ')';
+        $usersRes = supabase_request('GET', $usersUrl, $headers);
+        $userRows = $usersRes['ok'] ? json_decode((string) ($usersRes['body'] ?? ''), true) : [];
+        if (is_array($userRows)) {
+            foreach ($userRows as $u) {
+                if (!is_array($u)) {
+                    continue;
+                }
+                $uid = trim((string) ($u['id'] ?? ''));
+                if ($uid === '') {
+                    continue;
+                }
+                $parts = array_filter([
+                    trim((string) ($u['first_name'] ?? '')),
+                    trim((string) ($u['middle_name'] ?? '')),
+                    trim((string) ($u['last_name'] ?? '')),
+                    trim((string) ($u['suffix'] ?? '')),
+                ], static fn ($p) => $p !== '');
+                $name = trim(implode(' ', $parts));
+                if ($name === '') {
+                    $name = trim((string) ($u['email'] ?? 'Student'));
+                }
+                $namesById[$uid] = [
+                    'name' => $name,
+                    'email' => trim((string) ($u['email'] ?? '')),
+                ];
+            }
+        }
+    }
+    if (is_array($eventCertRows)) {
+        foreach ($eventCertRows as $c) {
+            if (!is_array($c)) {
+                continue;
+            }
+            $st = trim((string) ($c['student_id'] ?? ''));
+            if ($st === '' || isset($alreadyReceived[$st])) {
+                continue;
+            }
+            $profile = $namesById[$st] ?? ['name' => 'Student', 'email' => ''];
+            $received[] = [
+                'student_id' => $st,
+                'name' => $profile['name'],
+                'email' => $profile['email'],
+                'status' => 'received',
+                'certificate_code' => (string) ($c['certificate_code'] ?? ''),
+                'issued_at' => (string) ($c['issued_at'] ?? ''),
+            ];
+            $alreadyReceived[$st] = true;
         }
     }
 

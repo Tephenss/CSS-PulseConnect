@@ -12,6 +12,26 @@ MOBILE_PUSH_API_KEY=<long-random-string-at-least-32-chars>
 ```
 
 - Keep SSL verify **false** (do not skip). Upload `certs/cacert.pem` with the site so PHP can verify HTTPS to Supabase.
+
+SMTP (OTP / reset / notifications): **Hostinger mailbox first**, Gmail only if Hostinger fails or hits a daily limit.
+
+```env
+EMAIL_SENDER_ADDRESS=noreply@ccspulseconnect.com
+SMTP_HOST=smtp.hostinger.com
+SMTP_PORT=465
+SMTP_ENCRYPTION=ssl
+SMTP_USERNAME=noreply@ccspulseconnect.com
+SMTP_PASSWORD=<hostinger-mailbox-password>
+SMTP_FROM_NAME=CCS PulseConnect
+SMTP_EHLO_HOST=ccspulseconnect.com
+EMAIL_DOMAIN_SENDER=noreply@ccspulseconnect.com
+SMTP_FALLBACK_HOST=smtp.gmail.com
+SMTP_FALLBACK_PORT=587
+SMTP_FALLBACK_ENCRYPTION=tls
+SMTP_FALLBACK_USERNAME=ccspulseconnect@gmail.com
+SMTP_FALLBACK_PASSWORD=<gmail-app-password>
+SMTP_FALLBACK_FROM=ccspulseconnect@gmail.com
+```
 - If login shows `unable to get local issuer certificate`, re-upload `includes/curl_ssl.php`, `includes/supabase.php`, and `certs/cacert.pem`.
 - Generate a new key (e.g. `openssl rand -hex 32`).
 - Put the **same** value in Flutter `lib/config/env.dart` as `mobilePushApiKey`.

@@ -76,6 +76,9 @@ $objectPath = storage_normalize_avatar_photo_value((string) ($stored['path'] ?? 
 if ($objectPath === '') {
     $objectPath = (string) ($stored['path'] ?? '');
 }
+if (function_exists('api_cache_delete')) {
+    api_cache_delete('avatar_path:' . $userId);
+}
 $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format(DATE_ATOM);
 $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
     . '?id=eq.' . rawurlencode($userId)

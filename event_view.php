@@ -358,6 +358,8 @@ render_header('Event Details', $user);
                         data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
                         data-event_mode="<?= htmlspecialchars(count($sessions) > 0 ? 'seminar_based' : 'simple') ?>"
                         data-sessions="<?= $sessionsJsonForAttr ?>"
+                        data-event_for="<?= htmlspecialchars((string) ($event['event_for'] ?? 'All')) ?>"
+                        data-grace_time="<?= htmlspecialchars((string) max(0, (int) ($event['grace_time'] ?? 30))) ?>"
                         data-registration_close_weeks="<?= htmlspecialchars((string) (event_registration_close_weeks($event) ?? '')) ?>"
                         data-registration_close_extend_days="<?= htmlspecialchars((string) event_registration_close_extend_days($event)) ?>"
                 >
@@ -710,6 +712,57 @@ render_header('Event Details', $user);
                 <input id="end_at_local" name="end_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
                 </div>
             </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label for="grace_time" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
+              <div class="relative">
+                <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-zinc-400">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <input id="grace_time" name="grace_time" type="number" min="0" step="1" value="30"
+                  class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+              </div>
+              <p class="text-[11px] text-zinc-500 mt-1.5">Time-in window after the event (or seminar) start. 0 = closes at start.</p>
+            </div>
+            <div>
+              <label for="target_course" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Course</label>
+              <select id="target_course" name="target_course"
+                class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition">
+                <option value="ALL" selected>All Courses</option>
+                <option value="BSIT">BSIT (All)</option>
+                <option value="BSIT-SD">BSIT-SD</option>
+                <option value="BSIT-BA">BSIT-BA</option>
+                <option value="BSCS">BSCS</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Year Level</label>
+            <div id="target_year_group" class="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-2">
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200 bg-zinc-50">
+                <input type="checkbox" class="edit-target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="ALL" checked />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">All Levels</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="edit-target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="1" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">1st Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="edit-target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="2" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">2nd Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="edit-target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="3" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">3rd Year</span>
+              </label>
+              <label class="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-zinc-50 cursor-pointer border border-zinc-200">
+                <input type="checkbox" class="edit-target-year-checkbox rounded border-zinc-300 text-orange-600 focus:ring-orange-500" value="4" />
+                <span class="text-sm font-semibold text-zinc-700 whitespace-nowrap">4th Year</span>
+              </label>
+            </div>
+            <p class="text-[11px] text-zinc-500 mt-1.5">Who can register and whose tickets count for this event. Same targeting as Manage Events.</p>
           </div>
 
           <div id="registrationCloseExtendSection" class="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 space-y-3">
@@ -1819,6 +1872,108 @@ function syncSeminarEndMin(prefix) {
     );
 }
 
+function normalizeEditTargetCourse(value) {
+    const raw = (value || '').toString().trim().toUpperCase();
+    const compact = raw.replace(/[^A-Z0-9]/g, '');
+    if (compact === 'BSITSD') return 'BSIT-SD';
+    if (compact === 'BSITBA') return 'BSIT-BA';
+    if (raw === 'BSIT-SD' || raw === 'BSIT_SD') return 'BSIT-SD';
+    if (raw === 'BSIT-BA' || raw === 'BSIT_BA') return 'BSIT-BA';
+    if (raw === 'BSIT' || raw === 'IT') return 'BSIT';
+    if (raw === 'BSCS' || raw === 'CS') return 'BSCS';
+    if (raw === 'ALL') return 'ALL';
+    return raw;
+}
+
+function normalizeEditTargetYears(yearValues) {
+    const source = Array.isArray(yearValues) ? yearValues : [yearValues];
+    const cleaned = source
+        .map((v) => (v || '').toString().trim().toUpperCase())
+        .filter((v) => ['ALL', '1', '2', '3', '4'].includes(v));
+    if (cleaned.includes('ALL') || cleaned.length === 0) return ['ALL'];
+    return [...new Set(cleaned)];
+}
+
+function decodeEditTargetParticipant(eventForValue) {
+    const raw = (eventForValue || 'All').toString().trim().toUpperCase();
+    if (!raw || raw === 'ALL' || raw === 'ALL LEVELS' || raw === 'NONE') {
+        return { course: 'ALL', years: ['ALL'] };
+    }
+    const multi = raw.match(/^COURSE\s*=\s*(ALL|BSIT-SD|BSIT-BA|BSIT|BSCS)\s*;\s*YEARS\s*=\s*([0-9,\sA-Z]+)$/);
+    if (multi) {
+        const years = (multi[2] || '')
+            .split(',')
+            .map((v) => v.trim().toUpperCase())
+            .filter((v) => ['ALL', '1', '2', '3', '4'].includes(v));
+        const normalizedYears = years.includes('ALL') || years.length === 0
+            ? ['ALL']
+            : [...new Set(years)];
+        return { course: normalizeEditTargetCourse(multi[1]), years: normalizedYears };
+    }
+    const pair = raw.match(/^(BSIT|BSCS)\s*[-_|]\s*([1-4])$/);
+    if (pair) {
+        return { course: pair[1], years: [pair[2]] };
+    }
+    const standalone = normalizeEditTargetCourse(raw);
+    if (['BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'].includes(standalone)) {
+        return { course: standalone, years: ['ALL'] };
+    }
+    if (['1', '2', '3', '4'].includes(raw)) {
+        return { course: 'ALL', years: [raw] };
+    }
+    return { course: 'ALL', years: ['ALL'] };
+}
+
+function encodeEditTargetParticipant(courseValue, yearValues) {
+    const course = normalizeEditTargetCourse(courseValue || 'ALL');
+    const years = normalizeEditTargetYears(yearValues);
+    const allowedCourses = ['ALL', 'BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'];
+    const normalizedCourse = allowedCourses.includes(course) ? course : 'ALL';
+    if (normalizedCourse === 'ALL' && years.length === 1 && years[0] === 'ALL') return 'All';
+    if (normalizedCourse === 'ALL' && years.length === 1) return years[0];
+    if (years.length === 1 && years[0] === 'ALL') return normalizedCourse;
+    return `COURSE=${normalizedCourse};YEARS=${years.join(',')}`;
+}
+
+function editTargetYearCheckboxes() {
+    return Array.from(document.querySelectorAll('.edit-target-year-checkbox'));
+}
+
+function getSelectedEditTargetYears() {
+    const checkboxes = editTargetYearCheckboxes();
+    if (checkboxes.length === 0) return ['ALL'];
+    return normalizeEditTargetYears(checkboxes.filter((cb) => cb.checked).map((cb) => cb.value));
+}
+
+function setSelectedEditTargetYears(years) {
+    const checkboxes = editTargetYearCheckboxes();
+    if (checkboxes.length === 0) return;
+    const normalized = normalizeEditTargetYears(years);
+    checkboxes.forEach((cb) => {
+        cb.checked = normalized.includes(cb.value);
+    });
+}
+
+function bindEditTargetYearCheckboxes() {
+    editTargetYearCheckboxes().forEach((cb) => {
+        cb.addEventListener('change', () => {
+            const value = (cb.value || '').toUpperCase();
+            if (value === 'ALL' && cb.checked) {
+                setSelectedEditTargetYears(['ALL']);
+                return;
+            }
+            if (value !== 'ALL' && cb.checked) {
+                const allBox = document.querySelector('.edit-target-year-checkbox[value="ALL"]');
+                if (allBox) allBox.checked = false;
+            }
+            if (getSelectedEditTargetYears().length === 0) {
+                setSelectedEditTargetYears(['ALL']);
+            }
+        });
+    });
+}
+bindEditTargetYearCheckboxes();
+
 /** Resolve user-facing +N days from anchor → stored offset from base + preview. */
 function resolveRegistrationCloseExtend(startLocalValue, weeks, requestedFromAnchor) {
     const startDate = parseLocalDateUtc(startLocalValue);
@@ -2028,6 +2183,16 @@ if (btnEdit) {
     document.getElementById('end_at_local').value = toLocalInput(btnEdit.dataset.end_at);
     syncMainEventEndMin();
 
+    const graceInput = document.getElementById('grace_time');
+    if (graceInput) {
+        const graceParsed = Number.parseInt(String(btnEdit.dataset.grace_time || '30'), 10);
+        graceInput.value = String(Number.isFinite(graceParsed) && graceParsed >= 0 ? graceParsed : 30);
+    }
+    const decodedTarget = decodeEditTargetParticipant(btnEdit.dataset.event_for || 'All');
+    const courseSelect = document.getElementById('target_course');
+    if (courseSelect) courseSelect.value = decodedTarget.course;
+    setSelectedEditTargetYears(decodedTarget.years);
+
     const weeksRaw = String(btnEdit.dataset.registration_close_weeks || '').trim();
     const weeksParsed = Number.parseInt(weeksRaw, 10);
     editRegistrationCloseWeeks = Number.isFinite(weeksParsed) && weeksParsed >= 1 && weeksParsed <= 4
@@ -2130,6 +2295,14 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
         return;
     }
 
+    const graceRaw = String(document.getElementById('grace_time')?.value || '').trim();
+    const graceParsed = Number.parseInt(graceRaw, 10);
+    if (!Number.isFinite(graceParsed) || graceParsed < 0) {
+        msg.textContent = 'Grace time must be 0 or greater.';
+        document.getElementById('grace_time')?.focus();
+        return;
+    }
+
     refreshRegistrationClosePreview();
     if (editRegistrationCloseWeeks && !editRegistrationCloseExtendValid) {
         msg.textContent = registrationCloseExtendError?.textContent
@@ -2152,6 +2325,11 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       start_at: sd.toISOString(),
       end_at: ed.toISOString(),
       event_mode: eventModeInput?.value || 'simple',
+      grace_time: String(graceParsed),
+      event_for: encodeEditTargetParticipant(
+        document.getElementById('target_course')?.value || 'ALL',
+        getSelectedEditTargetYears(),
+      ),
       // User-facing days from anchor; API converts to stored base offset.
       registration_close_extend_days: Number(registrationCloseExtendInput?.value || 0),
       csrf_token: window.CSRF_TOKEN

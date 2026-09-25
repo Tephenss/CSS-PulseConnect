@@ -213,3 +213,15 @@ function api_cache_bump_generation(string $namespace): int
     api_cache_write($namespace . '_gen', ['v' => $next]);
     return $next;
 }
+
+function api_cache_delete(string $key): void
+{
+    $path = api_cache_path($key);
+    if (is_file($path)) {
+        @unlink($path);
+    }
+    $lock = api_cache_lock_path($key);
+    if (is_file($lock)) {
+        @unlink($lock);
+    }
+}

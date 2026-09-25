@@ -6,10 +6,10 @@ declare(strict_types=1);
  * Share: https://ccspulseconnect.com/get_app
  */
 
-$apkUrl = 'https://www.mediafire.com/file/rfyqv08robk10v0/app-release.apk/file';
+$apkUrl = 'https://www.mediafire.com/file/zeuia2r2qbexy4l/PulseCONNECT%2528v2%2529.apk/file';
 $appName = 'PulseCONNECT';
 $pageTitle = 'Download PulseCONNECT · Android APK';
-$version = 'v1.0.4';
+$version = 'v2.0.0';
 $fileSize = '75.53 MB';
 $updatedDate = 'September 2026';
 $developers = 'MARK STEPHEN ESPINOSA / CIAN CLYDE TANDANG';
@@ -576,6 +576,39 @@ $developers = 'MARK STEPHEN ESPINOSA / CIAN CLYDE TANDANG';
       align-items: center;
       gap: 6px;
     }
+    .update-install-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      max-width: 650px;
+      margin-top: 18px;
+      padding: 13px 16px;
+      border: 1px solid rgba(251, 191, 36, 0.72);
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.2), rgba(220, 38, 38, 0.16));
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    }
+    .update-install-note-icon {
+      flex: 0 0 auto;
+      width: 24px;
+      height: 24px;
+      padding: 5px;
+      border-radius: 50%;
+      background: #fbbf24;
+      color: #451a03;
+    }
+    .update-install-note-copy {
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .update-install-note-copy strong {
+      display: block;
+      margin-bottom: 2px;
+      color: #fef3c7;
+      font-size: 13.5px;
+      letter-spacing: 0.01em;
+    }
 
     /* SECTION 2: PLAY STORE APP SCREENSHOTS SHOWCASE (HIGHLIGHT) */
     .section-showcase {
@@ -1039,6 +1072,11 @@ $developers = 'MARK STEPHEN ESPINOSA / CIAN CLYDE TANDANG';
       .download-subtext {
         justify-content: center;
       }
+      .update-install-note {
+        margin-right: auto;
+        margin-left: auto;
+        text-align: left;
+      }
       .section-install {
         padding: 28px 20px;
       }
@@ -1259,6 +1297,13 @@ $developers = 'MARK STEPHEN ESPINOSA / CIAN CLYDE TANDANG';
           <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
           Direct release build · Saves as <strong>PulseCONNECT.apk</strong> (<?= htmlspecialchars($fileSize) ?>)
         </p>
+        <div class="update-install-note" role="note">
+          <svg class="update-install-note-icon" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 3.75a2 2 0 00-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z"/></svg>
+          <div class="update-install-note-copy">
+            <strong>Important: installing an update?</strong>
+            Uninstall the old PulseCONNECT version before downloading and installing this latest APK to avoid installation conflicts.
+          </div>
+        </div>
       </div>
     </section>
 

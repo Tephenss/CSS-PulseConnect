@@ -96,7 +96,7 @@ function evaluation_event_expects_two_seminars(string $eventId): bool
     }
 
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-        . '?select=event_structure,event_mode,session_count'
+        . '?select=event_structure,event_mode'
         . '&id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $res = supabase_request('GET', $url, evaluation_notify_headers());
@@ -113,7 +113,23 @@ function evaluation_event_expects_two_seminars(string $eventId): bool
     if ($structure === 'two_seminars') {
         return true;
     }
-    $count = (int) ($event['session_count'] ?? 0);
+    if ($structure === 'one_seminar' || $structure === 'simple') {
+        return false;
+    }
+
+    // session_count is not a real events column — count event_sessions instead.
+    if (!function_exists('fetch_event_sessions')) {
+        require_once __DIR__ . '/event_sessions.php';
+    }
+    $sessions = fetch_event_sessions($eventId, evaluation_notify_headers());
+    $count = 0;
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
+                $count++;
+            }
+        }
+    }
     return $count >= 2;
 }
 

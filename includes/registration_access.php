@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/event_targeting.php';
 require_once __DIR__ . '/supabase.php';
 require_once __DIR__ . '/student_requirements.php';
+require_once __DIR__ . '/student_roster.php';
 
 function registration_access_missing_table_message(string $message): bool
 {
@@ -638,13 +639,30 @@ function fetch_target_students_for_event(array $event, array $headers): array
     }
 
     $eventFor = (string) ($event['event_for'] ?? 'All');
+    $userIds = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $uid = trim((string) ($row['id'] ?? ''));
+        if ($uid !== '') {
+            $userIds[] = $uid;
+        }
+    }
+    $rosterMap = student_roster_fetch_map_by_user_ids($userIds);
+
     $filtered = [];
     foreach ($rows as $row) {
-        if (!is_array($row) || !student_matches_event_target($row, $eventFor)) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $uid = trim((string) ($row['id'] ?? ''));
+        $row = event_targeting_apply_roster($row, $rosterMap[$uid] ?? null);
+        $row['section_name'] = extract_section_name($row['sections'] ?? null);
+        if (!student_matches_event_target($row, $eventFor)) {
             continue;
         }
 
-        $row['section_name'] = extract_section_name($row['sections'] ?? null);
         $row['year_level'] = extract_student_year_level($row);
         $row['normalized_course'] = normalize_student_course_code($row);
         $row['display_name'] = compose_student_display_name($row);
@@ -775,6 +793,14 @@ function fetch_student_profile_by_id(string $studentId, array $headers): ?array
     }
 
     $row = $rows[0];
+    $roster = student_roster_fetch_by_user_id((string) ($row['id'] ?? ''));
+    if ($roster === null) {
+        $sno = student_roster_normalize_no((string) ($row['student_id'] ?? ''));
+        if ($sno !== '') {
+            $roster = student_roster_fetch_by_no($sno);
+        }
+    }
+    $row = event_targeting_apply_roster($row, $roster);
     $row['section_name'] = extract_section_name($row['sections'] ?? null);
     $row['year_level'] = extract_student_year_level($row);
     $row['normalized_course'] = normalize_student_course_code($row);

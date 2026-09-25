@@ -38,6 +38,23 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
+function evaluation_dedupe_answer_rows(array $rows): array
+{
+    $byKey = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $questionId = trim((string) ($row['question_id'] ?? ''));
+        $studentId = trim((string) ($row['student_id'] ?? ''));
+        if ($questionId === '' || $studentId === '') {
+            continue;
+        }
+        $byKey[$questionId . '|' . $studentId] = $row;
+    }
+    return array_values($byKey);
+}
+
 function evaluation_attendance_counts_as_present(array $row): bool
 {
     $status = strtolower(trim((string) ($row['status'] ?? '')));
@@ -290,7 +307,19 @@ try {
     $eventEligible = false;
     $attendedSessionIds = [];
 
-    if ($usesSessions) {
+    $validSessionCount = 0;
+    if (is_array($sessions)) {
+        foreach ($sessions as $session) {
+            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
+                $validSessionCount++;
+            }
+        }
+    }
+    $simpleOut = function_exists('certificate_auto_student_has_checkout_simple')
+        ? certificate_auto_student_has_checkout_simple($eventId, $studentId, $headers)
+        : evaluation_has_simple_attendance($eventId, $studentId, $headers);
+
+    if ($usesSessions && $validSessionCount >= 2) {
         $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
         // Multi-seminar (2+): unlock only after last seminar (Seminar 2) time-out.
         $final = evaluation_final_seminar_for_event($eventId);
@@ -302,8 +331,11 @@ try {
         } else {
             $eventEligible = count($attendedSessionIds) > 0;
         }
+    } elseif ($usesSessions) {
+        $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
+        $eventEligible = $simpleOut || count($attendedSessionIds) > 0;
     } else {
-        $eventEligible = evaluation_has_simple_attendance($eventId, $studentId, $headers);
+        $eventEligible = $simpleOut || evaluation_has_simple_attendance($eventId, $studentId, $headers);
     }
 
     if (!$eventEligible) {
@@ -421,7 +453,9 @@ try {
     ];
 
     if (count($eventPayloads) > 0) {
-        $eventPostUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers?select=id,question_id';
+        $eventPayloads = evaluation_dedupe_answer_rows($eventPayloads);
+        $eventPostUrl = rtrim(SUPABASE_URL, '/')
+            . '/rest/v1/evaluation_answers?on_conflict=question_id,student_id&select=id,question_id';
         $eventPostHeaders = $postHeaders;
         $eventPostHeaders[] = 'Prefer: return=representation,resolution=merge-duplicates';
         $eventPostRes = supabase_request('POST', $eventPostUrl, $eventPostHeaders, json_encode($eventPayloads, JSON_UNESCAPED_SLASHES));
@@ -434,7 +468,9 @@ try {
     }
 
     if (count($sessionPayloads) > 0) {
-        $sessionPostUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_answers?select=id,question_id';
+        $sessionPayloads = evaluation_dedupe_answer_rows($sessionPayloads);
+        $sessionPostUrl = rtrim(SUPABASE_URL, '/')
+            . '/rest/v1/event_session_evaluation_answers?on_conflict=question_id,student_id&select=id,question_id';
         $sessionPostHeaders = $postHeaders;
         $sessionPostHeaders[] = 'Prefer: return=representation,resolution=merge-duplicates';
         $sessionPostRes = supabase_request('POST', $sessionPostUrl, $sessionPostHeaders, json_encode($sessionPayloads, JSON_UNESCAPED_SLASHES));
