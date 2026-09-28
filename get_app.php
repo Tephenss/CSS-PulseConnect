@@ -6,10 +6,10 @@ declare(strict_types=1);
  * Share: https://ccspulseconnect.com/get_app
  */
 
-$apkUrl = 'https://www.mediafire.com/file/zeuia2r2qbexy4l/PulseCONNECT%2528v2%2529.apk/file';
+$apkUrl = 'https://www.mediafire.com/file/ozt7wrypqi6bjru/PulseCONNECT%2528v2.0.2%2529.apk/file';
 $appName = 'PulseCONNECT';
 $pageTitle = 'Download PulseCONNECT · Android APK';
-$version = 'v2.0.0';
+$version = 'v2.0.2';
 $fileSize = '75.53 MB';
 $updatedDate = 'September 2026';
 $developers = 'MARK STEPHEN ESPINOSA / CIAN CLYDE TANDANG';

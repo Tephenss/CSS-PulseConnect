@@ -1155,7 +1155,7 @@ if ($usesSessions) {
                 <?php foreach ($sessions as $session): ?>
                   <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
                 <?php endforeach; ?>
-                <?php if ($canResetAttendance): ?>
+                <?php if ($canResetAttendance || $canRemoveParticipant): ?>
                   <th class="px-4 py-3.5 text-right text-[11px] font-bold uppercase tracking-wider text-zinc-500">Action</th>
                 <?php endif; ?>
               </tr>
@@ -1299,8 +1299,10 @@ if ($usesSessions) {
                       <?php endif; ?>
                     </td>
                   <?php endforeach; ?>
-                  <?php if ($canResetAttendance): ?>
+                  <?php if ($canResetAttendance || $canRemoveParticipant): ?>
                   <td class="px-4 py-3.5 whitespace-nowrap text-right">
+                    <div class="inline-flex items-center justify-end gap-2">
+                    <?php if ($canResetAttendance): ?>
                     <?php if ($nextResetHasIn): ?>
                       <button
                         type="button"
@@ -1313,6 +1315,17 @@ if ($usesSessions) {
                         <span><?= htmlspecialchars($nextResetLabel) ?></span>
                     </button>
                     <?php endif; ?>
+                    <?php endif; ?>
+                    <?php if ($canRemoveParticipant): ?>
+                      <button
+                        type="button"
+                        class="btnRemove inline-flex items-center justify-center h-8 w-8 rounded-lg border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:border-rose-300 transition"
+                        data-id="<?= htmlspecialchars($registrationId) ?>"
+                        title="Remove participant"
+                        aria-label="Remove participant"
+                      >✕</button>
+                    <?php endif; ?>
+                    </div>
                   </td>
                   <?php endif; ?>
                 </tr>
@@ -1498,6 +1511,31 @@ if ($usesSessions) {
           }
         });
       });
+
+      <?php if ($canRemoveParticipant): ?>
+      document.querySelectorAll('.btnRemove').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove this participant from the event?')) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch('/api/participant_remove.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                registration_id: btn.dataset.id,
+                csrf_token: window.CSRF_TOKEN
+              })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to remove participant');
+            window.location.reload();
+          } catch (err) {
+            alert(err.message || 'Failed to remove participant');
+            btn.disabled = false;
+          }
+        });
+      });
+      <?php endif; ?>
 
       (() => {
         const btn = document.getElementById('btnExportAbsenceForm');

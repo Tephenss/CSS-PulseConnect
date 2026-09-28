@@ -1,6 +1,21 @@
 <?php
 declare(strict_types=1);
 
+if (!function_exists('array_is_list')) {
+    function array_is_list(array $array): bool
+    {
+        $expectedKey = 0;
+        foreach ($array as $key => $_value) {
+            if ($key !== $expectedKey) {
+                return false;
+            }
+            $expectedKey++;
+        }
+
+        return true;
+    }
+}
+
 function extract_section_name(mixed $rawSections): string
 {
     if (is_array($rawSections)) {
@@ -323,6 +338,22 @@ function student_matches_event_target(array $row, string $eventFor): bool
         return $studentYear === $matches[2];
     }
 
+    // Accept the human-readable target labels used in older event rows while
+    // preserving their year restriction (for example, "BSIT - 4th Year").
+    if (preg_match('/^(BSIT(?:[\s_-]*(?:SD|BA))?|BSCS|IT|CS)\s*[-:]\s*(.+)$/', $normalizedTarget, $matches)) {
+        $targetCourse = normalize_event_target_course($matches[1]);
+        if (!student_course_matches_target($studentCourse, $studentSpec, $targetCourse)) {
+            return false;
+        }
+
+        preg_match_all('/([1-4])(?:ST|ND|RD|TH)?(?:\s*YEAR)?/', $matches[2], $yearMatches);
+        $targetYears = array_values(array_unique($yearMatches[1] ?? []));
+        if ($targetYears === [] || $studentYear === '') {
+            return true;
+        }
+        return in_array($studentYear, $targetYears, true);
+    }
+
     $standaloneTarget = normalize_event_target_course($normalizedTarget);
     if (in_array($standaloneTarget, ['BSIT', 'BSIT-SD', 'BSIT-BA', 'BSCS'], true)) {
         return student_course_matches_target($studentCourse, $studentSpec, $standaloneTarget);
@@ -354,7 +385,9 @@ function student_matches_event_target(array $row, string $eventFor): bool
         if (empty($targetYears)) {
             $targetYears = ['ALL'];
         } elseif (!array_is_list($targetYears)) {
-            $targetYears = array_keys($targetYears);
+            // PHP casts numeric string array keys to integers; keep years as
+            // strings because student year values are compared strictly.
+            $targetYears = array_map('strval', array_keys($targetYears));
         }
 
         $courseMatches = student_course_matches_target($studentCourse, $studentSpec, $targetCourse);
