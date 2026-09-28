@@ -97,11 +97,20 @@ $uRes = supabase_request('GET', $uUrl, $headers);
 $uRows = $uRes['ok'] ? json_decode((string) $uRes['body'], true) : null;
 $u = is_array($uRows) && isset($uRows[0]) ? $uRows[0] : [];
 
-$nameParts = [];
-foreach (['first_name','middle_name','last_name'] as $k) {
-    $v = trim((string) ($u[$k] ?? ''));
-    if ($v !== '') $nameParts[] = $v;
+$middleName = trim((string) ($u['middle_name'] ?? ''));
+$middleParts = preg_split('/\s+/u', $middleName, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+$middleInitials = [];
+foreach ($middleParts as $middlePart) {
+    $initial = mb_substr(rtrim($middlePart, '.'), 0, 1, 'UTF-8');
+    if ($initial !== '') {
+        $middleInitials[] = mb_strtoupper($initial, 'UTF-8') . '.';
+    }
 }
+$nameParts = array_values(array_filter([
+    trim((string) ($u['first_name'] ?? '')),
+    implode(' ', $middleInitials),
+    trim((string) ($u['last_name'] ?? '')),
+], static fn (string $part): bool => $part !== ''));
 $name = implode(' ', $nameParts);
 $suffix = trim((string) ($u['suffix'] ?? ''));
 if ($suffix !== '') $name .= ', ' . $suffix;
@@ -235,6 +244,68 @@ $body = str_replace(
         return id === 'certificate_code' || name === 'certificate code';
       };
 
+      const participantNameToken = /{{\s*(?:participant_name|name)\s*}}/i;
+      const fitParticipantNameToOneLine = (obj) => {
+        const center = obj.getCenterPoint();
+        const scaleX = Math.max(0.01, Math.abs(Number(obj.scaleX) || 1));
+        const margin = Math.max(28, canvas.width * 0.055);
+        const availableWidth = Math.max(
+          32,
+          2 * Math.min(center.x - margin, canvas.width - margin - center.x)
+        );
+
+        obj.set({
+          text: String(obj.text || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim(),
+          textAlign: 'center',
+        });
+
+        if (obj.type === 'textbox') {
+          obj.set({
+            originX: 'center',
+            left: center.x,
+            width: availableWidth / scaleX,
+            textAlign: 'center',
+            splitByGrapheme: false,
+          });
+        }
+
+        const minFontSize = 8;
+        const initialFontSize = Math.max(minFontSize, Number(obj.fontSize) || 24);
+        for (let fontSize = initialFontSize; fontSize >= minFontSize; fontSize -= 1) {
+          obj.set('fontSize', fontSize);
+          obj.initDimensions?.();
+          const textWidth = typeof obj.calcTextWidth === 'function'
+            ? obj.calcTextWidth() * scaleX
+            : obj.getScaledWidth();
+          const oneLine = obj.type !== 'textbox' || (obj._textLines?.length ?? 0) <= 1;
+          if (oneLine && textWidth <= availableWidth + 1) break;
+        }
+        obj.initDimensions?.();
+        obj.setPositionByOrigin(center, 'center', 'center');
+        obj.setCoords();
+      };
+
+      const extendFullBleedImage = (image) => {
+        if (!image?.getBoundingRect || Number(image.angle || 0) !== 0) return;
+        const bounds = image.getBoundingRect(true, true);
+        if (!bounds?.width || !bounds?.height) return;
+        const bleed = 3;
+        const nearFullCanvas =
+          bounds.left >= -bleed && bounds.top >= -bleed &&
+          bounds.left <= bleed && bounds.top <= bleed &&
+          Math.abs((bounds.left + bounds.width) - canvas.width) <= bleed &&
+          Math.abs((bounds.top + bounds.height) - canvas.height) <= bleed;
+        if (!nearFullCanvas) return;
+
+        const center = new fabric.Point(canvas.width / 2, canvas.height / 2);
+        image.set({
+          scaleX: (Number(image.scaleX) || 1) * ((canvas.width + bleed * 2) / bounds.width),
+          scaleY: (Number(image.scaleY) || 1) * ((canvas.height + bleed * 2) / bounds.height),
+        });
+        image.setPositionByOrigin(center, 'center', 'center');
+        image.setCoords();
+      };
+
       canvas.loadFromJSON(rawState, () => {
         canvas.getObjects().forEach(obj => {
           if (obj.type === 'text' || obj.type === 'i-text' || obj.type === 'textbox') {
@@ -243,10 +314,15 @@ $body = str_replace(
             if (isCertificateCodeObject(obj)) {
               obj.text = CERT_DATA.certificate_code || '';
             } else {
+              const originalText = String(obj.text || '');
+              const containsParticipantName = participantNameToken.test(originalText);
               obj.text = replaceTokens(obj.text);
+              if (containsParticipantName) fitParticipantNameToOneLine(obj);
             }
           }
+          if (obj.type === 'image') extendFullBleedImage(obj);
         });
+        extendFullBleedImage(canvas.backgroundImage);
         canvas.renderAll();
       });
     </script>
@@ -259,7 +335,7 @@ $body = str_replace(
           <div class="mt-4 text-sm font-semibold text-zinc-500 uppercase tracking-[0.2em]"><?= htmlspecialchars($sessionTitle) ?></div>
         <?php endif; ?>
         <div class="mt-10 text-lg text-zinc-700">This is to certify that</div>
-        <div class="mt-3 text-4xl font-bold"><?= htmlspecialchars($name) ?></div>
+        <div id="plainCertificateParticipantName" class="mt-3 text-4xl font-bold whitespace-nowrap max-w-full"><?= htmlspecialchars($name) ?></div>
         <div class="mt-7 text-lg text-zinc-700"><?= nl2br(htmlspecialchars($body)) ?></div>
         <div class="mt-10 text-sm text-zinc-500">
           Code: <span class="font-mono"><?= htmlspecialchars((string) ($cert['certificate_code'] ?? '')) ?></span>
@@ -269,6 +345,27 @@ $body = str_replace(
         <?php endif; ?>
       </div>
     </div>
+  <?php endif; ?>
+  <?php if (empty($canvasState)): ?>
+    <script>
+      (() => {
+        const name = document.getElementById('plainCertificateParticipantName');
+        if (!name) return;
+        const baseSize = parseFloat(getComputedStyle(name).fontSize) || 36;
+        const fitOneLine = () => {
+          let size = baseSize;
+          name.style.whiteSpace = 'nowrap';
+          name.style.fontSize = `${size}px`;
+          while (name.scrollWidth > name.clientWidth + 1 && size > 8) {
+            size -= 1;
+            name.style.fontSize = `${size}px`;
+          }
+        };
+        fitOneLine();
+        window.addEventListener('resize', fitOneLine);
+        window.addEventListener('beforeprint', fitOneLine);
+      })();
+    </script>
   <?php endif; ?>
 </body>
 </html>

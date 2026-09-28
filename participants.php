@@ -572,7 +572,10 @@ if ($usesSessions) {
             if ($attendanceCountsAsPresent(is_array($row) ? $row : null)) {
                 $sessionCounts[$sessionId]++;
             }
-            if (is_array($row) && trim((string) ($row['check_out_at'] ?? '')) !== '') {
+            if (
+                $attendanceCountsAsPresent(is_array($row) ? $row : null)
+                && $attendanceHasCheckOut(is_array($row) ? $row : null)
+            ) {
                 $sessionOutCounts[$sessionId]++;
             }
         }
@@ -1112,11 +1115,11 @@ if ($usesSessions) {
                 <div class="seminar-summary-stats">
                   <div class="seminar-summary-stat is-in">
                     <span class="seminar-summary-stat-value"><?= htmlspecialchars((string) ($sessionCounts[$sessionId] ?? 0)) ?></span>
-                    <span class="seminar-summary-stat-label">Timed in</span>
+                    <span class="seminar-summary-stat-label">Successful Time-In</span>
                   </div>
                   <div class="seminar-summary-stat is-out">
                     <span class="seminar-summary-stat-value"><?= htmlspecialchars((string) ($sessionOutCounts[$sessionId] ?? 0)) ?></span>
-                    <span class="seminar-summary-stat-label">Timed out</span>
+                    <span class="seminar-summary-stat-label">Successful Time-Out</span>
                   </div>
                 </div>
               </div>
@@ -2065,6 +2068,36 @@ if ($eventWindowClosed) {
     }
 }
 
+$simpleEventTimeInCount = 0;
+$simpleEventTimeOutCount = 0;
+if (!$usesSessions) {
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+
+        $tickets = isset($participant['tickets']) && is_array($participant['tickets'])
+            ? $participant['tickets']
+            : [];
+        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+        $attendanceRows = $ticket['attendance'] ?? null;
+        $attendance = is_array($attendanceRows)
+            ? (isset($attendanceRows[0]) && is_array($attendanceRows[0])
+                ? $attendanceRows[0]
+                : $attendanceRows)
+            : null;
+
+        if (!$attendanceCountsAsPresent($attendance)) {
+            continue;
+        }
+
+        $simpleEventTimeInCount++;
+        if ($attendanceHasCheckOut($attendance)) {
+            $simpleEventTimeOutCount++;
+        }
+    }
+}
+
 $reasonByStudentEvent = [];
 if ($absenceReasonTableAvailable) {
     foreach ($absenceReasonRows as $reason) {
@@ -2230,6 +2263,30 @@ render_event_tabs([
 <?php endif; ?>
 
 <?php if ($participantTab === 'participants'): ?>
+<?php if (!$usesSessions): ?>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" aria-label="Event attendance summary">
+  <article class="flex items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50/80 px-5 py-4 shadow-sm">
+    <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700" aria-hidden="true">
+      <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12.75l4.25 4.25L19 7.5"/></svg>
+    </div>
+    <div>
+      <p class="text-xs font-bold uppercase tracking-wide text-emerald-800">Successful Time-In</p>
+      <p class="mt-0.5 text-2xl font-extrabold leading-none text-emerald-900"><?= (int) $simpleEventTimeInCount ?></p>
+      <p class="mt-1 text-xs font-medium text-emerald-700">Participants with a recorded check-in</p>
+    </div>
+  </article>
+  <article class="flex items-center gap-4 rounded-2xl border border-sky-200 bg-sky-50/80 px-5 py-4 shadow-sm">
+    <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700" aria-hidden="true">
+      <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 15l3-3m0 0l-3-3m3 3H3m12-9h3.75c1.243 0 2.25 1.007 2.25 2.25v13.5A2.25 2.25 0 0118.75 21H15"/></svg>
+    </div>
+    <div>
+      <p class="text-xs font-bold uppercase tracking-wide text-sky-800">Successful Time-Out</p>
+      <p class="mt-0.5 text-2xl font-extrabold leading-none text-sky-900"><?= (int) $simpleEventTimeOutCount ?></p>
+      <p class="mt-1 text-xs font-medium text-sky-700">Checked-in participants with a recorded check-out</p>
+    </div>
+  </article>
+</div>
+<?php endif; ?>
 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
   <div class="flex flex-wrap items-center gap-3">
     <h3 class="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">

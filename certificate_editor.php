@@ -1029,6 +1029,34 @@ const canvas = new fabric.Canvas('certCanvas', {
     width: sizes['A4'].width, height: sizes['A4'].height,
     backgroundColor: '#ffffff', selection: true, preserveObjectStacking: true
 });
+const BACKGROUND_BLEED = 2;
+
+function removeFullBleedBackgroundSeams() {
+    const image = canvas.backgroundImage;
+    if (!image || !(image.width > 0) || !(image.height > 0)) return;
+
+    const left = Number(image.left) || 0;
+    const top = Number(image.top) || 0;
+    const drawnWidth = image.width * (Number(image.scaleX) || 1);
+    const drawnHeight = image.height * (Number(image.scaleY) || 1);
+    if (
+        Math.abs(left) > 1 ||
+        Math.abs(top) > 1 ||
+        Math.abs(drawnWidth - canvas.width) > 3 ||
+        Math.abs(drawnHeight - canvas.height) > 3
+    ) {
+        return;
+    }
+
+    image.set({
+        originX: 'left',
+        originY: 'top',
+        left: 0,
+        top: 0,
+        scaleX: (canvas.width + BACKGROUND_BLEED) / image.width,
+        scaleY: (canvas.height + BACKGROUND_BLEED) / image.height,
+    });
+}
 
 // CRITICAL FIX: Prevent "stuck up" layout shift on text edit
 // Force Fabric to place its hidden textarea inside the workspace instead of body
@@ -1120,6 +1148,7 @@ function undoCanvasState() {
     clearSnapLines();
     const snapshot = historyStack[historyIndex];
     canvas.loadFromJSON(JSON.parse(snapshot), () => {
+        removeFullBleedBackgroundSeams();
         canvas.renderAll();
         syncToolbars();
         isProgrammaticChange = false;
@@ -1962,7 +1991,7 @@ function handleImageUpload(e, isBackground = false, placement = 'logo') {
         });
         fabric.Image.fromURL(dataUrl, img => {
             if (isBackground) {
-                img.set({ scaleX: canvas.width / img.width, scaleY: canvas.height / img.height, originX: 'left', originY: 'top', left: 0, top: 0 });
+                img.set({ scaleX: (canvas.width + BACKGROUND_BLEED) / img.width, scaleY: (canvas.height + BACKGROUND_BLEED) / img.height, originX: 'left', originY: 'top', left: 0, top: 0 });
                 canvas.setBackgroundImage(img, () => {
                     canvas.renderAll();
                     isCanvasDirty = true;
@@ -3029,6 +3058,7 @@ function doLoadCustom(cardEl) {
 
         isProgrammaticChange = true;
         canvas.loadFromJSON(parsed, () => {
+            removeFullBleedBackgroundSeams();
             canvas.renderAll(); autoFitCanvas();
             isCanvasDirty = false;
             isProgrammaticChange = false;
