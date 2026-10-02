@@ -405,6 +405,17 @@ function certificate_auto_answers_complete(array $questions, array $answers): bo
         return true;
     }
 
+    $validQuestionIds = [];
+    foreach ($questions as $q) {
+        if (!is_array($q)) {
+            continue;
+        }
+        $qid = trim((string) ($q['id'] ?? ''));
+        if ($qid !== '') {
+            $validQuestionIds[$qid] = true;
+        }
+    }
+
     $byQuestion = [];
     foreach ($answers as $row) {
         if (!is_array($row)) {
@@ -412,7 +423,7 @@ function certificate_auto_answers_complete(array $questions, array $answers): bo
         }
         $qid = trim((string) ($row['question_id'] ?? ''));
         $text = trim((string) ($row['answer_text'] ?? ''));
-        if ($qid !== '' && $text !== '') {
+        if ($qid !== '' && isset($validQuestionIds[$qid]) && $text !== '') {
             $byQuestion[$qid] = true;
         }
     }
@@ -435,20 +446,9 @@ function certificate_auto_answers_complete(array $questions, array $answers): bo
         }
     }
 
-    // No required flags → any non-empty answer for every question, or at least one answer if questions exist.
+    // Match evaluation_submit: when no questions are required, at least one answer completes that evaluation scope.
     if (!$hasRequired) {
-        if ($byQuestion === []) {
-            return false;
-        }
-        foreach ($questions as $q) {
-            if (!is_array($q)) {
-                continue;
-            }
-            $qid = trim((string) ($q['id'] ?? ''));
-            if ($qid !== '' && !isset($byQuestion[$qid])) {
-                return false;
-            }
-        }
+        return $byQuestion !== [];
     }
 
     return true;
@@ -588,7 +588,12 @@ function certificate_auto_prefetch_checked_out_sessions(array $sessions, array $
  * @param list<string> $studentIds
  * @return array<string,bool>
  */
-function certificate_auto_prefetch_event_eval_complete(string $eventId, array $studentIds, array $headers): array
+function certificate_auto_prefetch_event_eval_complete(
+    string $eventId,
+    array $studentIds,
+    array $headers,
+    ?bool &$hasQuestions = null
+): array
 {
     $result = [];
     foreach ($studentIds as $sid) {
@@ -606,6 +611,7 @@ function certificate_auto_prefetch_event_eval_complete(string $eventId, array $s
     $eventQRes = supabase_request('GET', $eventQUrl, $headers);
     $eventQuestions = $eventQRes['ok'] ? json_decode((string) ($eventQRes['body'] ?? ''), true) : [];
     $eventQuestions = is_array($eventQuestions) ? $eventQuestions : [];
+    $hasQuestions = $eventQuestions !== [];
 
     if ($eventQuestions === []) {
         foreach ($result as $sid => $_) {
@@ -1172,7 +1178,7 @@ function certificate_auto_issue_for_student(string $eventId, string $studentId, 
  *   error?:string
  * }
  */
-function certificate_auto_issue_status_for_event(string $eventId, ?array $headers = null, int $limit = 300): array
+function certificate_auto_issue_status_for_event(string $eventId, ?array $headers = null, int $limit = 500): array
 {
     $eventId = trim($eventId);
     if ($eventId === '') {
@@ -1326,7 +1332,13 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         }
 
         $checkedOutByStudent = certificate_auto_prefetch_checked_out_sessions($sessions, $ids, $headers);
-        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete($eventId, $ids, $headers);
+        $eventHasQuestions = false;
+        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete(
+            $eventId,
+            $ids,
+            $headers,
+            $eventHasQuestions
+        );
         $sessionEvalByKey = certificate_auto_prefetch_session_eval_complete($sessionIds, $ids, $headers);
 
         foreach ($ids as $studentId) {
@@ -1376,17 +1388,46 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                     'certificate_code' => (string) ($receivedSessions[0]['certificate_code'] ?? ''),
                 ];
             }
+            $submittedEventEvalWithoutCert = $eventHasQuestions && $eventEvalOk && !$hasAnyCert;
+            if ($missingSessions === [] && $submittedEventEvalWithoutCert) {
+                foreach ($sessionIds as $sessId) {
+                    if (isset($certsByStudentSession[$studentId][$sessId])) {
+                        continue;
+                    }
+                    $missingSessions[] = [
+                        'session_id' => $sessId,
+                        'session_title' => $sessionTitles[$sessId] ?? 'Seminar',
+                        'sort_order' => $sessionOrder[$sessId] ?? 999,
+                    ];
+                }
+                usort($missingSessions, $bySeminarOrder);
+            }
+
             if ($missingSessions !== []) {
+                $reason = 'Evaluation submitted — certificate not issued yet';
+                if ($submittedEventEvalWithoutCert) {
+                    if ($checkedOut === []) {
+                        $reason = 'Evaluation submitted, but no seminar time-out record was found.';
+                    } else {
+                        foreach ($checkedOut as $checkedOutSessionId) {
+                            if (
+                                !isset($certsByStudentSession[$studentId][$checkedOutSessionId])
+                                && ($sessionEvalByKey[$studentId . '|' . $checkedOutSessionId] ?? false) !== true
+                            ) {
+                                $reason = 'Evaluation submitted, but a seminar evaluation is incomplete.';
+                                break;
+                            }
+                        }
+                    }
+                }
                 $missing[] = [
                     'student_id' => $studentId,
                     'name' => $profile['name'],
                     'email' => $profile['email'],
                     'status' => 'missing',
-                    'reason' => 'Evaluation complete — certificate not issued yet',
+                    'reason' => $reason,
                     'sessions' => $missingSessions,
                 ];
-            } elseif ($checkedOut !== [] && $eventEvalOk && !$hasAnyCert) {
-                // Checked out + event eval done but session eval incomplete for all — skip missing list.
             }
         }
     } else {
@@ -1410,7 +1451,13 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         }
 
         $checkoutByStudent = certificate_auto_prefetch_simple_checkouts($eventId, $ids, $headers);
-        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete($eventId, $ids, $headers);
+        $eventHasQuestions = false;
+        $eventEvalByStudent = certificate_auto_prefetch_event_eval_complete(
+            $eventId,
+            $ids,
+            $headers,
+            $eventHasQuestions
+        );
 
         foreach ($ids as $studentId) {
             $profile = $namesById[$studentId] ?? ['name' => 'Student', 'email' => ''];
@@ -1427,10 +1474,10 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                 continue;
             }
 
-            if (!($checkoutByStudent[$studentId] ?? false)) {
+            if (($eventEvalByStudent[$studentId] ?? false) !== true) {
                 continue;
             }
-            if (($eventEvalByStudent[$studentId] ?? false) !== true) {
+            if (!$eventHasQuestions && !($checkoutByStudent[$studentId] ?? false)) {
                 continue;
             }
             $missing[] = [
@@ -1438,7 +1485,7 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
                 'name' => $profile['name'],
                 'email' => $profile['email'],
                 'status' => 'missing',
-                'reason' => 'Evaluation complete — certificate not issued yet',
+                'reason' => 'Evaluation submitted — certificate not issued yet',
             ];
         }
     }
@@ -1528,7 +1575,48 @@ function certificate_auto_issue_status_for_event(string $eventId, ?array $header
         }
     }
 
-    usort($received, static fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+    // Compare certificate outcomes only against students with a complete event evaluation.
+    // Older/manual certificates without a matching completed evaluation stay in the database,
+    // but should not inflate this evaluation auto-send report.
+    if ($eventHasQuestions) {
+        $completedEventEvalStudentIds = [];
+        foreach ($ids as $studentId) {
+            if (($eventEvalByStudent[$studentId] ?? false) === true) {
+                $completedEventEvalStudentIds[$studentId] = true;
+            }
+        }
+        $received = array_values(array_filter(
+            $received,
+            static fn ($row): bool => is_array($row)
+                && isset($completedEventEvalStudentIds[trim((string) ($row['student_id'] ?? ''))])
+        ));
+    }
+
+    // A recipient with any event/session certificate is already shown as received.
+    // Keep the missing list strictly one row per evaluated student without a certificate.
+    $receivedStudentIds = [];
+    foreach ($received as $row) {
+        $studentId = trim((string) ($row['student_id'] ?? ''));
+        if ($studentId !== '') {
+            $receivedStudentIds[$studentId] = true;
+        }
+    }
+    $missing = array_values(array_filter(
+        $missing,
+        static fn ($row): bool => is_array($row)
+            && !isset($receivedStudentIds[trim((string) ($row['student_id'] ?? ''))])
+    ));
+
+    usort($received, static function ($a, $b): int {
+        $codeOrder = strnatcasecmp(
+            trim((string) ($a['certificate_code'] ?? '')),
+            trim((string) ($b['certificate_code'] ?? ''))
+        );
+        if ($codeOrder !== 0) {
+            return $codeOrder;
+        }
+        return strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+    });
     usort($missing, static fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
 
     $poolReady = certificate_pool_has_any_code($eventId, null);

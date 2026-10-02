@@ -156,7 +156,8 @@ function firestore_encode_value($value): array
         return ['doubleValue' => $value];
     }
     if (is_array($value)) {
-        $isList = array_keys($value) === range(0, count($value) - 1);
+        // PHP's range(0, -1) is not empty, so detect [] explicitly as an empty list.
+        $isList = $value === [] || array_keys($value) === range(0, count($value) - 1);
         if ($isList) {
             return [
                 'arrayValue' => [

@@ -223,6 +223,25 @@ function student_class_schedules_replace(string $userId, string $studentNo, arra
 }
 
 /**
+ * Drop malformed legacy course codes and clear room labels misread as instructors.
+ *
+ * @return array<string,mixed>|null
+ */
+function student_class_schedule_clean_fetched_row(array $row): ?array
+{
+    $courseCode = strtoupper(trim((string) ($row['course_code'] ?? '')));
+    if (preg_match('/^LU\s*-\s*\d{1,3}[A-Z]?$/', $courseCode)) {
+        return null;
+    }
+
+    $instructor = trim((string) ($row['instructor'] ?? ''));
+    if (preg_match('/\bROOM(?:\s+\d+[A-Z]?)?$/i', $instructor)) {
+        $row['instructor'] = '';
+    }
+    return $row;
+}
+
+/**
  * @param list<string> $userIds
  * @return array<string, list<array<string,mixed>>>
  */
@@ -258,6 +277,10 @@ function student_class_schedules_fetch_by_user_ids(array $userIds, array $header
         }
         foreach ($rows as $row) {
             if (!is_array($row)) {
+                continue;
+            }
+            $row = student_class_schedule_clean_fetched_row($row);
+            if ($row === null) {
                 continue;
             }
             $uid = strtolower(trim((string) ($row['user_id'] ?? '')));

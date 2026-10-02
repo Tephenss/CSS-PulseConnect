@@ -354,6 +354,7 @@ render_header('Event Details', $user);
                         data-title="<?= htmlspecialchars((string) ($event['title'] ?? '')) ?>"
                         data-location="<?= htmlspecialchars((string) ($event['location'] ?? '')) ?>"
                         data-description="<?= htmlspecialchars((string) ($event['description'] ?? '')) ?>"
+                        data-cover_image_url="<?= htmlspecialchars((string) ($event['cover_image_url'] ?? '')) ?>"
                         data-start_at="<?= htmlspecialchars((string) ($event['start_at'] ?? '')) ?>"
                         data-end_at="<?= htmlspecialchars((string) ($event['end_at'] ?? '')) ?>"
                         data-event_mode="<?= htmlspecialchars(count($sessions) > 0 ? 'seminar_based' : 'simple') ?>"
@@ -682,6 +683,19 @@ render_header('Event Details', $user);
               </div>
               <input id="title" name="title" type="text" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" placeholder="e.g. CCS Freshmen Orientation 2024" />
             </div>
+          </div>
+          <div>
+            <label for="edit_cover_file" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Picture</label>
+            <p class="text-[11px] text-zinc-500 mb-2">JPG, PNG, or WEBP · 16:9 landscape · max 5 MB. Leave empty to keep the current picture.</p>
+            <div id="editCoverPreviewWrap" class="relative mb-2 hidden overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 aspect-[16/9]">
+              <img id="editCoverPreviewImg" src="" alt="Event picture preview" class="absolute inset-0 h-full w-full object-cover" />
+            </div>
+            <label for="edit_cover_file" class="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 transition hover:border-orange-400 hover:bg-orange-50/40">
+              <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+              <span id="editCoverFileLabel">Choose event picture</span>
+            </label>
+            <input id="edit_cover_file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" />
+            <p id="editCoverHint" class="mt-1.5 text-[11px]" aria-live="polite"></p>
           </div>
           <div>
             <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Event Location</label>
@@ -1104,7 +1118,7 @@ render_header('Event Details', $user);
   ];
 ?>
 <div id="certAutoStatusModal" class="fixed inset-0 z-[154] hidden items-center justify-center p-3 sm:p-4 bg-zinc-900/60 backdrop-blur-sm">
-  <div class="cert-status-panel w-full max-w-4xl max-h-[90vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden">
+  <div class="cert-status-panel w-full max-w-6xl max-h-[90vh] flex flex-col rounded-3xl bg-white border border-zinc-200 shadow-2xl overflow-hidden">
     <div class="px-5 py-4 border-b border-zinc-200 flex items-start justify-between gap-3 shrink-0">
       <div class="min-w-0">
         <h3 class="text-lg font-bold text-zinc-900 tracking-tight">Certificate auto-send status</h3>
@@ -1127,7 +1141,7 @@ render_header('Event Details', $user);
       <section class="cert-status-col">
         <header class="px-5 py-3 border-b border-zinc-100 bg-zinc-50 shrink-0">
           <h4 class="text-sm font-bold text-zinc-900">Received (auto-send success)</h4>
-          <p class="text-[11px] text-zinc-500 mt-0.5">Seminar events show every seminar code (…05.01/…06.01).</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">Sorted by certificate code. Seminar events include each session code.</p>
         </header>
         <div id="certStatusReceivedList" class="cert-status-scroll p-4 space-y-2">
           <div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>
@@ -1135,14 +1149,14 @@ render_header('Event Details', $user);
       </section>
       <section class="cert-status-col">
         <header class="px-5 py-3 border-b border-zinc-100 bg-zinc-50 shrink-0">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="text-sm font-bold text-zinc-900">Eval done — no certificate yet</h4>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h4 class="text-sm font-bold text-zinc-900 min-w-0">Certificate not received</h4>
             <div class="flex items-center gap-2 shrink-0">
-              <button type="button" id="btnSelectAllMissingCerts" class="text-[11px] font-bold text-sky-700 hover:underline">Select all</button>
+              <button type="button" id="btnSelectAllMissingCerts" class="text-[11px] font-bold text-sky-700 hover:underline">Select eligible</button>
               <button type="button" id="btnSendSelectedMissingCerts" class="rounded-lg bg-sky-600 text-white text-[11px] font-bold px-3 py-1.5 hover:bg-sky-700 disabled:opacity-50" disabled>Send selected</button>
             </div>
           </div>
-          <p class="text-[11px] text-zinc-500 mt-0.5">Manual send uses the same linked template and auto-count code (…-01 → …-02).</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">Only completed evaluation and time-out records are eligible for certificate sending.</p>
         </header>
         <div id="certStatusMissingList" class="cert-status-scroll p-4 space-y-2">
           <div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>
@@ -1646,18 +1660,23 @@ window.IMPORT_LINKED_CERT = <?= json_encode($linkedImportJson, JSON_UNESCAPED_SL
    and no z-[154] — without this the sticky page header paints over the modal. */
 #certAutoStatusModal { z-index: 154; }
 
-.cert-status-panel { height: min(88vh, 700px); }
+.cert-status-panel { height: min(88vh, 760px); }
 
 .cert-status-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 .cert-status-col {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   border-top: 1px solid #e4e4e7;
 }
 
@@ -1670,7 +1689,10 @@ window.IMPORT_LINKED_CERT = <?= json_encode($linkedImportJson, JSON_UNESCAPED_SL
 }
 
 @media (min-width: 768px) {
-  .cert-status-grid { grid-template-columns: 1fr 1fr; }
+  .cert-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+  }
   .cert-status-col { border-top: 0; border-left: 1px solid #e4e4e7; }
   .cert-status-col:first-child { border-left: 0; }
 }
@@ -1749,6 +1771,90 @@ const modalContent = document.getElementById('modalContent');
 const btnEdit = document.getElementById('btnEditEventTop');
 const btnClose = document.getElementById('btnCloseModal');
 const backdrop = document.getElementById('modalBackdrop');
+const editCoverInput = document.getElementById('edit_cover_file');
+const editCoverPreviewWrap = document.getElementById('editCoverPreviewWrap');
+const editCoverPreviewImg = document.getElementById('editCoverPreviewImg');
+const editCoverFileLabel = document.getElementById('editCoverFileLabel');
+const editCoverHint = document.getElementById('editCoverHint');
+let editCoverObjectUrl = '';
+let currentEditCoverUrl = '';
+
+function revokeEditCoverObjectUrl() {
+  if (editCoverObjectUrl) {
+    URL.revokeObjectURL(editCoverObjectUrl);
+    editCoverObjectUrl = '';
+  }
+}
+
+function setEditCoverPreview(url) {
+  const source = String(url || '').trim();
+  editCoverPreviewWrap?.classList.toggle('hidden', source === '');
+  if (editCoverPreviewImg) {
+    if (source) editCoverPreviewImg.src = source;
+    else editCoverPreviewImg.removeAttribute('src');
+  }
+}
+
+function resetEditCoverPicker() {
+  revokeEditCoverObjectUrl();
+  if (editCoverInput) editCoverInput.value = '';
+  setEditCoverPreview(currentEditCoverUrl);
+  if (editCoverFileLabel) editCoverFileLabel.textContent = currentEditCoverUrl ? 'Replace event picture' : 'Choose event picture';
+  if (editCoverHint) {
+    editCoverHint.textContent = '';
+    editCoverHint.className = 'mt-1.5 text-[11px]';
+  }
+}
+
+function rejectEditCover(message) {
+  revokeEditCoverObjectUrl();
+  if (editCoverInput) editCoverInput.value = '';
+  setEditCoverPreview(currentEditCoverUrl);
+  if (editCoverFileLabel) editCoverFileLabel.textContent = currentEditCoverUrl ? 'Replace event picture' : 'Choose event picture';
+  if (editCoverHint) {
+    editCoverHint.textContent = message;
+    editCoverHint.className = 'mt-1.5 text-[11px] font-medium text-rose-600';
+  }
+}
+
+editCoverInput?.addEventListener('change', async () => {
+  const file = editCoverInput.files?.[0];
+  if (!file) return;
+
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedTypes.includes(file.type)) {
+    rejectEditCover('Pumili ng JPG, PNG, o WEBP na larawan.');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    rejectEditCover('Hanggang 5 MB lang ang puwedeng larawan.');
+    return;
+  }
+
+  revokeEditCoverObjectUrl();
+  const selectedObjectUrl = URL.createObjectURL(file);
+  editCoverObjectUrl = selectedObjectUrl;
+  const image = new Image();
+  image.onload = () => {
+    if (editCoverObjectUrl !== selectedObjectUrl) return;
+    const ratio = image.naturalWidth / image.naturalHeight;
+    if (!image.naturalWidth || !image.naturalHeight || Math.abs(ratio - (16 / 9)) > 0.08) {
+      rejectEditCover(`Cover image must be 16:9 landscape. Selected image is ${image.naturalWidth}×${image.naturalHeight}.`);
+      return;
+    }
+    setEditCoverPreview(selectedObjectUrl);
+    if (editCoverFileLabel) editCoverFileLabel.textContent = file.name;
+    if (editCoverHint) {
+      editCoverHint.textContent = 'Picture ready. It will be uploaded when you save changes.';
+      editCoverHint.className = 'mt-1.5 text-[11px] font-medium text-emerald-700';
+    }
+  };
+  image.onerror = () => {
+    if (editCoverObjectUrl !== selectedObjectUrl) return;
+    rejectEditCover('Hindi mabasa ang napiling larawan. Subukan ang ibang file.');
+  };
+  image.src = selectedObjectUrl;
+});
 
 const sttModal = document.getElementById('sttPreviewModal');
 const sttContent = document.getElementById('sttModalContent');
@@ -2174,6 +2280,14 @@ btnToggleSeminar2?.addEventListener('click', () => {
 if (btnEdit) {
   btnEdit.addEventListener('click', () => {
     resetMainEditorTools();
+    currentEditCoverUrl = btnEdit.dataset.cover_image_url || '';
+    resetEditCoverPicker();
+    const formMsg = document.getElementById('formMsg');
+    if (formMsg) {
+      formMsg.textContent = '';
+      formMsg.classList.remove('text-red-600');
+      formMsg.classList.add('text-emerald-600');
+    }
     document.getElementById('event_id').value = btnEdit.dataset.id;
     document.getElementById('title').value = btnEdit.dataset.title;
     document.getElementById('location').value = btnEdit.dataset.location;
@@ -2247,6 +2361,8 @@ if (btnEdit) {
 
   const closeIt = () => {
     resetMainEditorTools();
+    resetEditCoverPicker();
+    currentEditCoverUrl = '';
     eventModal.classList.add('opacity-0', 'pointer-events-none');
     modalContent.classList.remove('scale-100');
     modalContent.classList.add('scale-95');
@@ -2350,7 +2466,11 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       }
     }
     
-    document.getElementById('btnSubmitForm').textContent = 'Saving...';
+    const submitButton = document.getElementById('btnSubmitForm');
+    const coverFile = editCoverInput?.files?.[0] || null;
+    let eventDetailsSaved = false;
+    submitButton.disabled = true;
+    submitButton.textContent = coverFile ? 'Saving & uploading...' : 'Saving...';
     try {
       const res = await fetch('/api/events_update.php', {
         method: 'POST',
@@ -2359,10 +2479,31 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error);
+
+      eventDetailsSaved = true;
+      if (coverFile) {
+        const coverForm = new FormData();
+        coverForm.append('event_id', document.getElementById('event_id').value);
+        coverForm.append('csrf_token', window.CSRF_TOKEN || '');
+        coverForm.append('cover_file', coverFile);
+        const coverRes = await fetch('/api/event_cover_upload.php', {
+          method: 'POST',
+          body: coverForm,
+        });
+        const coverData = await coverRes.json();
+        if (!coverData.ok) {
+          throw new Error(coverData.error || 'Hindi na-upload ang event picture.');
+        }
+      }
       window.location.reload();
     } catch(err) {
-      msg.textContent = err.message || 'Failed';
-      document.getElementById('btnSubmitForm').textContent = 'Save Changes';
+      msg.textContent = eventDetailsSaved
+        ? `Event details saved, pero hindi na-upload ang picture: ${err.message || 'Upload failed. Maaari mong subukang i-save ulit.'}`
+        : (err.message || 'Failed');
+      msg.classList.remove('text-emerald-600');
+      msg.classList.add('text-red-600');
+      submitButton.disabled = false;
+      submitButton.textContent = 'Save Changes';
     }
 });
 
@@ -2445,6 +2586,17 @@ function escapeCertHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function certMissingBlockMessage(row) {
+  const reason = String(row?.reason || '').toLowerCase();
+  if (reason.includes('seminar evaluation is incomplete') || reason.includes('seminar evaluation incomplete')) {
+    return 'Complete seminar evaluation first';
+  }
+  if (reason.includes('no seminar time-out record was found') || reason.includes('must time out')) {
+    return 'Complete seminar time-out first';
+  }
+  return '';
+}
+
 function updateMissingSendButtonState() {
   if (!btnSendSelectedMissingCerts) return;
   const n = document.querySelectorAll('#certStatusMissingList input.cert-missing-check:checked').length;
@@ -2467,7 +2619,7 @@ function renderCertAutoStatus(data) {
     if (received.length === 0) {
       receivedEl.innerHTML = '<div class="text-sm text-zinc-400 font-semibold py-4 text-center">No certificates received yet.</div>';
     } else {
-      receivedEl.innerHTML = received.map((row) => {
+      receivedEl.innerHTML = received.map((row, index) => {
         const sessions = Array.isArray(row.sessions) ? row.sessions : [];
         const codes = sessions
           .map((s) => String(s?.certificate_code || '').trim())
@@ -2476,7 +2628,6 @@ function renderCertAutoStatus(data) {
           const single = String(row.certificate_code || '').trim();
           if (single) codes.push(single);
         }
-        const code = escapeCertHtml(codes.join('/'));
         const perSeminar = sessions
           .map((s) => `${String(s?.session_title || 'Seminar')}: ${String(s?.certificate_code || '—')}`)
           .join('\n');
@@ -2485,16 +2636,25 @@ function renderCertAutoStatus(data) {
         const seminarLine = sessions.length > 1
           ? `<div class="text-[10px] font-bold text-emerald-700 mt-0.5">${sessions.length} seminar codes</div>`
           : '';
+        const codeBadges = codes.length > 0
+          ? codes.map((value) => `<span class="inline-flex rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11px] font-bold font-mono text-emerald-800">${escapeCertHtml(value)}</span>`).join('')
+          : '<span class="text-xs text-zinc-400">Code unavailable</span>';
+        const sequence = String(index + 1);
         return `<div class="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5"${perSeminar ? ` title="${escapeCertHtml(perSeminar)}"` : ''}>
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
-              <div class="text-xs text-zinc-500 truncate">${email}</div>
+          <div class="flex items-start gap-3">
+            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-white text-xs font-black text-emerald-800">${sequence}</span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
+                  <div class="text-xs text-zinc-500 truncate">${email}</div>
+                </div>
+                <div class="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">Received</div>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-1.5">${codeBadges}</div>
+              ${seminarLine}
             </div>
-            <div class="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">Received</div>
           </div>
-          <div class="text-xs font-semibold text-zinc-700 font-mono mt-1.5 break-all">${code || '—'}</div>
-          ${seminarLine}
         </div>`;
       }).join('');
     }
@@ -2509,19 +2669,27 @@ function renderCertAutoStatus(data) {
         const name = escapeCertHtml(row.name || 'Student');
         const email = escapeCertHtml(row.email || '');
         const reason = escapeCertHtml(row.reason || 'Missing certificate');
+        const blockedMessage = certMissingBlockMessage(row);
+        const blocked = blockedMessage !== '';
         const sessions = Array.isArray(row.sessions) ? row.sessions : [];
         const seminarLine = sessions.length > 0
           ? `<div class="text-[10px] font-bold text-amber-700 mt-0.5 truncate">${escapeCertHtml(sessions.map((s) => String(s?.session_title || 'Seminar')).join(' • '))}</div>`
           : '';
-        return `<label class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2.5 flex items-start gap-2 cursor-pointer hover:border-amber-200">
-          <input type="checkbox" class="cert-missing-check mt-1 rounded border-zinc-300 text-sky-600 focus:ring-sky-500" value="${id}">
+        const checkbox = blocked
+          ? `<input type="checkbox" class="cert-missing-check mt-1 rounded border-zinc-300 text-sky-600 focus:ring-sky-500" value="${id}" disabled title="${escapeCertHtml(blockedMessage)}">`
+          : `<input type="checkbox" class="cert-missing-check mt-1 rounded border-zinc-300 text-sky-600 focus:ring-sky-500" value="${id}">`;
+        const action = blocked
+          ? `<span class="shrink-0 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-amber-800">${escapeCertHtml(blockedMessage)}</span>`
+          : `<button type="button" class="cert-missing-send-one shrink-0 rounded-lg bg-sky-600 text-white text-[11px] font-bold px-2.5 py-1.5 hover:bg-sky-700" data-student-id="${id}">Send</button>`;
+        return `<label class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2.5 flex items-start gap-2 ${blocked ? 'cursor-not-allowed' : 'cursor-pointer hover:border-amber-200'}">
+          ${checkbox}
           <div class="min-w-0 flex-1">
             <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
             <div class="text-xs text-zinc-500 truncate">${email}</div>
             <div class="text-[11px] text-amber-800 mt-0.5">${reason}</div>
             ${seminarLine}
           </div>
-          <button type="button" class="cert-missing-send-one shrink-0 rounded-lg bg-sky-600 text-white text-[11px] font-bold px-2.5 py-1.5 hover:bg-sky-700" data-student-id="${id}">Send</button>
+          ${action}
         </label>`;
       }).join('');
       missingEl.querySelectorAll('.cert-missing-check').forEach((el) => {
@@ -2540,88 +2708,149 @@ function renderCertAutoStatus(data) {
   updateMissingSendButtonState();
   if (footer) {
     const poolReady = data?.pool_ready !== false;
+    const blockedCount = missing.filter((row) => certMissingBlockMessage(row) !== '').length;
+    const eligibleCount = missing.length - blockedCount;
     if (missing.length === 0) {
       footer.textContent = 'Auto-send is up to date for evaluation completers.';
     } else if (!poolReady) {
       footer.textContent = 'Missing seed codes — open Import Certificate, add a PPTX/seed (e.g. LU-AA-FO-180-01), Save & link, then Send.';
+    } else if (eligibleCount === 0 && blockedCount > 0) {
+      footer.textContent = `${blockedCount} student(s) cannot receive a certificate yet. Complete the seminar evaluation or time-out shown on each row first.`;
+    } else if (blockedCount > 0) {
+      footer.textContent = `${eligibleCount} eligible to send. ${blockedCount} student(s) must complete the seminar evaluation or time-out first.`;
     } else {
-      footer.textContent = 'Select students and click Send — same linked template + next auto-count code.';
+      footer.textContent = 'Select eligible students and click Send — same linked template + next auto-count code.';
     }
+  }
+}
+
+async function postCertManualStatus(payload) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch('/api/certificates_manual_status.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ ...payload, csrf_token: window.CSRF_TOKEN || '' }),
+      signal: controller.signal,
+    });
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error(`Server returned an invalid response (HTTP ${res.status}).`);
+    }
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.error || `Request failed (HTTP ${res.status}).`);
+    }
+    return data;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Request timed out after 60 seconds. Refresh status to verify before retrying.');
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
 async function loadCertAutoStatus() {
   const receivedEl = document.getElementById('certStatusReceivedList');
   const missingEl = document.getElementById('certStatusMissingList');
+  const footer = document.getElementById('certAutoStatusFooter');
   if (receivedEl) receivedEl.innerHTML = '<div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>';
   if (missingEl) missingEl.innerHTML = '<div class="text-sm text-zinc-400 font-semibold py-4 text-center">Loading…</div>';
-  const res = await fetch('/api/certificates_manual_status.php', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify({
+  try {
+    const data = await postCertManualStatus({
       action: 'status',
       event_id: <?= json_encode($id) ?>,
-      csrf_token: window.CSRF_TOKEN || '',
-    }),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || 'Failed to load certificate status');
-  renderCertAutoStatus(data);
-  return data;
+    });
+    renderCertAutoStatus(data);
+    return data;
+  } catch (err) {
+    const message = escapeCertHtml(err?.message || 'Failed to load certificate status.');
+    if (receivedEl) receivedEl.innerHTML = `<div class="text-sm text-red-600 font-semibold py-4 text-center">${message}</div>`;
+    if (missingEl) missingEl.innerHTML = `<div class="text-sm text-red-600 font-semibold py-4 text-center">${message}</div>`;
+    if (footer) footer.textContent = err?.message || 'Failed to load certificate status.';
+    throw err;
+  }
 }
 
 async function sendMissingCertificates(studentIds, triggerBtn) {
-  const ids = (studentIds || []).map((x) => String(x || '').trim()).filter(Boolean);
+  const ids = [...new Set((studentIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
   if (ids.length === 0) return;
   const buttons = [btnSendSelectedMissingCerts, triggerBtn].filter(Boolean);
   buttons.forEach((b) => { b.disabled = true; });
   if (triggerBtn) triggerBtn.textContent = 'Sending…';
   if (btnSendSelectedMissingCerts) btnSendSelectedMissingCerts.textContent = 'Sending…';
+  let processed = 0;
+  let issuedTotal = 0;
+  let allBatchesSent = false;
+  const skipped = new Set();
+  const batchSize = 2;
+  const batchCount = Math.ceil(ids.length / batchSize);
+  const footer = document.getElementById('certAutoStatusFooter');
   try {
-    const res = await fetch('/api/certificates_manual_status.php', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({
+    for (let offset = 0; offset < ids.length; offset += batchSize) {
+      const batch = ids.slice(offset, offset + batchSize);
+      const data = await postCertManualStatus({
         action: 'send',
         event_id: <?= json_encode($id) ?>,
-        student_ids: ids,
-        csrf_token: window.CSRF_TOKEN || '',
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Send failed');
-    renderCertAutoStatus(data);
-    const issued = Number(data.issued_total || 0);
-    const footer = document.getElementById('certAutoStatusFooter');
+        student_ids: batch,
+      });
+      processed += Number(data.attempted ?? batch.length);
+      issuedTotal += Number(data.issued_total || 0);
+      (Array.isArray(data.students) ? data.students : []).forEach((student) => {
+        const skippedReason = String(student?.skipped || '').trim();
+        if (skippedReason) skipped.add(skippedReason);
+      });
+      if (footer) {
+        footer.textContent = `Sending certificates… ${Math.min(offset + batch.length, ids.length)} of ${ids.length} selected (${Math.floor(offset / batchSize) + 1}/${batchCount} batches).`;
+      }
+    }
+
+    allBatchesSent = true;
+    await loadCertAutoStatus();
     if (footer) {
-      if (issued > 0) {
-        footer.textContent = `Sent ${issued} certificate(s) with next auto-count code(s).`;
+      if (issuedTotal > 0) {
+        footer.textContent = `Finished: issued ${issuedTotal} certificate(s) for ${processed} selected student(s).`;
       } else {
-        const students = Array.isArray(data.students) ? data.students : [];
-        const skips = students.map((s) => String(s?.skipped || '')).filter(Boolean);
-        if (skips.includes('no_pool_codes')) {
+        if (skipped.has('no_pool_codes')) {
           footer.textContent = 'No certificate seed in pool — Import PPTX or enter a seed (e.g. LU-AA-FO-180-01), Save & link, then Send again.';
-        } else if (skips.includes('checkout_required')) {
+        } else if (skipped.has('checkout_required')) {
           footer.textContent = 'Student must time out (check out) before a certificate can issue.';
-        } else if (skips.includes('eval_incomplete')) {
+        } else if (skipped.has('eval_incomplete')) {
           footer.textContent = 'Evaluation still incomplete for those students.';
-        } else if (skips.includes('insert_failed')) {
+        } else if (skipped.has('insert_failed')) {
           footer.textContent = 'Certificate insert failed — try again or check server logs.';
-        } else if (skips.includes('already_issued')) {
+        } else if (skipped.has('already_issued')) {
           footer.textContent = 'Already issued for those students.';
         } else {
-          footer.textContent = 'No new certificates issued — check timeout/eval gates or seed pool.';
+          footer.textContent = `Processed ${processed} selected student(s); no new certificates were issued.`;
         }
       }
     }
   } catch (err) {
-    window.alert(err.message || 'Send failed');
-    updateMissingSendButtonState();
+    const failureMessage = err.message || 'Send failed';
+    try {
+      await loadCertAutoStatus();
+    } catch (_) {
+      // The original send failure is more useful than a second status error.
+    }
+    const progressMessage = allBatchesSent
+      ? `All ${processed} selected students were processed, but the final status refresh failed.`
+      : `Stopped after ${processed} of ${ids.length} selected. The current batch may have partly completed.`;
+    if (footer) {
+      footer.textContent = `${progressMessage} Refresh to verify certificate status.`;
+    }
+    window.alert(`${failureMessage}\n${progressMessage} Already-issued certificates are safe to retry.`);
   } finally {
     if (triggerBtn) {
       triggerBtn.disabled = false;
       triggerBtn.textContent = 'Send';
     }
+    updateMissingSendButtonState();
   }
 }
 
@@ -2652,7 +2881,7 @@ btnRefreshCertAutoStatus?.addEventListener('click', () => {
 });
 btnSelectAllMissingCerts?.addEventListener('click', () => {
   document.querySelectorAll('#certStatusMissingList input.cert-missing-check').forEach((el) => {
-    el.checked = true;
+    if (!el.disabled) el.checked = true;
   });
   updateMissingSendButtonState();
 });

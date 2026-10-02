@@ -39,7 +39,7 @@ if (!certificate_pool_teacher_may_manage($eventId, $userId)) {
 }
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-if (!api_rate_limit_allow('cert_manual:' . $userId . ':' . $clientIp, 60, 3600)) {
+if (!api_rate_limit_allow('cert_manual:' . $userId . ':' . $clientIp, 300, 3600)) {
     json_response(['ok' => false, 'error' => 'Too many requests. Try again later.'], 429);
 }
 
@@ -48,18 +48,15 @@ if ($action === 'send') {
     if (!is_array($studentIds) || $studentIds === []) {
         json_response(['ok' => false, 'error' => 'student_ids required'], 400);
     }
+    if (count($studentIds) > 2) {
+        json_response(['ok' => false, 'error' => 'Send up to two students per request. The page will split larger selections automatically.'], 400);
+    }
     $result = certificate_auto_issue_manual_for_students($eventId, $studentIds);
-    $status = certificate_auto_issue_status_for_event($eventId);
     json_response([
         'ok' => (bool) ($result['ok'] ?? false),
         'attempted' => (int) ($result['attempted'] ?? 0),
         'issued_total' => (int) ($result['issued_total'] ?? 0),
         'students' => $result['students'] ?? [],
-        'received' => $status['received'] ?? [],
-        'missing' => $status['missing'] ?? [],
-        'received_count' => (int) ($status['received_count'] ?? 0),
-        'missing_count' => (int) ($status['missing_count'] ?? 0),
-        'pool_ready' => (bool) ($status['pool_ready'] ?? true),
         'error' => (string) ($result['error'] ?? ''),
     ], ($result['ok'] ?? false) ? 200 : 500);
 }

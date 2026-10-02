@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 require_once __DIR__ . '/includes/session.php';
 session_bootstrap();
 
@@ -1135,14 +1139,14 @@ if ($usesSessions) {
             </div>
             <input
               type="text"
-              id="multiSessionSearchInput"
+              id="participantSearch"
               placeholder="Search participant name, student ID, section..."
               class="w-full rounded-xl border border-zinc-200 bg-zinc-50/60 py-2 pl-10 pr-4 text-xs text-zinc-900 placeholder-zinc-400 transition focus:border-sky-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 font-medium"
             />
           </div>
           <div class="flex items-center justify-between sm:justify-end gap-2 px-1">
-            <span class="text-xs font-semibold text-zinc-500">Total Participants:</span>
-            <span class="inline-flex items-center justify-center rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-bold text-sky-700 border border-sky-200/60">
+            <span id="multiSessionCountLabel" class="text-xs font-semibold text-zinc-500">Total Participants:</span>
+            <span id="totalCount" aria-live="polite" class="inline-flex items-center justify-center rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-bold text-sky-700 border border-sky-200/60">
               <?= count($participants) ?>
             </span>
           </div>
@@ -1202,7 +1206,8 @@ if ($usesSessions) {
                   if ($suffix !== '') {
                       $name .= ', ' . $suffix;
                   }
-                  $searchStr = strtolower($name . ' ' . $email . ' ' . $studentId . ' ' . $section);
+                  $visibleStudentNo = trim((string) ($profile['student_id'] ?? ''));
+                  $searchStr = $name . ' ' . $email . ' ' . $visibleStudentNo . ' ' . $studentId . ' ' . $section . ' ' . $yearLabel;
 
                   $nextResetSessionId = '';
                   $nextResetHasOut = false;
@@ -1228,7 +1233,7 @@ if ($usesSessions) {
                       ? 'Reset Time-Out for this seminar? Time-in will be kept. Reset again to clear time-in.'
                       : 'Reset Time-In for this seminar? Only this seminar is cleared.';
                 ?>
-                <tr class="multi-participant-row hover:bg-zinc-50/80 transition-colors" data-search="<?= htmlspecialchars($searchStr) ?>">
+                <tr class="participant-card participant-row hover:bg-zinc-50/80 transition-colors" data-search="<?= htmlspecialchars($searchStr) ?>">
                   <td class="px-4 py-3.5 whitespace-nowrap">
                     <div class="flex items-center gap-3">
                       <div class="participant-avatar flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-sky-500 to-sky-700 text-white flex items-center justify-center font-extrabold text-xs shadow-2xs border border-white">
@@ -1333,6 +1338,11 @@ if ($usesSessions) {
                   <?php endif; ?>
                 </tr>
               <?php endforeach; ?>
+              <tr id="multiParticipantSearchEmpty" class="pointer-events-none hidden">
+                <td colspan="<?= 3 + count($sessions) + (($canResetAttendance || $canRemoveParticipant) ? 1 : 0) ?>" class="px-4 py-10 text-center text-sm font-semibold text-zinc-500">
+                  No participants match your search.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1585,6 +1595,44 @@ if ($usesSessions) {
           }
         });
       })();
+    </script>
+    <script>
+    (() => {
+      const normalizeSearchTerm = (value) => String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLocaleLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ');
+      const searchableMatches = (searchable, term) => {
+        const normalized = normalizeSearchTerm(searchable);
+        const compact = normalized.replace(/[^a-z0-9]/g, '');
+        return normalizeSearchTerm(term).split(' ').filter(Boolean).every((token) => {
+          const compactToken = token.replace(/[^a-z0-9]/g, '');
+          return normalized.includes(token) || (compactToken !== '' && compact.includes(compactToken));
+        });
+      };
+
+      const searchInput = document.getElementById('participantSearch');
+      const totalCountEl = document.getElementById('totalCount');
+      const cards = Array.from(document.querySelectorAll('.participant-card'));
+      const emptyRow = document.getElementById('multiParticipantSearchEmpty');
+      const countLabel = document.getElementById('multiSessionCountLabel');
+      if (!searchInput) return;
+
+      searchInput.addEventListener('input', (event) => {
+        const term = event.target.value;
+        let visibleCount = 0;
+        cards.forEach((card) => {
+          const matches = searchableMatches(card.dataset.search || '', term);
+          card.classList.toggle('hidden', !matches);
+          if (matches) visibleCount++;
+        });
+        if (totalCountEl) totalCountEl.textContent = String(visibleCount);
+        if (emptyRow) emptyRow.classList.toggle('hidden', visibleCount !== 0 || cards.length === 0);
+        if (countLabel) countLabel.textContent = term.trim() ? 'Matching Participants:' : 'Total Participants:';
+      });
+    })();
     </script>
     <?php
     render_footer();
@@ -2814,55 +2862,50 @@ render_event_tabs([
   });
   <?php endif; ?>
 
-  // Client-side live search
+</script>
+<?php endif; ?>
+
+<script>
+(() => {
+  const normalizeSearchTerm = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+  const searchableMatches = (searchable, term) => {
+    const normalized = normalizeSearchTerm(searchable);
+    const compact = normalized.replace(/[^a-z0-9]/g, '');
+    return normalizeSearchTerm(term).split(' ').filter(Boolean).every((token) => {
+      const compactToken = token.replace(/[^a-z0-9]/g, '');
+      return normalized.includes(token) || (compactToken !== '' && compact.includes(compactToken));
+    });
+  };
+
   const searchInput = document.getElementById('participantSearch');
   const totalCountEl = document.getElementById('totalCount');
-  const cards = document.querySelectorAll('.participant-card');
+  const cards = Array.from(document.querySelectorAll('.participant-card'));
   const searchEmpty = document.getElementById('participantSearchEmpty');
-
   if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-      const term = e.target.value.toLowerCase().trim();
+    searchInput.addEventListener('input', (event) => {
+      const term = event.target.value;
       let visibleCount = 0;
-
-      cards.forEach(card => {
-        const searchable = card.dataset.search || '';
-        if (searchable.includes(term)) {
-          card.classList.remove('hidden');
-          visibleCount++;
-        } else {
-          card.classList.add('hidden');
-        }
+      cards.forEach((card) => {
+        const matches = searchableMatches(card.dataset.search || '', term);
+        card.classList.toggle('hidden', !matches);
+        if (matches) visibleCount++;
       });
-
-      if (totalCountEl) totalCountEl.textContent = visibleCount;
-      
-      if (searchEmpty) {
-        if (visibleCount === 0 && cards.length > 0) {
-          searchEmpty.classList.remove('hidden');
-        } else {
-          searchEmpty.classList.add('hidden');
-        }
+      if (totalCountEl) totalCountEl.textContent = String(visibleCount);
+      const emptyRow = searchEmpty || document.getElementById('multiParticipantSearchEmpty');
+      if (emptyRow) emptyRow.classList.toggle('hidden', visibleCount !== 0 || cards.length === 0);
+      const multiCountLabel = document.getElementById('multiSessionCountLabel');
+      if (multiCountLabel) {
+        multiCountLabel.textContent = term.trim() ? 'Matching Participants:' : 'Total Participants:';
       }
     });
   }
-
-  const multiSearchInput = document.getElementById('multiSessionSearchInput');
-  if (multiSearchInput) {
-    multiSearchInput.addEventListener('input', (e) => {
-      const term = e.target.value.toLowerCase().trim();
-      document.querySelectorAll('.multi-participant-row').forEach(row => {
-        const searchable = row.dataset.search || '';
-        if (searchable.includes(term)) {
-          row.style.display = '';
-        } else {
-          row.style.display = 'none';
-        }
-      });
-    });
-  }
+})();
 </script>
-<?php endif; ?>
 
 <script>
 (() => {

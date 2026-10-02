@@ -150,19 +150,44 @@ function registration_form_pdf_extract_strings(string $binary): array
             continue;
         }
 
-        $dictLookback = substr($binary, max(0, $pos - 400), min(400, $pos));
-        if (preg_match('/\/(Image|DCTDecode|JPXDecode|JBIG2Decode|CCITTFaxDecode)\b/', $dictLookback)) {
-            $end = strpos($binary, 'endstream', $after);
+        // Inspect only this stream's object dictionary. A broad lookback can
+        // mistake a nearby page /Resources /Image entry for this content stream.
+        $streamHeader = substr($binary, $offset, $pos - $offset);
+        if (preg_match_all('/\d+\s+\d+\s+obj\b/', $streamHeader, $objectMatches, PREG_OFFSET_CAPTURE)
+            && $objectMatches[0] !== []
+        ) {
+            $lastObject = $objectMatches[0][count($objectMatches[0]) - 1];
+            $streamHeader = substr($streamHeader, $lastObject[1] + strlen($lastObject[0]));
+        }
+        $declaredLength = null;
+        if (preg_match('/\/Length\s+(\d+)\b/', $streamHeader, $lengthMatch)) {
+            $candidateLength = (int) $lengthMatch[1];
+            if ($candidateLength > 0 && $candidateLength <= 2_000_000) {
+                $declaredLength = $candidateLength;
+            }
+        }
+        $endSearchFrom = $declaredLength !== null ? $after + $declaredLength : $after;
+        if (preg_match('/\/Subtype\s*\/Image\b|\/(DCTDecode|JPXDecode|JBIG2Decode|CCITTFaxDecode)\b/', $streamHeader)) {
+            $end = strpos($binary, 'endstream', $endSearchFrom);
             $offset = $end === false ? $len : $end + 9;
             continue;
         }
 
-        $end = strpos($binary, 'endstream', $after);
+        $end = strpos($binary, 'endstream', $endSearchFrom);
         if ($end === false) {
             break;
         }
-        $payload = substr($binary, $after, $end - $after);
-        $payload = rtrim($payload, "\r\n");
+        if ($declaredLength !== null) {
+            // Use /Length exactly; rtrim can remove valid compressed bytes.
+            $payload = substr($binary, $after, $declaredLength);
+        } else {
+            $payload = substr($binary, $after, $end - $after);
+            if (str_ends_with($payload, "\r\n")) {
+                $payload = substr($payload, 0, -2);
+            } elseif (str_ends_with($payload, "\r") || str_ends_with($payload, "\n")) {
+                $payload = substr($payload, 0, -1);
+            }
+        }
         $streamCount++;
         if (strlen($payload) > 2_000_000) {
             $offset = $end + 9;
@@ -270,6 +295,11 @@ function registration_form_is_room_token(string $raw): bool
     if (in_array($t, ['OL', 'ONLINE', 'TBA', 'HYBRID', 'HYB', 'TBD', 'VIRTUAL'], true)) {
         return true;
     }
+    if (preg_match('/\bROOM(?:\s+\d+[A-Z]?)?$/', $t)
+        || preg_match('/^LU\s*-\s*\d{1,3}[A-Z]?$/', $t)
+    ) {
+        return true;
+    }
     if (preg_match('/^(AV|RM|ROOM|LAB|CL|Bldg|BLDG)\b/', $t)) {
         return true;
     }
@@ -284,6 +314,10 @@ function registration_form_is_course_code(string $raw): bool
 {
     $t = strtoupper(trim($raw));
     if (registration_form_is_room_token($t)) {
+        return false;
+    }
+    // LU-09A / LU-12A are room or form artifacts in LU Form No. 1, not subjects.
+    if (preg_match('/^LU\s*-\s*\d{1,3}[A-Z]?$/', $t)) {
         return false;
     }
     return (bool) preg_match('/^[A-Z]{2,6}\s*-?\s*\d{1,5}[A-Z]?$/', $t);
@@ -332,6 +366,20 @@ function registration_form_is_instructor_token(string $raw): bool
  */
 function registration_form_parse_tokens(array $tokens): array
 {
+    $expandedTokens = [];
+    foreach ($tokens as $rawToken) {
+        $token = trim((string) $rawToken);
+        if (preg_match('/^([A-Z]{2,6}\s*-?\s*\d{1,5}[A-Z]?)\s+(.+)$/i', $token, $parts)
+            && registration_form_is_course_code($parts[1])
+        ) {
+            $expandedTokens[] = trim($parts[1]);
+            $expandedTokens[] = trim($parts[2]);
+        } else {
+            $expandedTokens[] = $token;
+        }
+    }
+    $tokens = $expandedTokens;
+
     $start = null;
     $n = count($tokens);
     for ($i = 0; $i < $n; $i++) {
@@ -378,6 +426,7 @@ function registration_form_parse_tokens(array $tokens): array
         $code = strtoupper(preg_replace('/\s+/', ' ', $tok) ?? $tok);
         $i++;
         $descParts = [];
+        $hasUnits = false;
         while ($i < $len && !registration_form_is_units_token($slice[$i]) && !registration_form_is_day_token($slice[$i])) {
             if (registration_form_is_course_code($slice[$i]) && $descParts !== []) {
                 break;
@@ -390,12 +439,15 @@ function registration_form_parse_tokens(array $tokens): array
         }
         $description = trim(implode(' ', $descParts));
         if ($i < $len && registration_form_is_units_token($slice[$i])) {
+            $hasUnits = true;
             $i++;
         }
 
         $days = [];
+        $meetingDays = [];
         while ($i < $len && registration_form_is_day_token($slice[$i])) {
             foreach (registration_form_expand_day_token($slice[$i]) as $d) {
+                $meetingDays[] = $d;
                 if (!in_array($d, $days, true)) {
                     $days[] = $d;
                 }
@@ -451,18 +503,26 @@ function registration_form_parse_tokens(array $tokens): array
             }
         }
 
-        if ($description === '') {
+        // A real registration-form subject has a units cell. This rejects stray
+        // page/location text that happens to resemble a course code.
+        if ($description === '' || !$hasUnits) {
             continue;
         }
 
         $meetings = [];
         $timeCount = count($times);
-        foreach ($days as $idx => $day) {
-            $time = $times[$idx] ?? ($times[0] ?? '');
-            if ($timeCount === 1) {
-                $time = $times[0];
+        if (count($meetingDays) === 1 && $timeCount > 1) {
+            foreach ($times as $time) {
+                $meetings[] = ['day' => $meetingDays[0], 'time' => $time];
             }
-            $meetings[] = ['day' => $day, 'time' => $time];
+        } else {
+            foreach ($meetingDays as $idx => $day) {
+                $time = $times[$idx] ?? ($times[0] ?? '');
+                if ($timeCount === 1) {
+                    $time = $times[0];
+                }
+                $meetings[] = ['day' => $day, 'time' => $time];
+            }
         }
         if ($meetings === [] && $times !== []) {
             $meetings[] = ['day' => '', 'time' => $times[0]];

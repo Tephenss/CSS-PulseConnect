@@ -23,6 +23,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Bug reports are submitted and reviewed through server-side PHP APIs only.
+    // Screenshots and issue descriptions must never be directly readable by clients.
+    match /bug_reports/{reportId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

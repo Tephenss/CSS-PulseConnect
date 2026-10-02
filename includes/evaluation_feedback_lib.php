@@ -164,6 +164,42 @@ function feedback_ticket_student_map(string $eventId, array $headers): array
     return $ticketToStudent;
 }
 
+/**
+ * Fetch every matching answer row instead of silently stopping at PostgREST's row cap.
+ * @return list<array<string,mixed>>
+ */
+function feedback_fetch_all_rows(string $baseUrl, array $headers): array
+{
+    $allRows = [];
+    $pageSize = 1000;
+    $maxRows = 50000;
+
+    for ($offset = 0; $offset < $maxRows; $offset += $pageSize) {
+        $separator = str_contains($baseUrl, '?') ? '&' : '?';
+        $url = $baseUrl . $separator . 'limit=' . $pageSize . '&offset=' . $offset;
+        $res = supabase_request('GET', $url, $headers);
+        if (!($res['ok'] ?? false)) {
+            return [];
+        }
+
+        $page = json_decode((string) ($res['body'] ?? ''), true);
+        if (!is_array($page)) {
+            return [];
+        }
+        foreach ($page as $row) {
+            if (is_array($row)) {
+                $allRows[] = $row;
+            }
+        }
+
+        if (count($page) < $pageSize) {
+            break;
+        }
+    }
+
+    return $allRows;
+}
+
 function feedback_missing_table(array $response, string $table): bool
 {
     $body = strtolower((string) ($response['body'] ?? ''));
@@ -523,14 +559,59 @@ function feedback_section_summary(
     ))));
     $participantLookup = array_fill_keys($participantIds, true);
 
-    $answeredIds = [];
+    $questionIds = [];
+    $requiredQuestionIds = [];
+    foreach ($questions as $question) {
+        if (!is_array($question)) {
+            continue;
+        }
+        $questionId = trim((string) ($question['id'] ?? ''));
+        if ($questionId === '') {
+            continue;
+        }
+        $questionIds[$questionId] = true;
+        if (!empty($question['required'])) {
+            $requiredQuestionIds[$questionId] = true;
+        }
+    }
+
+    $answersByStudent = [];
     foreach ($answerRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
         $studentId = trim((string) ($row['student_id'] ?? ''));
-        if ($studentId !== '' && isset($participantLookup[$studentId])) {
+        $questionId = trim((string) ($row['question_id'] ?? ''));
+        $answerText = trim((string) ($row['answer_text'] ?? ''));
+        if (
+            $studentId !== ''
+            && isset($participantLookup[$studentId])
+            && isset($questionIds[$questionId])
+            && $answerText !== ''
+        ) {
+            $answersByStudent[$studentId][$questionId] = true;
+        }
+    }
+
+    $answeredIds = [];
+    foreach ($answersByStudent as $studentId => $answeredQuestions) {
+        if ($requiredQuestionIds === []) {
+            $answeredIds[$studentId] = true;
+            continue;
+        }
+        $complete = true;
+        foreach ($requiredQuestionIds as $questionId => $_) {
+            if (!isset($answeredQuestions[$questionId])) {
+                $complete = false;
+                break;
+            }
+        }
+        if ($complete) {
             $answeredIds[$studentId] = true;
         }
     }
     $answeredIdList = array_keys($answeredIds);
+    $completedRespondentLookup = array_fill_keys($answeredIdList, true);
 
     $totalParticipants = count($participantIds);
     $totalResponses = count($answeredIdList);
@@ -591,7 +672,7 @@ function feedback_section_summary(
 
             foreach ($answerRows as $row) {
                 $studentId = trim((string) ($row['student_id'] ?? ''));
-                if ($studentId === '' || !isset($participantLookup[$studentId])) {
+                if ($studentId === '' || !isset($completedRespondentLookup[$studentId])) {
                     continue;
                 }
                 if ((string) ($row['question_id'] ?? '') !== $questionId) {
@@ -632,7 +713,7 @@ function feedback_section_summary(
         $responses = [];
         foreach ($answerRows as $row) {
             $studentId = trim((string) ($row['student_id'] ?? ''));
-            if ($studentId === '' || !isset($participantLookup[$studentId])) {
+            if ($studentId === '' || !isset($completedRespondentLookup[$studentId])) {
                 continue;
             }
             if ((string) ($row['question_id'] ?? '') !== $questionId) {
@@ -786,16 +867,17 @@ if ($usesSessions) {
         }
 
         $eventParticipantIds = array_values(array_keys($eventParticipantIds));
+        // Whole-event feedback includes only students with a present attendance record.
+        $eventFeedbackParticipantIds = $eventParticipantIds;
         $respondentMap = feedback_respondent_map($eventParticipantIds, $headers);
 
         $eventAnswerRows = [];
         if (count($eventQuestions) > 0) {
             $eventAnswersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers'
                 . '?select=student_id,question_id,answer_text'
-                . '&event_id=eq.' . rawurlencode($eventId);
-            $eventAnswersRes = supabase_request('GET', $eventAnswersUrl, $headers);
-            $eventAnswerRows = $eventAnswersRes['ok'] ? json_decode((string) $eventAnswersRes['body'], true) : [];
-            $eventAnswerRows = is_array($eventAnswerRows) ? $eventAnswerRows : [];
+                . '&event_id=eq.' . rawurlencode($eventId)
+                . '&order=student_id.asc,question_id.asc';
+            $eventAnswerRows = feedback_fetch_all_rows($eventAnswersUrl, $headers);
         }
 
         $feedbackSections[] = feedback_section_summary(
@@ -804,7 +886,7 @@ if ($usesSessions) {
                 ? 'Responses to the whole-event evaluation.'
                 : 'No event-level questions have been created yet.',
             $eventQuestions,
-            $eventParticipantIds,
+            $eventFeedbackParticipantIds,
             $eventAnswerRows,
             $respondentMap
         );
@@ -813,14 +895,9 @@ if ($usesSessions) {
         if (count($sessionIds) > 0) {
             $sessionAnswersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_evaluation_answers'
                 . '?select=session_id,student_id,question_id,answer_text'
-                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')';
-            $sessionAnswersRes = supabase_request('GET', $sessionAnswersUrl, $headers);
-            if ($sessionAnswersRes['ok']) {
-                $sessionAnswerRows = json_decode((string) $sessionAnswersRes['body'], true);
-            } elseif (feedback_missing_table($sessionAnswersRes, 'event_session_evaluation_answers')) {
-                $sessionAnswerRows = [];
-            }
-            $sessionAnswerRows = is_array($sessionAnswerRows) ? $sessionAnswerRows : [];
+                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')'
+                . '&order=session_id.asc,student_id.asc,question_id.asc';
+            $sessionAnswerRows = feedback_fetch_all_rows($sessionAnswersUrl, $headers);
         }
 
         $answersBySession = [];
@@ -886,16 +963,17 @@ if ($usesSessions) {
         }
 
         $participantIds = array_values(array_keys($participantIds));
+        // Match the whole-event feedback population to attendees, not all registrants.
+        $eventFeedbackParticipantIds = $participantIds;
         $respondentMap = feedback_respondent_map($participantIds, $headers);
 
         $answerRows = [];
         if (count($eventQuestions) > 0) {
             $answersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_answers'
                 . '?select=student_id,question_id,answer_text'
-                . '&event_id=eq.' . rawurlencode($eventId);
-            $answersRes = supabase_request('GET', $answersUrl, $headers);
-            $answerRows = $answersRes['ok'] ? json_decode((string) $answersRes['body'], true) : [];
-            $answerRows = is_array($answerRows) ? $answerRows : [];
+                . '&event_id=eq.' . rawurlencode($eventId)
+                . '&order=student_id.asc,question_id.asc';
+            $answerRows = feedback_fetch_all_rows($answersUrl, $headers);
         }
 
         $feedbackSections[] = feedback_section_summary(
@@ -904,7 +982,7 @@ if ($usesSessions) {
                 ? 'Responses to the whole-event evaluation.'
                 : 'No event-level questions have been created yet.',
             $eventQuestions,
-            $participantIds,
+            $eventFeedbackParticipantIds,
             $answerRows,
             $respondentMap
         );
