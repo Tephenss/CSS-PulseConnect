@@ -13,8 +13,8 @@ $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
 
-// Show published + approved (ready to publish) events on the calendar
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location,created_by&status=in.(published,approved)&order=start_at.asc';
+// Keep completed events on the calendar so staff can browse historical months.
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location,created_by&status=in.(published,approved,finished)&order=start_at.asc';
 
 $headers = [
     'Accept: application/json',
@@ -150,6 +150,9 @@ foreach($events as $e) {
   
   function getEventStyle(evt) {
     const status = String(evt.status || '').toLowerCase();
+    if (status === 'finished') {
+      return 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:border-zinc-400 hover:bg-zinc-50';
+    }
     // Yellow = published, grey = not yet published
     if (status === 'published') {
       return 'bg-yellow-100 text-yellow-900 border-yellow-300 hover:border-yellow-400 hover:bg-yellow-50';
@@ -233,7 +236,7 @@ foreach($events as $e) {
            const status = String(evt.status || '').toLowerCase();
            const statusLabel = status === 'published'
              ? ' (Published)'
-             : (status === 'approved' ? ' (Ready to publish)' : '');
+             : (status === 'finished' ? ' (Finished)' : (status === 'approved' ? ' (Ready to publish)' : ''));
            document.getElementById('ttTitle').textContent = evt.title + statusLabel;
            document.getElementById('ttDate').textContent = formatDateRange(evt.start_at, evt.end_at);
            if (evt.location) {
@@ -257,7 +260,7 @@ foreach($events as $e) {
            tooltip.classList.remove('opacity-100');
         });
         
-        evEl.onclick = () => window.location.href = `/manage_events.php`;
+        evEl.onclick = () => window.location.href = `/event_view.php?id=${encodeURIComponent(evt.id)}`;
         eventContainer.appendChild(evEl);
       });
       

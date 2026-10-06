@@ -115,11 +115,15 @@ function feedback_attendance_counts_as_present(array $row): bool
     $status = strtolower(trim((string) ($row['status'] ?? '')));
     $checkInAt = trim((string) ($row['check_in_at'] ?? ''));
 
+    if ($status === 'absent') {
+        return false;
+    }
+
     if ($checkInAt !== '') {
         return true;
     }
 
-    return in_array($status, ['present', 'scanned', 'late', 'early'], true);
+    return in_array($status, ['present', 'checked_in', 'in', 'scanned', 'late', 'early'], true);
 }
 
 function feedback_ticket_student_map(string $eventId, array $headers): array
@@ -617,6 +621,18 @@ function feedback_section_summary(
     $totalResponses = count($answeredIdList);
     $pendingParticipants = max(0, $totalParticipants - $totalResponses);
     $responseRate = $totalParticipants > 0 ? round(($totalResponses / $totalParticipants) * 100, 1) : 0.0;
+    $hasQuestions = count($questionIds) > 0;
+    $pendingRecipients = [];
+    foreach ($participantIds as $participantId) {
+        if (isset($completedRespondentLookup[$participantId])) {
+            continue;
+        }
+        $profile = $respondentMap[$participantId] ?? [];
+        $pendingRecipients[] = [
+            'id' => $participantId,
+            'name' => (string) ($profile['name'] ?? $participantId),
+        ];
+    }
 
     $studentIds = [];
     $names = [];
@@ -763,6 +779,8 @@ function feedback_section_summary(
         'total_participants' => $totalParticipants,
         'total_responses' => $totalResponses,
         'pending_participants' => $pendingParticipants,
+        'pending_recipients' => $pendingRecipients,
+        'has_questions' => $hasQuestions,
         'response_rate' => $responseRate,
         'year_level_dist' => $yearDist,
         'student_ids' => $studentIds,
@@ -809,14 +827,14 @@ if ($usesSessions) {
             $sessionFilter = implode(',', array_map('rawurlencode', $sessionIds));
 
             $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-                . '?select=session_id,status,check_in_at,registration:event_registrations(student_id)'
+                . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
             $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
             $attendanceRows = is_array($attendanceRows) ? $attendanceRows : [];
 
             $legacyAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-                . '?select=session_id,ticket_id,status,check_in_at'
+                . '?select=session_id,ticket_id,status,check_in_at,check_out_at'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $legacyAttendanceRes = supabase_request('GET', $legacyAttendanceUrl, $headers);
             $legacyAttendanceRows = $legacyAttendanceRes['ok'] ? json_decode((string) $legacyAttendanceRes['body'], true) : [];
@@ -837,6 +855,7 @@ if ($usesSessions) {
                     'session_id' => $legacyRow['session_id'] ?? null,
                     'status' => $legacyRow['status'] ?? null,
                     'check_in_at' => $legacyRow['check_in_at'] ?? null,
+                    'check_out_at' => $legacyRow['check_out_at'] ?? null,
                     'student_id' => $studentId,
                 ];
             }
@@ -844,6 +863,11 @@ if ($usesSessions) {
 
         $presentBySession = [];
         $eventParticipantIds = [];
+        $eventFeedbackParticipantIds = [];
+        $feedbackSession = count($sessions) > 1
+            ? event_sessions_last($sessions)
+            : ($sessions[0] ?? null);
+        $feedbackSessionId = is_array($feedbackSession) ? trim((string) ($feedbackSession['id'] ?? '')) : '';
         foreach ($attendanceRows as $row) {
             if (!is_array($row) || !feedback_attendance_counts_as_present($row)) {
                 continue;
@@ -864,11 +888,14 @@ if ($usesSessions) {
             }
             $presentBySession[$sid][$studentId] = true;
             $eventParticipantIds[$studentId] = true;
+            if ($sid === $feedbackSessionId && trim((string) ($row['check_out_at'] ?? '')) !== '') {
+                $eventFeedbackParticipantIds[$studentId] = true;
+            }
         }
 
         $eventParticipantIds = array_values(array_keys($eventParticipantIds));
-        // Whole-event feedback includes only students with a present attendance record.
-        $eventFeedbackParticipantIds = $eventParticipantIds;
+        // Whole-event feedback follows the completed-attendance rule used by evaluation delivery.
+        $eventFeedbackParticipantIds = array_values(array_keys($eventFeedbackParticipantIds));
         $respondentMap = feedback_respondent_map($eventParticipantIds, $headers);
 
         $eventAnswerRows = [];
@@ -940,7 +967,7 @@ if ($usesSessions) {
         }
     } else {
         $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-            . '?select=status,check_in_at,tickets(registration_id,event_registrations(student_id,event_id))'
+            . '?select=status,check_in_at,check_out_at,tickets(registration_id,event_registrations(student_id,event_id))'
             . '&tickets.event_registrations.event_id=eq.' . rawurlencode($eventId);
         $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
         $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
@@ -948,7 +975,11 @@ if ($usesSessions) {
 
         $participantIds = [];
         foreach ($attendanceRows as $row) {
-            if (!is_array($row) || !feedback_attendance_counts_as_present($row)) {
+            if (
+                !is_array($row)
+                || !feedback_attendance_counts_as_present($row)
+                || trim((string) ($row['check_out_at'] ?? '')) === ''
+            ) {
                 continue;
             }
 
@@ -963,7 +994,7 @@ if ($usesSessions) {
         }
 
         $participantIds = array_values(array_keys($participantIds));
-        // Match the whole-event feedback population to attendees, not all registrants.
+        // Match whole-event feedback to attendees who completed time-in and time-out.
         $eventFeedbackParticipantIds = $participantIds;
         $respondentMap = feedback_respondent_map($participantIds, $headers);
 

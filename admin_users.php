@@ -19,21 +19,47 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
-    . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,contact_number,created_at,student_id,course,archived_at'
-    . '&archived_at=is.null'
-    . '&order=created_at.desc'
-    . '&limit=500';
-
-$res = supabase_request('GET', $url, $headers);
-if (!$res['ok'] && str_contains((string) ($res['body'] ?? ''), 'archived_at')) {
-    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
+$users = [];
+$usersOffset = 0;
+$usersPageSize = 500;
+$usersHaveArchiveColumn = true;
+while (true) {
+    $usersUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . SUPABASE_TABLE_USERS
         . '?select=id,first_name,middle_name,last_name,suffix,email,role,section_id,contact_number,created_at,student_id,course'
-        . '&order=created_at.desc'
-        . '&limit=500';
-    $res = supabase_request('GET', $url, $headers);
+        . ($usersHaveArchiveColumn ? ',archived_at&archived_at=is.null' : '')
+        . '&order=created_at.desc,id.asc'
+        . '&limit=' . $usersPageSize
+        . '&offset=' . $usersOffset;
+
+    $usersRes = supabase_request('GET', $usersUrl, $headers);
+    if (!$usersRes['ok'] && $usersHaveArchiveColumn && str_contains((string) ($usersRes['body'] ?? ''), 'archived_at')) {
+        $usersHaveArchiveColumn = false;
+        continue;
+    }
+    if (!$usersRes['ok']) {
+        break;
+    }
+
+    $usersChunk = json_decode((string) ($usersRes['body'] ?? ''), true);
+    if (!is_array($usersChunk) || $usersChunk === []) {
+        break;
+    }
+    foreach ($usersChunk as $userRow) {
+        if (is_array($userRow)) {
+            $users[] = $userRow;
+        }
+    }
+
+    if (count($usersChunk) < $usersPageSize) {
+        break;
+    }
+    $usersOffset += $usersPageSize;
 }
-$rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
+
+foreach ($users as &$account) {
+    $account['role'] = strtolower(trim((string) ($account['role'] ?? 'student')));
+}
+unset($account);
 
 $urlSec = rtrim(SUPABASE_URL, '/') . '/rest/v1/sections?select=id,name';
 $resSec = supabase_request('GET', $urlSec, $headers);
@@ -44,7 +70,6 @@ if (is_array($sectionsData)) {
         $sectionMap[(string)$sec['id']] = $sec['name'];
     }
 }
-$users = is_array($rows) ? $rows : [];
 
 // School roster (paginate — PostgREST max-rows is often 1000).
 $rosterRows = [];

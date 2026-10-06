@@ -14,6 +14,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_walkin.php';
 
 $user = require_role(['admin']);
 
@@ -35,7 +37,7 @@ $dateToRaw = trim((string) ($_GET['to'] ?? ''));
 $statusFilter = strtolower(trim((string) ($_GET['status'] ?? 'all')));
 $preset = strtolower(trim((string) ($_GET['preset'] ?? '')));
 
-if (!in_array($statusFilter, ['all', 'published', 'finished', 'pending', 'approved', 'archived'], true)) {
+if (!in_array($statusFilter, ['all', 'published', 'finished'], true)) {
     $statusFilter = 'all';
 }
 
@@ -197,7 +199,7 @@ function analytics_load_events(
     if ($statusFilter !== 'all') {
         $query .= '&status=eq.' . rawurlencode($statusFilter);
     } else {
-        $query .= '&status=neq.archived';
+        $query .= '&status=in.(published,finished)';
     }
 
     $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?' . $query;
@@ -207,39 +209,68 @@ function analytics_load_events(
 }
 
 /**
- * Flat batch counts — avoids nested tickets(attendance) embeds.
+ * Counts registrations and unique participants with both time-in and time-out.
+ * Walk-in attendance is read-only from Firebase and merged by student number.
  *
  * @param list<string> $eventIds
- * @return array{regs: array<string,int>, checked_in: array<string,int>}
+ * @return array{regs: array<string,int>, participants: array<string,int>, present: array<string,int>}
  */
 function analytics_participant_counts(array $headers, array $eventIds): array
 {
     $regs = [];
-    $checkedIn = [];
+    $participantSets = [];
+    $presentSets = [];
     if ($eventIds === []) {
-        return ['regs' => $regs, 'checked_in' => $checkedIn];
+        return ['regs' => $regs, 'participants' => [], 'present' => []];
     }
 
     foreach ($eventIds as $id) {
         $regs[$id] = 0;
-        $checkedIn[$id] = 0;
+        $participantSets[$id] = [];
+        $presentSets[$id] = [];
     }
 
     /** @var array<string,string> $regToEvent */
     $regToEvent = [];
-    /** @var array<string,true> $checkedRegIds */
-    $checkedRegIds = [];
+    /** @var array<string,string> $regIdentity */
+    $regIdentity = [];
+    /** @var array<string,string> $ticketToReg */
+    $ticketToReg = [];
+    /** @var array<string,string> $studentToIdentityByEvent */
+    $studentToIdentityByEvent = [];
+
+    $studentKey = static function (string $studentNo): string {
+        $digits = function_exists('student_roster_digits_key')
+            ? student_roster_digits_key($studentNo)
+            : (preg_replace('/\D+/', '', $studentNo) ?? '');
+        return $digits !== '' ? 'student:' . $digits : '';
+    };
+    $markPresent = static function (string $eventId, string $identity) use (&$presentSets): void {
+        if ($identity !== '' && isset($presentSets[$eventId])) {
+            $presentSets[$eventId][$identity] = true;
+        }
+    };
+    $quotedInList = static function (array $ids): string {
+        return implode(',', array_map(
+            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
+            $ids
+        ));
+    };
 
     foreach (array_chunk($eventIds, 40) as $chunk) {
-        $inList = implode(',', array_map(
-            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
-            $chunk
-        ));
+        $inList = $quotedInList($chunk);
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-            . '?select=id,event_id'
+            . '?select=id,event_id,student_id,users(student_id)'
             . '&event_id=in.(' . $inList . ')'
             . '&limit=5000';
         $res = supabase_request('GET', $url, $headers);
+        if (!($res['ok'] ?? false)) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+                . '?select=id,event_id,student_id'
+                . '&event_id=in.(' . $inList . ')'
+                . '&limit=5000';
+            $res = supabase_request('GET', $url, $headers);
+        }
         $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
         if (!is_array($rows)) {
             continue;
@@ -256,22 +287,20 @@ function analytics_participant_counts(array $headers, array $eventIds): array
             $regs[$eid]++;
             if ($rid !== '') {
                 $regToEvent[$rid] = $eid;
+                $profile = is_array($row['users'] ?? null) ? $row['users'] : [];
+                $identity = $studentKey((string) ($profile['student_id'] ?? ''));
+                $regIdentity[$rid] = $identity !== '' ? $identity : 'registration:' . $rid;
+                $participantSets[$eid][$regIdentity[$rid]] = true;
+                if ($identity !== '') {
+                    $studentToIdentityByEvent[$eid . ':' . $identity] = $identity;
+                }
             }
         }
     }
 
     $regIds = array_keys($regToEvent);
-    if ($regIds === []) {
-        return ['regs' => $regs, 'checked_in' => $checkedIn];
-    }
-
-    /** @var array<string,string> $ticketToReg */
-    $ticketToReg = [];
     foreach (array_chunk($regIds, 80) as $chunk) {
-        $inList = implode(',', array_map(
-            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
-            $chunk
-        ));
+        $inList = $quotedInList($chunk);
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets'
             . '?select=id,registration_id'
             . '&registration_id=in.(' . $inList . ')'
@@ -293,19 +322,25 @@ function analytics_participant_counts(array $headers, array $eventIds): array
         }
     }
 
+    $markForRegistration = static function (string $registrationId) use (&$regToEvent, &$regIdentity, $markPresent): void {
+        $eventId = $regToEvent[$registrationId] ?? '';
+        if ($eventId !== '') {
+            $markPresent($eventId, $regIdentity[$registrationId] ?? ('registration:' . $registrationId));
+        }
+    };
+
+    // Whole-event and legacy attendance rows. Both timestamps are required for Present.
     $ticketIds = array_keys($ticketToReg);
     foreach (array_chunk($ticketIds, 80) as $chunk) {
         if ($chunk === []) {
             continue;
         }
-        $inList = implode(',', array_map(
-            static fn(string $id): string => '"' . str_replace('"', '', $id) . '"',
-            $chunk
-        ));
+        $inList = $quotedInList($chunk);
         $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/attendance'
-            . '?select=ticket_id,check_in_at'
+            . '?select=ticket_id,check_in_at,check_out_at'
             . '&ticket_id=in.(' . $inList . ')'
             . '&check_in_at=not.is.null'
+            . '&check_out_at=not.is.null'
             . '&limit=5000';
         $res = supabase_request('GET', $url, $headers);
         $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
@@ -313,23 +348,97 @@ function analytics_participant_counts(array $headers, array $eventIds): array
             continue;
         }
         foreach ($rows as $row) {
-            if (!is_array($row) || trim((string) ($row['check_in_at'] ?? '')) === '') {
+            if (!is_array($row)
+                || trim((string) ($row['check_in_at'] ?? '')) === ''
+                || trim((string) ($row['check_out_at'] ?? '')) === '') {
                 continue;
             }
             $tid = trim((string) ($row['ticket_id'] ?? ''));
             $rid = $ticketToReg[$tid] ?? '';
-            if ($rid === '' || isset($checkedRegIds[$rid])) {
+            if ($rid === '') {
                 continue;
             }
-            $checkedRegIds[$rid] = true;
-            $eid = $regToEvent[$rid] ?? '';
-            if ($eid !== '' && isset($checkedIn[$eid])) {
-                $checkedIn[$eid]++;
+            $markForRegistration($rid);
+        }
+    }
+
+    // Seminar attendance uses event_session_attendance; include legacy attendance rows too.
+    $sessionsByEvent = fetch_event_sessions_map($eventIds, $headers);
+    $sessionToEvent = [];
+    foreach ($sessionsByEvent as $eventId => $sessions) {
+        foreach ($sessions as $session) {
+            $sessionId = trim((string) ($session['id'] ?? ''));
+            if ($sessionId !== '') {
+                $sessionToEvent[$sessionId] = (string) $eventId;
+            }
+        }
+    }
+    foreach (array_chunk(array_keys($sessionToEvent), 80) as $chunk) {
+        $inList = $quotedInList($chunk);
+        foreach (['event_session_attendance', 'attendance'] as $table) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/' . $table
+                . '?select=session_id,registration_id,ticket_id,check_in_at,check_out_at'
+                . '&session_id=in.(' . $inList . ')'
+                . '&check_in_at=not.is.null'
+                . '&check_out_at=not.is.null'
+                . '&limit=5000';
+            $res = supabase_request('GET', $url, $headers);
+            $rows = ($res['ok'] ?? false) ? json_decode((string) ($res['body'] ?? ''), true) : [];
+            if (!is_array($rows)) {
+                continue;
+            }
+            foreach ($rows as $row) {
+                if (!is_array($row)
+                    || trim((string) ($row['check_in_at'] ?? '')) === ''
+                    || trim((string) ($row['check_out_at'] ?? '')) === '') {
+                    continue;
+                }
+                $sessionId = trim((string) ($row['session_id'] ?? ''));
+                $eventId = $sessionToEvent[$sessionId] ?? '';
+                $registrationId = trim((string) ($row['registration_id'] ?? ''));
+                if ($registrationId === '') {
+                    $registrationId = $ticketToReg[trim((string) ($row['ticket_id'] ?? ''))] ?? '';
+                }
+                if ($eventId !== '' && ($regToEvent[$registrationId] ?? '') === $eventId) {
+                    $markForRegistration($registrationId);
+                }
             }
         }
     }
 
-    return ['regs' => $regs, 'checked_in' => $checkedIn];
+    // Firebase remains the temporary source for walk-ins. Never write to it here.
+    foreach ($eventIds as $eventId) {
+        $walkIns = event_walkin_fetch_rows($eventId);
+        if (!($walkIns['ok'] ?? false)) {
+            continue;
+        }
+        foreach (($walkIns['rows'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $identity = $studentKey((string) ($row['student_no'] ?? ''));
+            if ($identity === '') {
+                $identity = 'walkin:' . trim((string) ($row['id'] ?? ''));
+            }
+            $identity = $studentToIdentityByEvent[$eventId . ':' . $identity] ?? $identity;
+            $participantSets[$eventId][$identity] = true;
+            if (trim((string) ($row['check_in_at'] ?? '')) === ''
+                || trim((string) ($row['check_out_at'] ?? '')) === '') {
+                continue;
+            }
+            $markPresent($eventId, $identity);
+        }
+    }
+
+    $participants = [];
+    $present = [];
+    foreach ($participantSets as $eventId => $identities) {
+        $participants[$eventId] = count($identities);
+    }
+    foreach ($presentSets as $eventId => $identities) {
+        $present[$eventId] = count($identities);
+    }
+    return ['regs' => $regs, 'participants' => $participants, 'present' => $present];
 }
 
 $events = analytics_load_events($headers, $rangeStart, $rangeEnd, $statusFilter);
@@ -345,11 +454,10 @@ foreach ($events as $ev) {
 }
 
 $countsBundle = analytics_participant_counts($headers, $eventIds);
-$regByEvent = $countsBundle['regs'];
-$checkInByEvent = $countsBundle['checked_in'];
+$participantByEvent = $countsBundle['participants'];
+$presentByEvent = $countsBundle['present'];
 
-$sumRegs = 0;
-$sumCheckIns = 0;
+$sumParticipants = 0;
 $statusBuckets = [
     'published' => 0,
     'finished' => 0,
@@ -362,8 +470,7 @@ foreach ($events as $ev) {
         continue;
     }
     $id = trim((string) ($ev['id'] ?? ''));
-    $sumRegs += (int) ($regByEvent[$id] ?? 0);
-    $sumCheckIns += (int) ($checkInByEvent[$id] ?? 0);
+    $sumParticipants += (int) ($participantByEvent[$id] ?? 0);
     $st = strtolower(trim((string) ($ev['status'] ?? '')));
     if (isset($statusBuckets[$st])) {
         $statusBuckets[$st]++;
@@ -457,12 +564,9 @@ render_header('Analytics', $user);
       <label for="status" class="block text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">Status</label>
       <select id="status" name="status"
         class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400">
-        <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>All (excl. archived)</option>
+        <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>Published &amp; finished</option>
         <option value="published" <?= $statusFilter === 'published' ? 'selected' : '' ?>>Published</option>
         <option value="finished" <?= $statusFilter === 'finished' ? 'selected' : '' ?>>Finished</option>
-        <option value="pending" <?= $statusFilter === 'pending' ? 'selected' : '' ?>>Pending</option>
-        <option value="approved" <?= $statusFilter === 'approved' ? 'selected' : '' ?>>Approved</option>
-        <option value="archived" <?= $statusFilter === 'archived' ? 'selected' : '' ?>>Archived</option>
       </select>
      </div>
     <div class="flex gap-2">
@@ -481,7 +585,7 @@ render_header('Analytics', $user);
   </p>
 </form>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
   <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-sky-500 shadow-sm">
     <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Events in range</div>
     <div class="text-2xl font-black text-zinc-900"><?= count($events) ?></div>
@@ -490,24 +594,10 @@ render_header('Analytics', $user);
      </div>
   </div>
   <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-orange-500 shadow-sm">
-    <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Registrations</div>
-    <div class="text-2xl font-black text-zinc-900"><?= $sumRegs ?></div>
-    <div class="text-[11px] text-zinc-500 font-medium mt-1">Participants across listed events</div>
+    <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Registrations + walk-ins</div>
+    <div class="text-2xl font-black text-zinc-900"><?= $sumParticipants ?></div>
+    <div class="text-[11px] text-zinc-500 font-medium mt-1">Unique participants across listed events</div>
      </div>
-  <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-emerald-500 shadow-sm">
-    <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Checked in</div>
-    <div class="text-2xl font-black text-zinc-900"><?= $sumCheckIns ?></div>
-    <div class="text-[11px] text-zinc-500 font-medium mt-1">
-      <?= $sumRegs > 0 ? (int) round($sumCheckIns / $sumRegs * 100) : 0 ?>% of registrations
-     </div>
-  </div>
-  <div class="rounded-2xl border border-zinc-200 bg-white p-4 border-b-[3px] border-b-violet-500 shadow-sm">
-    <div class="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Avg / event</div>
-    <div class="text-2xl font-black text-zinc-900">
-      <?= count($events) > 0 ? round($sumRegs / count($events), 1) : '0' ?>
-    </div>
-    <div class="text-[11px] text-zinc-500 font-medium mt-1">Mean registrations per event</div>
-  </div>
 </div>
 
 <div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
@@ -537,8 +627,8 @@ render_header('Analytics', $user);
             <th class="px-4 py-3 font-black whitespace-nowrap">When</th>
             <th class="px-4 py-3 font-black">Status</th>
             <th class="px-4 py-3 font-black text-right whitespace-nowrap">Registered</th>
-            <th class="px-4 py-3 font-black text-right whitespace-nowrap">Checked in</th>
-            <th class="px-4 py-3 font-black text-right whitespace-nowrap">Turnout</th>
+            <th class="px-4 py-3 font-black text-right whitespace-nowrap">Present</th>
+            <th class="px-4 py-3 font-black text-right whitespace-nowrap">Average</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-100">
@@ -554,9 +644,10 @@ render_header('Analytics', $user);
             }
             $loc = trim((string) ($ev['location'] ?? ''));
             $st = strtolower(trim((string) ($ev['status'] ?? '')));
-            $regsN = (int) ($regByEvent[$eid] ?? 0);
-            $inN = (int) ($checkInByEvent[$eid] ?? 0);
-            $turnout = $regsN > 0 ? (int) round($inN / $regsN * 100) : 0;
+            $regsN = (int) ($participantByEvent[$eid] ?? 0);
+            $presentN = (int) ($presentByEvent[$eid] ?? 0);
+            $participantN = $regsN;
+            $averageRate = $participantN > 0 ? (int) round($presentN / $participantN * 100) : 0;
             $when = format_date_local((string) ($ev['start_at'] ?? ''), 'M j, Y · g:i A');
             $statusClass = match ($st) {
                 'published' => 'bg-emerald-50 text-emerald-800 border-emerald-200',
@@ -585,10 +676,10 @@ render_header('Analytics', $user);
                 </span>
               </td>
               <td class="px-4 py-3.5 text-right text-sm font-bold text-zinc-900 tabular-nums"><?= $regsN ?></td>
-              <td class="px-4 py-3.5 text-right text-sm font-bold text-emerald-800 tabular-nums"><?= $inN ?></td>
+              <td class="px-4 py-3.5 text-right text-sm font-bold text-emerald-800 tabular-nums"><?= $presentN ?></td>
               <td class="px-4 py-3.5 text-right">
-                <span class="text-sm font-bold tabular-nums <?= $turnout >= 70 ? 'text-emerald-700' : ($turnout >= 40 ? 'text-amber-700' : 'text-zinc-600') ?>">
-                  <?= $turnout ?>%
+                <span title="Completed time-in and time-out ÷ registered participants and walk-ins who checked in" class="text-sm font-bold tabular-nums <?= $averageRate >= 70 ? 'text-emerald-700' : ($averageRate >= 40 ? 'text-amber-700' : 'text-zinc-600') ?>">
+                  <?= $averageRate ?>%
                 </span>
               </td>
             </tr>

@@ -88,6 +88,7 @@ if ($role === 'teacher') {
 $sessions = fetch_event_sessions($eventId, $headers);
 $eventUsesSessions = count($sessions) > 0;
 $usesSessions = count($sessions) > 0;
+$walkInStorageWarning = '';
 $isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
 $participantTab = isset($_GET['participant_tab']) ? strtolower(trim((string) $_GET['participant_tab'])) : 'participants';
 if (!in_array($participantTab, ['participants', 'absence_reasons'], true)) {
@@ -100,7 +101,9 @@ $backHref = event_management_return_to($role, isset($_GET['return_to']) ? (strin
 $hasStudentRequirements = event_has_student_requirements($eventId, $headers);
 $isEventCreator = $role === 'admin' || ((string) ($event['created_by'] ?? '') === $userId);
 $canResetAttendance = $isEventCreator;
-$canRemoveParticipant = $role === 'admin';
+$canRemoveParticipant = $isEventCreator;
+$canRemoveWalkin = $isEventCreator || $role === 'admin';
+$showParticipantActions = $canResetAttendance || $canRemoveParticipant || $canRemoveWalkin;
 $isAbsenceFormCreator = ((string) ($event['created_by'] ?? '') === $userId);
 $absenceExportHtml = '';
 if ($isAbsenceFormCreator) {
@@ -559,6 +562,73 @@ if ($usesSessions) {
     }
         api_cache_write($absentSyncLockKey, ['synced_at' => time()]);
         api_cache_release_lock($absentSyncLockKey);
+    }
+
+    // Firebase walk-ins are attendance-only and never enter Supabase registrations.
+    $walkInLoad = event_walkin_fetch_rows($eventId);
+    $walkInRows = $walkInLoad['ok'] ? $walkInLoad['rows'] : [];
+    $walkInStorageWarning = $walkInLoad['ok'] ? '' : (string) ($walkInLoad['error'] ?? 'Walk-in attendance could not be loaded.');
+    $registeredByStudentNo = [];
+    foreach ($participants as $participantIndex => $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+        $studentNo = student_roster_normalize_no((string) ($profile['student_id'] ?? ''));
+        $registrationId = trim((string) ($participant['id'] ?? ''));
+        if ($studentNo !== '' && $registrationId !== '') {
+            $registeredByStudentNo[$studentNo] = [
+                'id' => $registrationId,
+                'index' => $participantIndex,
+            ];
+        }
+    }
+    $walkInParticipantsByStudentNo = [];
+    $walkInParticipantIndexesByStudentNo = [];
+    foreach ($walkInRows as $walkInRow) {
+        if (!is_array($walkInRow)) {
+            continue;
+        }
+        $studentNo = student_roster_normalize_no((string) ($walkInRow['student_no'] ?? ''));
+        $sessionId = trim((string) ($walkInRow['session_id'] ?? ''));
+        if ($studentNo === '' || $sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
+            continue;
+        }
+        $registeredParticipant = $registeredByStudentNo[$studentNo] ?? null;
+        $participantId = is_array($registeredParticipant) ? (string) $registeredParticipant['id'] : '';
+        if (is_array($registeredParticipant)) {
+            $registeredIndex = (int) $registeredParticipant['index'];
+            $participants[$registeredIndex]['has_walkin_attendance_sessions'][$sessionId] = true;
+            $participants[$registeredIndex]['walkin_document_ids_by_session'][$sessionId] = (string) ($walkInRow['id'] ?? '');
+        }
+        if ($participantId === '') {
+            if (!isset($walkInParticipantsByStudentNo[$studentNo])) {
+                $synthetic = event_walkin_participant_row($walkInRow);
+                $participantId = (string) $synthetic['id'];
+                $walkInParticipantsByStudentNo[$studentNo] = $participantId;
+                $walkInParticipantIndexesByStudentNo[$studentNo] = count($participants);
+                $participants[] = $synthetic;
+            } else {
+                $participantId = $walkInParticipantsByStudentNo[$studentNo];
+            }
+            $walkInIndex = (int) ($walkInParticipantIndexesByStudentNo[$studentNo] ?? -1);
+            if ($walkInIndex >= 0) {
+                $participants[$walkInIndex]['walkin_document_ids_by_session'][$sessionId] = (string) ($walkInRow['id'] ?? '');
+            }
+        }
+        $existingAttendance = $attendanceMap[$participantId][$sessionId] ?? null;
+        if (!$attendanceCountsAsPresent(is_array($existingAttendance) ? $existingAttendance : null)) {
+            $walkInParticipant = event_walkin_participant_row($walkInRow);
+            $walkInTicket = $walkInParticipant['tickets'][0] ?? [];
+            $walkInAttendance = $walkInTicket['attendance'][0] ?? null;
+            if (is_array($walkInAttendance)) {
+                $attendanceMap[$participantId][$sessionId] = $walkInAttendance;
+                if (is_array($registeredParticipant)) {
+                    $registeredIndex = (int) $registeredParticipant['index'];
+                    $participants[$registeredIndex]['walkin_attendance_only_sessions'][$sessionId] = true;
+                }
+            }
+        }
     }
 
     $sessionCounts = [];
@@ -1029,6 +1099,12 @@ if ($usesSessions) {
       ]);
       ?>
 
+      <?php if ($walkInStorageWarning !== ''): ?>
+        <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
+          Walk-in attendance could not be loaded from Firebase. Regular registered attendance is unaffected.
+        </div>
+      <?php endif; ?>
+
       <?php if ($participantTab === 'participants'): ?>
         <div class="grid grid-cols-1 md:grid-cols-<?= max(1, min(4, count($sessions))) ?> gap-4 mb-6">
           <?php
@@ -1162,7 +1238,7 @@ if ($usesSessions) {
                 <?php foreach ($sessions as $session): ?>
                   <th class="px-4 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider text-zinc-500"><?= htmlspecialchars(build_session_display_name($session)) ?></th>
                 <?php endforeach; ?>
-                <?php if ($canResetAttendance || $canRemoveParticipant): ?>
+                <?php if ($showParticipantActions): ?>
                   <th class="px-4 py-3.5 text-right text-[11px] font-bold uppercase tracking-wider text-zinc-500">Action</th>
                 <?php endif; ?>
               </tr>
@@ -1212,20 +1288,28 @@ if ($usesSessions) {
                   $nextResetSessionId = '';
                   $nextResetHasOut = false;
                   $nextResetHasIn = false;
+                  $nextResetWalkinId = '';
                   foreach ($sessions as $resetSession) {
                       $resetSid = (string) ($resetSession['id'] ?? '');
                       $resetAtt = $attendanceMap[$registrationId][$resetSid] ?? null;
                       $resetHasIn = is_array($resetAtt) && $attendanceCountsAsPresent($resetAtt);
                       $resetHasOut = is_array($resetAtt) && trim((string) ($resetAtt['check_out_at'] ?? '')) !== '';
+                      $resetWalkinId = trim((string) ($participant['walkin_document_ids_by_session'][$resetSid] ?? ''));
+                      if ($resetWalkinId === ''
+                          && (string) ($participant['session_id'] ?? '') === $resetSid) {
+                          $resetWalkinId = trim((string) ($participant['walkin_id'] ?? ''));
+                      }
                       if ($resetHasOut) {
                           $nextResetSessionId = $resetSid;
                           $nextResetHasOut = true;
                           $nextResetHasIn = true;
+                          $nextResetWalkinId = $resetWalkinId;
                           break;
                       }
                       if ($resetHasIn && $nextResetSessionId === '') {
                           $nextResetSessionId = $resetSid;
                           $nextResetHasIn = true;
+                          $nextResetWalkinId = $resetWalkinId;
                       }
                   }
                   $nextResetLabel = $nextResetHasOut ? '↺ Reset Time-Out' : '↺ Reset Time-In';
@@ -1245,7 +1329,10 @@ if ($usesSessions) {
                         <?php endif; ?>
                       </div>
                       <div class="min-w-0">
-                        <div class="text-sm font-bold text-zinc-900 truncate"><?= htmlspecialchars($name !== '' ? $name : 'Unnamed Participant') ?></div>
+                        <div class="flex items-center gap-2 min-w-0">
+                          <div class="text-sm font-bold text-zinc-900 truncate"><?= htmlspecialchars($name !== '' ? $name : 'Unnamed Participant') ?></div>
+                          <?php if (!empty($participant['walkin_id']) || !empty($participant['has_walkin_attendance_sessions'])): ?><span class="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 border border-amber-200">Walk-in</span><?php endif; ?>
+                        </div>
                         <?php if ($email !== ''): ?>
                           <div class="text-xs text-zinc-400 truncate"><?= htmlspecialchars($email) ?></div>
                         <?php endif; ?>
@@ -1307,24 +1394,23 @@ if ($usesSessions) {
                       <?php endif; ?>
                     </td>
                   <?php endforeach; ?>
-                  <?php if ($canResetAttendance || $canRemoveParticipant): ?>
+                  <?php if ($showParticipantActions): ?>
                   <td class="px-4 py-3.5 whitespace-nowrap text-right">
                     <div class="inline-flex items-center justify-end gap-2">
-                    <?php if ($canResetAttendance): ?>
-                    <?php if ($nextResetHasIn): ?>
+                    <?php if ($canResetAttendance && $nextResetHasIn): ?>
                       <button
                         type="button"
                         class="btnResetAttendance inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200/80 hover:bg-amber-100 hover:border-amber-300 active:scale-95 transition-all shadow-2xs cursor-pointer"
                         data-id="<?= htmlspecialchars($registrationId) ?>"
+                        data-walkin-id="<?= htmlspecialchars($nextResetWalkinId) ?>"
                         data-session-id="<?= htmlspecialchars($nextResetSessionId) ?>"
                         data-confirm="<?= htmlspecialchars($nextResetConfirm) ?>"
                       >
                         <svg class="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
                         <span><?= htmlspecialchars($nextResetLabel) ?></span>
-                    </button>
+                      </button>
                     <?php endif; ?>
-                    <?php endif; ?>
-                    <?php if ($canRemoveParticipant): ?>
+                    <?php if ($canRemoveParticipant && empty($participant['walkin_id'])): ?>
                       <button
                         type="button"
                         class="btnRemove inline-flex items-center justify-center h-8 w-8 rounded-lg border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:border-rose-300 transition"
@@ -1333,13 +1419,16 @@ if ($usesSessions) {
                         aria-label="Remove participant"
                       >✕</button>
                     <?php endif; ?>
+                    <?php if ($canRemoveWalkin && (!empty($participant['has_walkin_attendance_sessions']) || !empty($participant['walkin_id']))): ?>
+                      <button type="button" class="btnRemoveWalkin btnRemove inline-flex items-center justify-center h-8 w-8 rounded-lg border border-rose-200 bg-white text-rose-600 hover:bg-rose-50" data-student-no="<?= htmlspecialchars($visibleStudentNo) ?>" title="Remove walk-in attendance" aria-label="Remove walk-in attendance">✕</button>
+                    <?php endif; ?>
                     </div>
                   </td>
                   <?php endif; ?>
                 </tr>
               <?php endforeach; ?>
               <tr id="multiParticipantSearchEmpty" class="pointer-events-none hidden">
-                <td colspan="<?= 3 + count($sessions) + (($canResetAttendance || $canRemoveParticipant) ? 1 : 0) ?>" class="px-4 py-10 text-center text-sm font-semibold text-zinc-500">
+                <td colspan="<?= 3 + count($sessions) + ($showParticipantActions ? 1 : 0) ?>" class="px-4 py-10 text-center text-sm font-semibold text-zinc-500">
                   No participants match your search.
                 </td>
               </tr>
@@ -1526,7 +1615,7 @@ if ($usesSessions) {
       });
 
       <?php if ($canRemoveParticipant): ?>
-      document.querySelectorAll('.btnRemove').forEach(btn => {
+      document.querySelectorAll('.btnRemove:not(.btnRemoveWalkin)').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Remove this participant from the event?')) return;
           btn.disabled = true;
@@ -1544,6 +1633,32 @@ if ($usesSessions) {
             window.location.reload();
           } catch (err) {
             alert(err.message || 'Failed to remove participant');
+            btn.disabled = false;
+          }
+        });
+      });
+      <?php endif; ?>
+
+      <?php if ($canRemoveWalkin): ?>
+      document.querySelectorAll('.btnRemoveWalkin').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove this walk-in attendance from the event?')) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch('/api/event_walkin_remove.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({
+                event_id: <?= json_encode($eventId) ?>,
+                student_no: btn.dataset.studentNo,
+                csrf_token: window.CSRF_TOKEN
+              })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to remove walk-in attendance');
+            window.location.reload();
+          } catch (err) {
+            alert(err.message || 'Failed to remove walk-in attendance');
             btn.disabled = false;
           }
         });
@@ -1700,6 +1815,55 @@ foreach ($participants as $row) {
     }
 }
 $participantYearMaps = student_roster_fetch_year_maps($participantUserIds, $participantStudentNos, $headers);
+
+// Read attendance-only walk-ins from Firestore. Existing registrations are merged in-memory;
+// only students not already registered get an extra participant row.
+$walkInLoad = event_walkin_fetch_rows($eventId);
+$walkInRows = $walkInLoad['ok'] ? $walkInLoad['rows'] : [];
+$walkInStorageWarning = $walkInLoad['ok'] ? '' : (string) ($walkInLoad['error'] ?? 'Walk-in attendance could not be loaded.');
+$registeredByStudentNo = [];
+foreach ($participants as $participantIndex => $participant) {
+    if (!is_array($participant)) {
+        continue;
+    }
+    $profile = isset($participant['users']) && is_array($participant['users']) ? $participant['users'] : [];
+    $studentNo = student_roster_normalize_no((string) ($profile['student_id'] ?? ''));
+    if ($studentNo !== '') {
+        $registeredByStudentNo[$studentNo] = $participantIndex;
+    }
+}
+foreach ($walkInRows as $walkInRow) {
+    if (!is_array($walkInRow) || trim((string) ($walkInRow['session_id'] ?? '')) !== '') {
+        continue;
+    }
+    $studentNo = student_roster_normalize_no((string) ($walkInRow['student_no'] ?? ''));
+    if ($studentNo === '') {
+        continue;
+    }
+    $walkInParticipant = event_walkin_participant_row($walkInRow);
+    if (isset($registeredByStudentNo[$studentNo])) {
+        $participantIndex = (int) $registeredByStudentNo[$studentNo];
+        $participants[$participantIndex]['has_walkin_attendance'] = true;
+        $tickets = isset($participants[$participantIndex]['tickets']) && is_array($participants[$participantIndex]['tickets'])
+            ? $participants[$participantIndex]['tickets']
+            : [];
+        $ticket = isset($tickets[0]) && is_array($tickets[0]) ? $tickets[0] : [];
+        $existingRows = $ticket['attendance'] ?? [];
+        $existingAttendance = is_array($existingRows)
+            ? (isset($existingRows[0]) && is_array($existingRows[0]) ? $existingRows[0] : $existingRows)
+            : null;
+        if (!$attendanceCountsAsPresent(is_array($existingAttendance) ? $existingAttendance : null)) {
+            $ticket['attendance'] = $walkInParticipant['tickets'][0]['attendance'];
+            $tickets[0] = $ticket;
+            $participants[$participantIndex]['tickets'] = $tickets;
+            $participants[$participantIndex]['walkin_attendance_only'] = true;
+            $participants[$participantIndex]['walkin_document_id'] = (string) ($walkInRow['id'] ?? '');
+        }
+        continue;
+    }
+    $registeredByStudentNo[$studentNo] = count($participants);
+    $participants[] = $walkInParticipant;
+}
 
 // Build buckets by day
 $buckets = [];
@@ -2299,6 +2463,12 @@ render_event_tabs([
 ]);
 ?>
 
+<?php if ($walkInStorageWarning !== ''): ?>
+  <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
+    Walk-in attendance could not be loaded from Firebase. Regular registered attendance is unaffected.
+  </div>
+<?php endif; ?>
+
 <?php if ($multiDay && $participantTab === 'participants'): ?>
   <div class="mb-6 flex gap-2 flex-wrap bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200 w-full sm:w-fit">
     <a class="px-4 py-2 rounded-xl text-xs font-bold transition-all <?= $activeDay === 'all' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-600 hover:bg-white' ?>"
@@ -2341,7 +2511,7 @@ render_event_tabs([
        <div class="w-8 h-8 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center">
          <svg class="w-4 h-4 text-orange-700" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
        </div>
-       Registered Attendees
+       Event Participants
     </h3>
     <div class="px-3.5 py-1.5 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center gap-2">
        <span class="text-[11px] font-bold text-zinc-600 uppercase tracking-wider">Total</span>
@@ -2441,7 +2611,7 @@ render_event_tabs([
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Section</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Time In / Out</th>
         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-zinc-500">Status</th>
-        <?php if ($canResetAttendance || $canRemoveParticipant): ?>
+        <?php if ($showParticipantActions): ?>
           <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-zinc-500">Actions</th>
         <?php endif; ?>
       </tr>
@@ -2449,7 +2619,7 @@ render_event_tabs([
     <tbody class="divide-y divide-zinc-100">
     <?php if (count($rows) === 0): ?>
         <tr class="pointer-events-none">
-          <td colspan="<?= ($canResetAttendance || $canRemoveParticipant) ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+          <td colspan="<?= $showParticipantActions ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
         <p class="text-zinc-700 font-semibold text-sm">No participants found</p>
           </td>
         </tr>
@@ -2522,9 +2692,9 @@ render_event_tabs([
         $yearLvl = 'N/A';
           }
           $sectionSubtitle = $secName;
-          $sectionHasYearDigit = preg_match('/[1-4]/', $secName) === 1
-              && !preg_match('/irreg/i', $secName);
-          if ($yearLvl !== 'N/A' && !$sectionHasYearDigit) {
+          $sectionHasYear = preg_match('/[1-4]/', $secName) === 1
+              || preg_match('/\b(?:1st|2nd|3rd|4th)\s+year\b/i', $secName) === 1;
+          if ($yearLvl !== 'N/A' && !$sectionHasYear) {
               $sectionSubtitle = (strcasecmp($secName, 'N/A') === 0)
                   ? $yearLvl
                   : ($secName . ' • ' . $yearLvl);
@@ -2570,9 +2740,12 @@ render_event_tabs([
             <?php endif; ?>
           </div>
               <div class="min-w-0">
+                <div class="flex items-center gap-2 min-w-0">
                 <div class="text-sm font-semibold text-zinc-900 truncate" title="<?= htmlspecialchars($name) ?>">
                   <?= htmlspecialchars($name ?: 'Unnamed') ?>
         </div>
+                <?php if (!empty($r['walkin_id']) || !empty($r['has_walkin_attendance'])): ?><span class="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 border border-amber-200">Walk-in</span><?php endif; ?>
+                </div>
                 <div class="text-xs text-zinc-500 truncate" title="<?= htmlspecialchars($email) ?>">
                   <?= htmlspecialchars($email !== '' ? $email : '—') ?>
            </div>
@@ -2587,31 +2760,34 @@ render_event_tabs([
           <td class="px-4 py-3">
             <span class="att-badge <?= $attBadgeClass ?>"><?= htmlspecialchars($attLabel) ?></span>
           </td>
-          <?php if ($canResetAttendance || $canRemoveParticipant): ?>
+          <?php if ($showParticipantActions): ?>
             <td class="px-4 py-3 text-right">
+              <?php
+                $rowHasOut = trim((string) $checkOutRaw) !== '';
+                $rowHasIn = $attendanceCountsAsPresent(is_array($attendance) ? $attendance : null);
+                $rowWalkinId = trim((string) ($r['walkin_id'] ?? ''));
+                if ($rowWalkinId === '' && !empty($r['walkin_attendance_only'])) {
+                    $rowWalkinId = trim((string) ($r['walkin_document_id'] ?? ''));
+                }
+                $rowResetLabel = $rowHasOut ? '↺ Out' : '↺ In';
+                $rowResetAria = $rowHasOut ? 'Reset Time-Out' : 'Reset Time-In';
+                $rowResetConfirm = $rowHasOut
+                    ? 'Reset this participant time-out? Time-in will be kept. Reset again to clear time-in.'
+                    : 'Reset this participant time-in?';
+              ?>
               <div class="admin-btns justify-end">
-                <?php if ($canResetAttendance): ?>
-                <?php
-                  $rowHasOut = trim((string) $checkOutRaw) !== '';
-                  $rowHasIn = $attendanceCountsAsPresent(is_array($attendance) ? $attendance : null);
-                  $rowResetLabel = $rowHasOut ? '↺ Out' : '↺ In';
-                  $rowResetAria = $rowHasOut ? 'Reset Time-Out' : 'Reset Time-In';
-                  $rowResetConfirm = $rowHasOut
-                      ? 'Reset this participant time-out? Time-in will be kept. Reset again to clear time-in.'
-                      : 'Reset this participant time-in?';
-                ?>
-                <?php if ($rowHasIn): ?>
+                <?php if ($canResetAttendance && $rowHasIn): ?>
                 <button
                   type="button"
                   class="btnResetAttendance"
                   data-id="<?= htmlspecialchars($registrationId) ?>"
+                  data-walkin-id="<?= htmlspecialchars($rowWalkinId) ?>"
                   data-confirm="<?= htmlspecialchars($rowResetConfirm) ?>"
                   title="<?= htmlspecialchars($rowResetConfirm) ?>"
                   aria-label="<?= htmlspecialchars($rowResetAria) ?>"
                 ><?= htmlspecialchars($rowResetLabel) ?></button>
                 <?php endif; ?>
-                <?php endif; ?>
-                <?php if ($canRemoveParticipant): ?>
+                <?php if ($canRemoveParticipant && empty($r['walkin_id'])): ?>
                 <button
                   type="button"
                   class="btnRemove"
@@ -2620,7 +2796,13 @@ render_event_tabs([
                   aria-label="Remove participant"
                 >✕</button>
            <?php endif; ?>
-        </div>
+                <?php if ($canRemoveWalkin && !empty($r['has_walkin_attendance'])): ?>
+                  <button type="button" class="btnRemoveWalkin btnRemove" data-student-no="<?= htmlspecialchars($studentId) ?>" title="Remove walk-in attendance" aria-label="Remove walk-in attendance">✕</button>
+                <?php endif; ?>
+                <?php if ($canRemoveWalkin && !empty($r['walkin_id'])): ?>
+                  <button type="button" class="btnRemoveWalkin btnRemove" data-student-no="<?= htmlspecialchars($studentId) ?>" title="Remove walk-in participant" aria-label="Remove walk-in participant">✕</button>
+                <?php endif; ?>
+              </div>
             </td>
           <?php endif; ?>
         </tr>
@@ -2628,7 +2810,7 @@ render_event_tabs([
 
       <?php if (count($rows) > 0): ?>
         <tr id="participantSearchEmpty" class="pointer-events-none hidden">
-          <td colspan="<?= ($canResetAttendance || $canRemoveParticipant) ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
+          <td colspan="<?= $showParticipantActions ? 6 : 5 ?>" class="px-4 py-12 text-center text-sm text-zinc-500 font-semibold">
             <p class="text-zinc-700 font-semibold text-sm">No results match your search</p>
           </td>
         </tr>
@@ -2815,9 +2997,11 @@ render_event_tabs([
       if (!ok) return;
       btn.disabled = true;
       try {
-        const registration_id = btn.dataset.id;
-        const payload = { registration_id, csrf_token: window.CSRF_TOKEN };
-        if ((btn.dataset.sessionId || '').trim() !== '') {
+        const walkin_id = (btn.dataset.walkinId || '').trim();
+        const payload = walkin_id
+          ? { event_id: <?= json_encode($eventId) ?>, walkin_id, csrf_token: window.CSRF_TOKEN }
+          : { registration_id: btn.dataset.id, csrf_token: window.CSRF_TOKEN };
+        if (!walkin_id && (btn.dataset.sessionId || '').trim() !== '') {
           payload.session_id = btn.dataset.sessionId.trim();
         }
         const res = await fetch('/api/participant_attendance_reset.php', {
@@ -2838,7 +3022,7 @@ render_event_tabs([
   <?php endif; ?>
 
   <?php if ($canRemoveParticipant): ?>
-  document.querySelectorAll('.btnRemove').forEach(btn => {
+  document.querySelectorAll('.btnRemove:not(.btnRemoveWalkin)').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ok = confirm('Remove this participant?');
       if (!ok) return;
@@ -2856,6 +3040,32 @@ render_event_tabs([
       } catch (e) {
         alert(e.message || 'Failed');
       } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+  <?php endif; ?>
+
+  <?php if ($canRemoveWalkin): ?>
+  document.querySelectorAll('.btnRemoveWalkin').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Remove this walk-in attendance from the event?')) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/event_walkin_remove.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({
+            event_id: <?= json_encode($eventId) ?>,
+            student_no: btn.dataset.studentNo,
+            csrf_token: window.CSRF_TOKEN
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to remove walk-in attendance');
+        window.location.reload();
+      } catch (error) {
+        alert(error.message || 'Failed to remove walk-in attendance');
         btn.disabled = false;
       }
     });

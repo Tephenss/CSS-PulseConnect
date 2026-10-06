@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/registration_access.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_date_scope.php';
 require_once __DIR__ . '/includes/proposal_requirements.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/manage_events_live.php';
@@ -19,6 +20,7 @@ require_once __DIR__ . '/includes/api_cache.php';
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
 $userId = (string) ($user['id'] ?? '');
+$eventDateScope = event_date_scope_window();
 
 function events_missing_column_error(array $response): bool
 {
@@ -881,6 +883,10 @@ render_header('Manage Events', $user);
 
         <!-- Step 3: Schedule -->
         <div id="step3" class="space-y-4 hidden pb-4">
+          <p class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+            Event dates must be within the 2-year scope: January 1, <?= (int) $eventDateScope['start_year'] ?>
+            to December 31, <?= (int) $eventDateScope['end_year'] ?>. Past dates and times are not allowed.
+          </p>
           <div>
             <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Grace Time (Minutes)</label>
             <div class="field-icon-wrap">
@@ -1277,6 +1283,12 @@ render_header('Manage Events', $user);
 <?php
   // Compute stats
 $liveListHash = manage_events_live_list_hash($user, $events);
+$eventListCount = count(array_filter($events, static function ($event) use ($user): bool {
+  if (!is_array($event) || strtolower(trim((string) ($event['status'] ?? ''))) === 'archived') {
+    return false;
+  }
+  return manage_events_live_event_visible_on_page($user, $event);
+}));
 ?>
 
 <!-- ═══════  HEADER  ═══════ -->
@@ -1654,7 +1666,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
       </div>
       <span class="text-sm font-medium text-zinc-900">Events List</span>
       <span
-        class="text-[10px] bg-zinc-100 text-zinc-700 border border-zinc-200 px-2 py-0.5 rounded-full font-medium"><?= count($events) ?></span>
+        id="eventListCount" class="text-[10px] bg-zinc-100 text-zinc-700 border border-zinc-200 px-2 py-0.5 rounded-full font-medium"><?= $eventListCount ?></span>
     </div>
     <div class="text-xs text-zinc-500">
       <?php if ($role === 'admin'): ?>Admin controls<?php else: ?>Your events<?php endif; ?>
@@ -1672,13 +1684,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         $approvalCount = 0;
         foreach ($events as $eventRow) {
           $statusRow = strtolower(trim((string) ($eventRow['status'] ?? '')));
-          if (in_array($statusRow, ['pending', 'approved', 'rejected'], true)) {
-            $approvalCount++;
-            continue;
-          }
-          $descRow = (string) ($eventRow['description'] ?? '');
-          $isRejectedRow = str_contains($descRow, '[REJECT_REASON:');
-          if ($statusRow === 'archived' && $isRejectedRow) {
+          if ($statusRow === 'pending') {
             $approvalCount++;
           }
         }
@@ -2999,6 +3005,12 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   // Wizard initialization (simple + seminar based)
     let step = 1;
   let eventModalReadOnly = false;
+  let originalScheduleSnapshot = null;
+  const dateScopeStartValue = <?= json_encode($eventDateScope['start']->format('Y-m-d H:i'), JSON_UNESCAPED_SLASHES) ?>;
+  const dateScopeEndValue = <?= json_encode($eventDateScope['end']->format('Y-m-d H:i'), JSON_UNESCAPED_SLASHES) ?>;
+  const dateScopeLabel = <?= json_encode($eventDateScope['label'], JSON_UNESCAPED_SLASHES) ?>;
+  const dateScopeStartYear = <?= (int) $eventDateScope['start_year'] ?>;
+  const dateScopeEndYear = <?= (int) $eventDateScope['end_year'] ?>;
   const teacherProposalMode = <?= $role === 'teacher' ? 'true' : 'false' ?>;
   const maxWizardStep = teacherProposalMode ? 4 : 3;
   let teacherProposalEditState = {
@@ -3030,11 +3042,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
   const teacherProposalEditSection = document.getElementById('teacherProposalEditSection');
   const teacherProposalEditRequirementsList = document.getElementById('teacherProposalEditRequirementsList');
   let isApplyingSimpleEndDefault = false;
+  let isLoadingEventSchedule = false;
 
   const flatpickrConfig = {
     enableTime: true,
     noCalendar: false,
     dateFormat: 'Y-m-d H:i',
+    minDate: dateScopeStartValue,
+    maxDate: dateScopeEndValue,
+    yearRange: <?= json_encode($eventDateScope['start_year'] . ':' . $eventDateScope['end_year'], JSON_UNESCAPED_SLASHES) ?>,
     altInput: true,
     altFormat: 'F j, Y - h:i K',
     minuteIncrement: 30,
@@ -3105,11 +3121,19 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return d;
   }
 
-  function earliestAllowedCreateDateTime() {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() + 1);
-    d.setHours(7, 0, 0, 0);
+  function earliestAllowedScheduleDateTime() {
+    const now = new Date();
+    const d = new Date(now);
+    const minute = d.getMinutes() + 1;
+    d.setSeconds(0, 0);
+    d.setMinutes(Math.ceil(minute / 30) * 30);
+
+    if (d.toDateString() !== now.toDateString()) {
+      d.setDate(now.getDate() + 1);
+      d.setHours(7, 0, 0, 0);
+    } else if (d.getHours() < 7) {
+      d.setHours(7, 0, 0, 0);
+    }
     return d;
   }
 
@@ -3199,12 +3223,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   function setPickerMin(input, minDate) {
     if (!input) return;
+    const requested = minDate instanceof Date ? minDate : (minDate ? parseLocalDate(minDate) : null);
+    const dateScopeStart = parseLocalDate(dateScopeStartValue);
+    const notPastFloor = earliestAllowedScheduleDateTime();
+    let effectiveMin = requested || dateScopeStart;
+    if (dateScopeStart && effectiveMin < dateScopeStart) effectiveMin = dateScopeStart;
+    if (notPastFloor && effectiveMin < notPastFloor) effectiveMin = notPastFloor;
     if (input._flatpickr) {
-      input._flatpickr.set('minDate', minDate || null);
+      setPickerBoundPreservingValue(input, 'minDate', effectiveMin);
     }
-    if (minDate) {
-      const minDateObj = minDate instanceof Date ? minDate : parseLocalDate(minDate);
-      input.min = minDateObj ? formatLocalForPicker(minDateObj) : String(minDate);
+    if (effectiveMin) {
+      input.min = formatLocalForPicker(effectiveMin);
     } else {
       input.removeAttribute('min');
     }
@@ -3212,29 +3241,102 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   function setPickerMax(input, maxDate) {
     if (!input) return;
+    const requested = maxDate instanceof Date ? maxDate : (maxDate ? parseLocalDate(maxDate) : null);
+    const dateScopeEnd = parseLocalDate(dateScopeEndValue);
+    const effectiveMax = requested && dateScopeEnd
+      ? (requested < dateScopeEnd ? requested : dateScopeEnd)
+      : (requested || dateScopeEnd);
     if (input._flatpickr) {
-      input._flatpickr.set('maxDate', maxDate || null);
+      setPickerBoundPreservingValue(input, 'maxDate', effectiveMax);
     }
-    if (maxDate) {
-      const maxDateObj = maxDate instanceof Date ? maxDate : parseLocalDate(maxDate);
-      input.max = maxDateObj ? formatLocalForPicker(maxDateObj) : String(maxDate);
+    if (effectiveMax) {
+      input.max = formatLocalForPicker(effectiveMax);
     } else {
       input.removeAttribute('max');
     }
+  }
+
+  function scheduleSnapshot() {
+    return JSON.stringify({
+      mode: eventModeInput?.value || 'simple',
+      seminarCount: seminarCountInput?.value || '0',
+      dates: [startAtInput, endAtInput, seminar1StartInput, seminar1EndInput, seminar2StartInput, seminar2EndInput]
+        .map((input) => (input?.value || '').trim()),
+    });
+  }
+
+  function scheduleDatesNeedAcademicYearValidation() {
+    return (document.getElementById('mode')?.value || 'create') !== 'edit'
+      || originalScheduleSnapshot === null
+      || originalScheduleSnapshot !== scheduleSnapshot();
+  }
+
+  function dateScopeDateError(entries) {
+    const lower = parseLocalDate(dateScopeStartValue);
+    const upper = parseLocalDate(dateScopeEndValue);
+    const notPastFloor = earliestAllowedScheduleDateTime();
+    for (const entry of entries) {
+      const date = entry.date;
+      if (!date || !lower || !upper || date < lower || date > upper) {
+        return { message: `All event and seminar dates must be within the 2-year scope (${dateScopeLabel}).`, inputId: entry.inputId };
+      }
+      if (notPastFloor && date < notPastFloor) {
+        return { message: 'Event and seminar schedules cannot be in the past. Choose a time from now onward.', inputId: entry.inputId };
+      }
+    }
+    return null;
   }
 
   function setPickerValue(input, value) {
     if (!input) return;
     const normalized = (value || '').toString().trim();
     if (input._flatpickr) {
-      if (normalized) {
-        input._flatpickr.setDate(normalized, true, 'Y-m-d H:i');
-      } else {
-        input._flatpickr.clear();
-      }
+      const picker = input._flatpickr;
+      if (!normalized) return picker.clear(false);
+
+      const date = parseLocalDate(normalized);
+      if (!date) return picker.clear(false);
+
+      // Existing schedules may predate the current date policy. Load them faithfully;
+      // changed schedules are still checked against the current scope before saving.
+      const previousMin = picker.config.minDate;
+      const previousMax = picker.config.maxDate;
+      picker.set('minDate', null);
+      picker.set('maxDate', null);
+      picker.setDate(date, false);
+      setPickerBoundPreservingValue(input, 'minDate', previousMin);
+      setPickerBoundPreservingValue(input, 'maxDate', previousMax);
       return;
     }
     input.value = normalized;
+  }
+
+  function setPickerBoundPreservingValue(input, option, bound) {
+    const picker = input?._flatpickr;
+    if (!picker) return;
+
+    const selected = picker.selectedDates?.[0]
+      ? new Date(picker.selectedDates[0].getTime())
+      : parseLocalDate(input.value);
+    picker.set(option, bound);
+
+    if (!selected || Number.isNaN(selected.getTime())) return;
+
+    const minValue = option === 'minDate' ? bound : picker.config.minDate;
+    const maxValue = option === 'maxDate' ? bound : picker.config.maxDate;
+    const min = minValue instanceof Date ? minValue : (minValue ? parseLocalDate(minValue) : null);
+    const max = maxValue instanceof Date ? maxValue : (maxValue ? parseLocalDate(maxValue) : null);
+    const isOutsideBounds = (min && selected < min) || (max && selected > max);
+    const current = picker.selectedDates?.[0];
+
+    // Flatpickr clears values outside the picker bounds; keep the saved value visible
+    // and in the form payload, while its calendar still only allows valid new choices.
+    if (isOutsideBounds || !current || current.getTime() !== selected.getTime()) {
+      input.value = picker.formatDate(selected, picker.config.dateFormat);
+      if (picker.altInput) {
+        picker.altInput.value = picker.formatDate(selected, picker.config.altFormat);
+      }
+    }
   }
 
   function setPickerDisabled(input, disabled) {
@@ -3268,7 +3370,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
   }
 
-  function updateEndMin(startInput, endInput) {
+  function updateEndMin(startInput, endInput, preserveExistingValue = false) {
     if (!startInput || !endInput) return;
 
     const startValue = (startInput.value || '').trim();
@@ -3276,10 +3378,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     if (startDate) {
       setEndLocked(endInput, false);
       setPickerMin(endInput, startDate);
-      setPickerMax(endInput, null);
+      setPickerMax(endInput, dateScopeEndValue);
 
       const endDate = parseLocalDate(endInput.value);
-      if (endDate && endDate < startDate) {
+      if (!preserveExistingValue && endDate && endDate < startDate) {
         if (endInput._flatpickr) {
           endInput._flatpickr.setDate(startDate, true, 'Y-m-d H:i');
         } else {
@@ -3287,9 +3389,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         }
       }
     } else {
-      setEndLocked(endInput, true);
-      setPickerMin(endInput, null);
-      setPickerMax(endInput, null);
+      setEndLocked(endInput, true, !preserveExistingValue);
+      setPickerMin(endInput, dateScopeStartValue);
+      setPickerMax(endInput, dateScopeEndValue);
     }
   }
 
@@ -3300,7 +3402,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return title !== '' && !!start && !!end && end > start;
   }
 
-  function syncSeminar2Gate(clearWhenLocked = true) {
+  function syncSeminar2Gate(clearWhenLocked = true, preserveSchedule = false) {
     const seminar2Title = document.getElementById('seminar2_title');
     const lockHint = document.getElementById('seminar2LockHint');
     const isTwoSeminars = (eventModeInput?.value || 'simple') === 'seminar_based'
@@ -3336,7 +3438,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
 
     // Seminar 2 cannot start before Seminar 1 ends (past dates/times disabled in picker).
-    const createFloor = earliestAllowedCreateDateTime();
+    const createFloor = earliestAllowedScheduleDateTime();
     const mode = document.getElementById('mode')?.value || 'create';
     let minStart = seminar1End;
     if (mode === 'create' && createFloor && seminar1End && createFloor > seminar1End) {
@@ -3348,29 +3450,38 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     setPickerDisabled(seminar2StartInput, false);
 
     const s2Start = parseLocalDate((seminar2StartInput?.value || '').trim());
-    if (s2Start && minStart && s2Start < minStart) {
+    if (!preserveSchedule && s2Start && minStart && s2Start < minStart) {
       setPickerValue(seminar2StartInput, '');
       setEndLocked(seminar2EndInput, true, true);
     } else {
-      updateEndMin(seminar2StartInput, seminar2EndInput);
+      updateEndMin(seminar2StartInput, seminar2EndInput, preserveSchedule);
     }
   }
 
   function enforceSimpleEndDefaults() {
     if (isApplyingSimpleEndDefault) return;
     if (!startAtInput || !endAtInput) return;
+
+    if (isLoadingEventSchedule) {
+      const startDate = parseLocalDate((startAtInput.value || '').trim());
+      setEndLocked(endAtInput, !startDate, false);
+      setPickerMin(endAtInput, startDate || dateScopeStartValue);
+      setPickerMax(endAtInput, dateScopeEndValue);
+      return;
+    }
+
     isApplyingSimpleEndDefault = true;
     try {
       const startRaw = (startAtInput.value || '').trim();
       const startDate = parseLocalDate(startRaw);
       if (!startDate) {
         setEndLocked(endAtInput, true);
-        setPickerMin(endAtInput, null);
-        setPickerMax(endAtInput, null);
+        setPickerMin(endAtInput, dateScopeStartValue);
+        setPickerMax(endAtInput, dateScopeEndValue);
         return;
       }
 
-      const fixedEnd = new Date(
+      let fixedEnd = new Date(
         startDate.getFullYear(),
         startDate.getMonth(),
         startDate.getDate(),
@@ -3379,6 +3490,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         0,
         0
       );
+      if (fixedEnd <= startDate) {
+        fixedEnd = new Date(startDate.getTime() + 60 * 60 * 1000);
+      }
 
       setPickerValue(endAtInput, formatLocalForPicker(fixedEnd));
       setPickerMin(endAtInput, fixedEnd);
@@ -3397,7 +3511,11 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           ...flatpickrConfig,
           onOpen: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
           onMonthChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
-          onYearChange: (_selectedDates, _dateStr, instance) => keepPickerVisible(instance),
+          onYearChange: (_selectedDates, _dateStr, instance) => {
+            if (instance.currentYear < dateScopeStartYear) instance.changeYear(dateScopeStartYear);
+            else if (instance.currentYear > dateScopeEndYear) instance.changeYear(dateScopeEndYear);
+            keepPickerVisible(instance);
+          },
           onChange: () => {
             if (input === startAtInput || input === seminar1StartInput) {
               refreshRegistrationCloseOptions();
@@ -4108,6 +4226,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
     const preferredCloseWeeks = ds('registration_close_weeks') || '1';
 
+    // Keep form defaults and dependency gates from rewriting persisted schedules while hydrating.
+    isLoadingEventSchedule = true;
     setPickerValue(startAtInput, ds('start_at') ? toLocalInput(ds('start_at')) : '');
     setPickerValue(endAtInput, ds('end_at') ? toLocalInput(ds('end_at')) : '');
 
@@ -4150,11 +4270,13 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     setPickerMin(seminar1StartInput, null);
     setPickerMin(seminar2StartInput, null);
 
-    updateEndMin(startAtInput, endAtInput);
-    updateEndMin(seminar1StartInput, seminar1EndInput);
-    updateEndMin(seminar2StartInput, seminar2EndInput);
+    updateEndMin(startAtInput, endAtInput, true);
+    updateEndMin(seminar1StartInput, seminar1EndInput, true);
+    updateEndMin(seminar2StartInput, seminar2EndInput, true);
     refreshRegistrationCloseOptions(preferredCloseWeeks);
-    syncSeminar2Gate(false);
+    syncSeminar2Gate(false, true);
+    originalScheduleSnapshot = scheduleSnapshot();
+    isLoadingEventSchedule = false;
 
     const msg = document.getElementById('formMsg');
     if (msg) {
@@ -4890,6 +5012,20 @@ $liveListHash = manage_events_live_list_hash($user, $events);
             }
             collectSeminarPayload(2);
           }
+          if (scheduleDatesNeedAcademicYearValidation()) {
+            const entries = [
+              { inputId: 'seminar1_start_local', date: parseLocalDate(s1Start) },
+              { inputId: 'seminar1_end_local', date: parseLocalDate(s1End) },
+            ];
+            if (seminarCount === 2) {
+              entries.push(
+                { inputId: 'seminar2_start_local', date: parseLocalDate(document.getElementById('seminar2_start_local')?.value || '') },
+                { inputId: 'seminar2_end_local', date: parseLocalDate(document.getElementById('seminar2_end_local')?.value || '') },
+              );
+            }
+            const yearIssue = dateScopeDateError(entries);
+            if (yearIssue) return fail(yearIssue.message, yearIssue.inputId);
+          }
         } else {
           const startRaw = (startAtInput?.value || '').trim();
           const endRaw = (endAtInput?.value || '').trim();
@@ -4900,11 +5036,15 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           if (!startDate || !endDate) {
             return fail('Invalid date/time selection.', startDate ? 'end_at_local' : 'start_at_local');
           }
-          if (mode === 'create' && startDate < earliestAllowedCreateDateTime()) {
-            return fail('Start date/time must be tomorrow or later (starting 7:00 AM).', 'start_at_local');
-          }
           if (endDate <= startDate) {
             return fail('End time must be after start time.', 'end_at_local');
+          }
+          if (scheduleDatesNeedAcademicYearValidation()) {
+            const yearIssue = dateScopeDateError([
+              { inputId: 'start_at_local', date: startDate },
+              { inputId: 'end_at_local', date: endDate },
+            ]);
+            if (yearIssue) return fail(yearIssue.message, yearIssue.inputId);
           }
         }
       } catch (scheduleErr) {
@@ -5148,6 +5288,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
   document.getElementById('btnCreateEvent')?.addEventListener('click', () => {
     document.getElementById('mode').value = 'create';
+    originalScheduleSnapshot = null;
     document.getElementById('event_id').value = '';
 
     document.getElementById('title').value = '';
@@ -5194,7 +5335,7 @@ $liveListHash = manage_events_live_list_hash($user, $events);
 
     setStructure('simple', 0);
 
-    const createMinDate = earliestAllowedCreateDateTime();
+    const createMinDate = earliestAllowedScheduleDateTime();
     setPickerMin(startAtInput, createMinDate);
     setPickerMin(seminar1StartInput, createMinDate);
     setPickerMin(seminar2StartInput, createMinDate);
@@ -5327,10 +5468,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         }
 
         if (mode === 'create') {
-          const minAllowed = earliestAllowedCreateDateTime();
+          const minAllowed = earliestAllowedScheduleDateTime();
           const hasEarlySeminar = sessions.some((session) => new Date(session.start_at) < minAllowed);
           if (hasEarlySeminar) {
-            throw new Error('Seminar start date/time must be tomorrow or later (starting 7:00 AM).');
+            throw new Error('Seminar start date/time must be current or future (starting 7:00 AM).');
           }
         }
 
@@ -5356,8 +5497,8 @@ $liveListHash = manage_events_live_list_hash($user, $events);
         if (isBeforeAllowedScheduleTime(startDate) || isBeforeAllowedScheduleTime(endDate)) {
           throw new Error('Event time must be 7:00 AM or later, and minutes must be 00 or 30 only.');
         }
-        if (mode === 'create' && startDate < earliestAllowedCreateDateTime()) {
-          throw new Error('Start date/time must be tomorrow or later (starting 7:00 AM).');
+        if (mode === 'create' && startDate < earliestAllowedScheduleDateTime()) {
+          throw new Error('Start date/time must be current or future (starting 7:00 AM).');
         }
         endDate = new Date(
           startDate.getFullYear(),
@@ -5368,6 +5509,9 @@ $liveListHash = manage_events_live_list_hash($user, $events);
           0,
           0
         );
+        if (endDate <= startDate) {
+          endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+        }
         setPickerValue(endAtInput, formatLocalForPicker(endDate));
         if (endDate <= startDate) {
           throw new Error('End time must be after start time.');
@@ -5874,9 +6018,17 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     return document.querySelectorAll('.event-card');
   }
 
+  function refreshEventListCount() {
+    const countBadge = document.getElementById('eventListCount');
+    if (!countBadge) return;
+    const count = Array.from(getEventCards()).filter((card) =>
+      ((card.dataset.status || '') + '').toLowerCase() !== 'archived'
+    ).length;
+    countBadge.textContent = String(count);
+  }
+
   function resolveTeacherBucket(card) {
     const status = ((card.dataset.status || '') + '').toLowerCase();
-    const hasRejectRemark = ((card.dataset.isRejected || '') + '') === '1';
 
     const endRaw = ((card.dataset.endAt || '') + '').trim();
     const earlyOutRaw = ((card.dataset.earlyOutAt || '') + '').trim();
@@ -5893,20 +6045,16 @@ $liveListHash = manage_events_live_list_hash($user, $events);
     }
     const isPast = lifecycleEnds instanceof Date && lifecycleEnds < now;
 
-    if (((status === 'expired' || status === 'finished' || isPast) && status !== 'archived')) {
+    if (status === 'expired' || status === 'finished') {
       return 'expired';
+    }
+
+    if (status === 'pending') {
+      return 'approval';
     }
 
     if (status === 'published' && !isPast) {
       return 'active';
-    }
-
-    if ((status === 'pending' || status === 'approved' || status === 'rejected') && !isPast) {
-      return 'approval';
-    }
-
-    if (status === 'archived' && hasRejectRemark && !isPast) {
-      return 'approval';
     }
 
     return 'hidden';
@@ -5953,8 +6101,10 @@ $liveListHash = manage_events_live_list_hash($user, $events);
               }
           } else {
               card.style.display = 'none';
-          }
-      });
+      }
+    });
+
+    refreshEventListCount();
 
     const emptyState = document.getElementById('eventListEmptyState');
     if (emptyState) {

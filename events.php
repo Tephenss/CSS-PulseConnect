@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/firestore_catalog.php';
 require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/event_walkin.php';
 
 $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -219,9 +220,9 @@ if ($eventIdList !== []) {
     . '&id=in.(' . $inList . ')'
     . '&limit=' . count($eventIdList);
   $countRes = supabase_request('GET', $countUrl, $headers);
+  $countsById = [];
   if ($countRes['ok']) {
     $countRows = json_decode((string) ($countRes['body'] ?? ''), true);
-    $countsById = [];
     if (is_array($countRows)) {
       foreach ($countRows as $countRow) {
         if (!is_array($countRow)) {
@@ -233,21 +234,46 @@ if ($eventIdList !== []) {
         }
       }
     }
-    $applyRegisteredCounts = static function (array &$rows) use ($countsById): void {
-      foreach ($rows as &$row) {
-        if (!is_array($row)) {
-          continue;
-        }
-        $eid = trim((string) ($row['id'] ?? ''));
-        if ($eid !== '' && isset($countsById[$eid])) {
-          $row['registered_count'] = $countsById[$eid];
-        }
-      }
-      unset($row);
-    };
-    $applyRegisteredCounts($publishedEvents);
-    $applyRegisteredCounts($finishedEvents);
   }
+
+  $walkInCountsById = [];
+  foreach (array_keys($eventIdList) as $eventId) {
+    $walkIns = event_walkin_fetch_rows($eventId, $headers);
+    if (!($walkIns['ok'] ?? false)) {
+      continue;
+    }
+    $walkInStudents = [];
+    foreach (($walkIns['rows'] ?? []) as $walkIn) {
+      if (!is_array($walkIn) || trim((string) ($walkIn['check_in_at'] ?? '')) === '') {
+        continue;
+      }
+      $studentNo = student_roster_digits_key((string) ($walkIn['student_no'] ?? ''));
+      $documentId = trim((string) ($walkIn['id'] ?? ''));
+      $identity = $studentNo !== ''
+        ? 'student:' . $studentNo
+        : ($documentId !== '' ? 'walkin:' . $documentId : '');
+      if ($identity !== '') {
+        $walkInStudents[$identity] = true;
+      }
+    }
+    $walkInCountsById[$eventId] = count($walkInStudents);
+  }
+
+  $applyRegisteredCounts = static function (array &$rows) use ($countsById, $walkInCountsById): void {
+    foreach ($rows as &$row) {
+      if (!is_array($row)) {
+        continue;
+      }
+      $eid = trim((string) ($row['id'] ?? ''));
+      if ($eid !== '') {
+        $appCount = $countsById[$eid] ?? max(0, (int) ($row['registered_count'] ?? 0));
+        $row['registered_count'] = $appCount + (int) ($walkInCountsById[$eid] ?? 0);
+      }
+    }
+    unset($row);
+  };
+  $applyRegisteredCounts($publishedEvents);
+  $applyRegisteredCounts($finishedEvents);
 }
 
 $renderEventCard = static function (array $e, bool $isFinished): void {
@@ -833,4 +859,3 @@ render_header('Events', $user);
 </script>
 
 <?php render_footer();
-

@@ -51,6 +51,8 @@ if (!function_exists('event_management_return_to')) {
     }
 }
 
+require_once __DIR__ . '/event_walkin.php';
+
 if (!function_exists('event_tab_link_html')) {
     function event_tab_link_html(string $href, string $label, bool $active, array $attrs = []): string
     {
@@ -182,6 +184,7 @@ if (!function_exists('render_event_tabs')) {
         $qrHref = '/event_teachers?' . $eventQuery . $returnQuery;
         $assistantsHref = '/event_assistants?' . $eventQuery . $returnQuery;
         $detailsHref = '/event_view?id=' . rawurlencode($eventId) . $returnQuery;
+        $walkInHref = '/event_walkin?event_id=' . rawurlencode($eventId);
         $documentReviewHref = '/event_document_review?event_id=' . rawurlencode($eventId) . $returnQuery;
         $paymentsHref = '/event_payments?event_id=' . rawurlencode($eventId) . $returnQuery;
 
@@ -209,6 +212,10 @@ if (!function_exists('render_event_tabs')) {
 
         echo event_tab_link_html($detailsHref, 'Event Details', $currentTab === 'details');
         echo event_tab_link_html($participantsHref, 'Participants', $currentTab === 'participants');
+
+        if ($canManageExtras && $status === 'published' && !$isPaidEvent && event_walkin_firebase_ready()) {
+            echo event_tab_link_html($walkInHref, 'Walk-in', $currentTab === 'walkin', ['target' => '_blank', 'rel' => 'noopener']);
+        }
 
         if ($canManageExtras && $isPaidEvent && !$isFinished) {
             echo event_tab_link_html($paymentsHref, 'Payments', $currentTab === 'payments');

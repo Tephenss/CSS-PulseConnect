@@ -11,8 +11,8 @@ require_once __DIR__ . '/includes/layout.php';
 
 $user = require_role(['admin']);
 
-// Show published + approved (ready to publish) events on the calendar
-$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=in.(published,approved)&order=start_at.asc';
+// Keep completed events on the calendar so staff can browse historical months.
+$url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,start_at,end_at,status,location&status=in.(published,approved,finished)&order=start_at.asc';
 
 $headers = [
     'Accept: application/json',
@@ -150,6 +150,9 @@ foreach($events as $e) {
   
   function getEventStyle(evt) {
     const status = String(evt.status || '').toLowerCase();
+    if (status === 'finished') {
+      return 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:border-zinc-400 hover:bg-zinc-50';
+    }
     // Yellow = published, grey = not yet published
     if (status === 'published') {
       return 'bg-yellow-100 text-yellow-900 border-yellow-300 hover:border-yellow-400 hover:bg-yellow-50';
@@ -231,7 +234,7 @@ foreach($events as $e) {
         
         let dotColor = 'bg-zinc-400';
         const evtStatus = String(evt.status || '').toLowerCase();
-        // Yellow = published, grey = not yet published (approved / other)
+        // Yellow = published, grey = finished or not yet published.
         if (evtStatus === 'published') dotColor = 'bg-yellow-400';
         else dotColor = 'bg-zinc-400';
 
@@ -241,7 +244,7 @@ foreach($events as $e) {
         evEl.addEventListener('mouseenter', (e) => {
            const statusLabel = evtStatus === 'published'
              ? ' (Published)'
-             : (evtStatus === 'approved' ? ' (Ready to publish)' : '');
+             : (evtStatus === 'finished' ? ' (Finished)' : (evtStatus === 'approved' ? ' (Ready to publish)' : ''));
            document.getElementById('ttTitle').textContent = evt.title + statusLabel;
            document.getElementById('ttDate').textContent = formatDateRange(evt.start_at, evt.end_at);
            if (evt.location) {
@@ -267,12 +270,10 @@ foreach($events as $e) {
         
         evEl.onclick = (e) => {
              e.stopPropagation();
-             window.location.href = `/manage_events.php`;
+             window.location.href = `/event_view.php?id=${encodeURIComponent(evt.id)}`;
         };
         eventContainer.appendChild(evEl);
       });
-      
-      cell.onclick = () => { if(dayEvents.length > 0) window.location.href = `/manage_events.php`; };
       
       cell.appendChild(eventContainer);
       grid.appendChild(cell);

@@ -140,6 +140,10 @@ function render_header(string $title, ?array $user): void
             echo '<a href="/certificates_library" data-tooltip="Cert Templates" class="sidebar-link ' . (str_contains($title, 'Certificates') || str_contains($title, 'Cert') ? 'active' : '') . '">';
             echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>';
             echo '<span class="sidebar-label">Cert Templates</span></a>';
+
+            echo '<a href="/teacher_notifications" data-tooltip="Send Notification" class="sidebar-link ' . (str_contains($title, 'Send Notification') ? 'active' : '') . '">';
+            echo '<svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>';
+            echo '<span class="sidebar-label">Send Notification</span></a>';
         }
     }
 
@@ -378,7 +382,24 @@ function render_header(string $title, ?array $user): void
                 const timeString = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
                 return isToday ? `Today, ${timeString}` : `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${timeString}`;
             }
-            
+
+            function getReadNotificationIds() {
+                try {
+                    const ids = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
+                    return Array.isArray(ids) ? ids.map(String) : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function escapeNotificationHtml(value) {
+                const valueText = String(value == null ? "" : value);
+                const escaped = valueText.replace(/[&<>\"]/g, function (character) {
+                    return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character];
+                });
+                return escaped.replaceAll(String.fromCharCode(39), "&#39;");
+            }
+
             function renderNotifications(data) {
                 if (!data || data.length === 0) {
                     list.innerHTML = `<div class="px-5 py-8 text-center"><div class="mx-auto w-10 h-10 bg-zinc-100 rounded-full flex items-center justify-center mb-3"><svg class="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg></div><p class="text-[13px] font-medium text-zinc-500">You\'re all caught up!</p></div>`;
@@ -386,17 +407,33 @@ function render_header(string $title, ?array $user): void
                 }
                 
                 let html = "";
+                const readIds = getReadNotificationIds();
                 data.forEach(item => {
-                    const areaLabel = item.area || "Notification";
+                    const id = String(item.id || "");
+                    const isRead = !id || readIds.includes(id);
+                    const areaLabel = escapeNotificationHtml(item.area || "Notification");
+                    const title = escapeNotificationHtml(item.title || "Notification");
+                    const description = escapeNotificationHtml(item.description || "");
+                    const link = String(item.link || "/notifications");
+                    const safeLink = link.startsWith("/") && !link.startsWith("//") ? link : "/notifications";
+                    const rowStyle = isRead
+                        ? "bg-white border-l-4 border-l-transparent hover:bg-zinc-50/80"
+                        : "bg-emerald-50/70 border-l-4 border-l-emerald-500 hover:bg-emerald-50";
+                    const unreadMarker = isRead
+                        ? ""
+                        : `<span data-unread-marker class="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-extrabold tracking-wide text-amber-800">* NEW</span>`;
                     html += `
-                    <a href="${item.link || \'/notifications\'}" class="flex items-start gap-4 p-4 border-b border-zinc-100 hover:bg-zinc-50/80 transition-colors group">
+                    <a href="${escapeNotificationHtml(safeLink)}" data-notification-id="${escapeNotificationHtml(id)}" class="flex items-start gap-4 p-4 border-b border-zinc-100 ${rowStyle} transition-colors group">
                         <div class="mt-1 w-9 h-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
                             <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
                         </div>
                         <div class="flex-1 min-w-0">
                             <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-1 truncate">${areaLabel}</div>
-                            <h4 class="text-[13px] font-bold text-zinc-900 truncate mb-0.5">${item.title}</h4>
-                            <p class="text-[12px] text-zinc-600 leading-snug line-clamp-2">${item.description}</p>
+                            <div class="flex items-start justify-between gap-2 mb-0.5">
+                                <h4 class="text-[13px] font-bold text-zinc-900 truncate">${title}</h4>
+                                ${unreadMarker}
+                            </div>
+                            <p class="text-[12px] text-zinc-600 leading-snug line-clamp-2">${description}</p>
                             <div class="text-[11px] text-zinc-400 mt-1.5 font-medium">${formatTimeAgo(item.created_at)}</div>
                         </div>
                     </a>`;
@@ -405,8 +442,8 @@ function render_header(string $title, ?array $user): void
             }
             
             function updateBadge() {
-                const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
-                unreadCount = loadedNotifications.filter(n => !readIds.includes(n.id)).length;
+                const readIds = getReadNotificationIds();
+                unreadCount = loadedNotifications.filter(n => !readIds.includes(String(n.id || ""))).length;
                 
                 if (unreadCount > 0) {
                     badge.classList.remove("hidden");
@@ -628,7 +665,7 @@ function render_header(string $title, ?array $user): void
                 if (!data || !data.ok) return;
                 const nextNotifications = data.notifications || [];
                 const nextIds = nextNotifications.map((item) => item.id).filter(Boolean);
-                const readIds = JSON.parse(localStorage.getItem(readStorageKey) || "[]");
+                const readIds = getReadNotificationIds();
 
                 if (!notificationsBootstrapped) {
                     notificationsBootstrapped = true;
@@ -755,9 +792,28 @@ function render_header(string $title, ?array $user): void
             
             markReadBtn.addEventListener("click", (e) => {
                 e.preventDefault();
-                const readIds = loadedNotifications.map(n => n.id);
+                const readIds = Array.from(new Set([...getReadNotificationIds(), ...loadedNotifications.map(n => String(n.id || ""))]));
                 localStorage.setItem(readStorageKey, JSON.stringify(readIds));
+                renderNotifications(loadedNotifications);
                 updateBadge();
+            });
+
+            list.addEventListener("click", (e) => {
+                const notificationLink = e.target && e.target.closest
+                    ? e.target.closest("a[data-notification-id]")
+                    : null;
+                const notificationId = String(notificationLink?.dataset?.notificationId || "");
+                if (!notificationId) return;
+
+                const readIds = getReadNotificationIds();
+                if (!readIds.includes(notificationId)) {
+                    readIds.push(notificationId);
+                    localStorage.setItem(readStorageKey, JSON.stringify(readIds));
+                    notificationLink.classList.remove("bg-emerald-50/70", "border-l-emerald-500", "hover:bg-emerald-50");
+                    notificationLink.classList.add("bg-white", "border-l-transparent", "hover:bg-zinc-50/80");
+                    notificationLink.querySelector("[data-unread-marker]")?.remove();
+                    updateBadge();
+                }
             });
             
             loadPendingPreviewQueue();

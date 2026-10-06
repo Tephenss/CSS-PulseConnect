@@ -65,14 +65,7 @@ function manage_events_live_teacher_approval_count(array $events, string $teache
         }
 
         $status = strtolower(trim((string) ($event['status'] ?? '')));
-        $description = (string) ($event['description'] ?? '');
-        $isRejected = str_contains($description, '[REJECT_REASON:');
-
-        if (in_array($status, ['pending', 'approved', 'rejected'], true)) {
-            $count++;
-            continue;
-        }
-        if ($status === 'archived' && $isRejected) {
+        if ($status === 'pending') {
             $count++;
         }
     }

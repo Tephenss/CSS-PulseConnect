@@ -74,6 +74,51 @@ function web_notification_dedupe_key(string $kind, string $eventId): string
     return $kind . ':' . $eventId;
 }
 
+function web_fetch_teacher_admin_update_notifications(string $teacherId, array $headers): array
+{
+    if ($teacherId === '') {
+        return [];
+    }
+
+    $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/user_notifications'
+        . '?select=id,event_id,title,body,data,created_at'
+        . '&user_id=eq.' . rawurlencode($teacherId)
+        . '&' . rawurlencode('data->>type') . '=eq.admin_event_updated'
+        . '&order=created_at.desc'
+        . '&limit=25';
+    $res = supabase_request('GET', $url, $headers);
+    $rows = $res['ok'] ? json_decode((string) $res['body'], true) : [];
+    if (!is_array($rows)) {
+        return [];
+    }
+
+    $notifications = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $notificationId = trim((string) ($row['id'] ?? ''));
+        $eventId = trim((string) ($row['event_id'] ?? ''));
+        if ($notificationId === '' || $eventId === '') {
+            continue;
+        }
+
+        $notifications[] = [
+            'id' => 'admin-event-updated-' . $notificationId,
+            'event_id' => $eventId,
+            'dedupe_key' => web_notification_dedupe_key('admin-event-updated', $eventId),
+            'area' => 'Event Details · Admin Update',
+            'title' => trim((string) ($row['title'] ?? 'Event Updated by Admin')),
+            'description' => trim((string) ($row['body'] ?? 'The admin updated this event. Open it to review the latest details.')),
+            'created_at' => (string) ($row['created_at'] ?? ''),
+            'link' => '/event_view.php?id=' . rawurlencode($eventId),
+            'kind' => 'admin-event-updated',
+        ];
+    }
+
+    return $notifications;
+}
+
 function web_fetch_admin_notifications(array $headers): array
 {
     $notifications = [];
@@ -441,6 +486,11 @@ function web_fetch_teacher_notifications(array $user, array $headers): array
             ];
         }
     }
+
+    $notifications = array_merge(
+        $notifications,
+        web_fetch_teacher_admin_update_notifications($teacherId, $headers)
+    );
 
     return $notifications;
 }

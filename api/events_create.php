@@ -14,6 +14,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/event_date_scope.php';
 require_once __DIR__ . '/../includes/proposal_requirements.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
 require_once __DIR__ . '/../includes/registration_access.php';
@@ -91,6 +92,24 @@ try {
 }
 if ($end <= $start) {
     json_response(['ok' => false, 'error' => 'End must be after start'], 400);
+}
+if (!event_datetime_is_in_date_scope($start) || !event_datetime_is_in_date_scope($end)) {
+    json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
+}
+if ($start < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
+    json_response(['ok' => false, 'error' => 'Event schedule cannot be in the past. Choose today or a later date/time.'], 400);
+}
+if ($eventMode === 'seminar_based') {
+    foreach ($sessions as $session) {
+        $sessionStart = new DateTimeImmutable((string) $session['start_at']);
+        $sessionEnd = new DateTimeImmutable((string) $session['end_at']);
+        if (!event_datetime_is_in_date_scope($sessionStart) || !event_datetime_is_in_date_scope($sessionEnd)) {
+            json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
+        }
+        if ($sessionStart < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
+            json_response(['ok' => false, 'error' => 'Seminar schedule cannot be in the past. Choose today or a later date/time.'], 400);
+        }
+    }
 }
 
 // Block proposals that would collide with an already-published event
@@ -309,4 +328,3 @@ require_once __DIR__ . '/../includes/api_cache.php';
 api_cache_bump_generation('manage_events');
 
 json_response(['ok' => true, 'event' => $event], 200);
-

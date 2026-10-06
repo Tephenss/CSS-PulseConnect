@@ -10,14 +10,17 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_date_scope.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/registration_access.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/certificate_code_pool.php';
+require_once __DIR__ . '/includes/student_roster.php';
 
 $user = require_role(['student', 'teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'student');
 $userId = (string) ($user['id'] ?? '');
+$eventDateScope = event_date_scope_window();
 
 // Linked certs / saved templates are rendered inline, so a cached page would show
 // a stale Import/Link modal after editing a design.
@@ -114,6 +117,48 @@ if (strtolower(trim((string) ($event['status'] ?? ''))) === 'published'
 
 // 2. Registration / attendance stats (counts only — no full participant dump).
 $totalRegistered = fetch_event_registration_count($id, $headers, is_array($event) ? $event : null);
+$walkInParticipantCount = 0;
+$walkInLoad = event_walkin_fetch_rows($id);
+if ($walkInLoad['ok'] ?? false) {
+    $registeredStudentNos = [];
+    $registrationUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=users(student_id)&event_id=eq.' . rawurlencode($id)
+        . '&limit=5000';
+    $registrationRes = supabase_request('GET', $registrationUrl, $headers);
+    $registrationRows = $registrationRes['ok']
+        ? json_decode((string) $registrationRes['body'], true)
+        : null;
+    if (is_array($registrationRows)) {
+        foreach ($registrationRows as $registrationRow) {
+            if (!is_array($registrationRow)) {
+                continue;
+            }
+            $profile = $registrationRow['users'] ?? null;
+            if (is_array($profile) && isset($profile[0]) && is_array($profile[0])) {
+                $profile = $profile[0];
+            }
+            $studentNo = is_array($profile)
+                ? student_roster_normalize_no((string) ($profile['student_id'] ?? ''))
+                : '';
+            if ($studentNo !== '') {
+                $registeredStudentNos[$studentNo] = true;
+            }
+        }
+    }
+
+    $walkInStudentNos = [];
+    foreach ($walkInLoad['rows'] as $walkInRow) {
+        if (!is_array($walkInRow)) {
+            continue;
+        }
+        $studentNo = student_roster_normalize_no((string) ($walkInRow['student_no'] ?? ''));
+        if ($studentNo !== '' && !isset($registeredStudentNos[$studentNo])) {
+            $walkInStudentNos[$studentNo] = true;
+        }
+    }
+    $walkInParticipantCount = count($walkInStudentNos);
+}
+$totalEventParticipants = $totalRegistered + $walkInParticipantCount;
 $completedCount = supabase_exact_count(
     'attendance',
     $headers,
@@ -609,8 +654,8 @@ render_header('Event Details', $user);
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
                 </div>
                 <div>
-                    <div class="text-[11px] font-black text-zinc-500 uppercase tracking-wider mb-0.5">Target Participants</div>
-                    <div class="text-2xl font-bold text-zinc-900"><?= htmlspecialchars(format_event_registration_total($totalRegistered, $event)) ?> <span class="text-sm font-semibold text-zinc-400"><?= event_registration_limit($event) !== null ? 'Registered' : 'Total Registered' ?></span></div>
+                    <div class="text-[11px] font-black text-zinc-500 uppercase tracking-wider mb-0.5">Total Participants</div>
+                    <div class="text-2xl font-bold text-zinc-900"><?= number_format($totalEventParticipants) ?> <span class="text-sm font-semibold text-zinc-400">including walk-ins</span></div>
                 </div>
             </div>
 
@@ -707,6 +752,10 @@ render_header('Event Details', $user);
             </div>
           </div>
           
+          <p class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+            Event dates must be within the 2-year scope: January 1, <?= (int) $eventDateScope['start_year'] ?>
+            to December 31, <?= (int) $eventDateScope['end_year'] ?>. Past dates and times are not allowed.
+          </p>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
              <div>
                 <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Start Date & Time</label>
@@ -714,7 +763,7 @@ render_header('Event Details', $user);
                 <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-zinc-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
                 </div>
-                <input id="start_at_local" name="start_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+                <input id="start_at_local" name="start_at_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
                 </div>
             </div>
             <div>
@@ -723,7 +772,7 @@ render_header('Event Details', $user);
                 <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-zinc-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
-                <input id="end_at_local" name="end_at_local" type="datetime-local" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
+                <input id="end_at_local" name="end_at_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" required class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
                 </div>
             </div>
           </div>
@@ -826,11 +875,11 @@ render_header('Event Details', $user);
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
-                  <input id="seminar1_start_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                  <input id="seminar1_start_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
                 <div>
                   <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
-                  <input id="seminar1_end_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                  <input id="seminar1_end_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
               </div>
             </div>
@@ -846,11 +895,11 @@ render_header('Event Details', $user);
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label class="block text-[11px] text-zinc-600 mb-1 font-medium">Start Date & Time</label>
-                  <input id="seminar2_start_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                  <input id="seminar2_start_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
                 <div>
                   <label class="block text-[11px] text-zinc-600 mb-1 font-medium">End Date & Time</label>
-                  <input id="seminar2_end_local" type="datetime-local" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
+                  <input id="seminar2_end_local" type="datetime-local" min="<?= htmlspecialchars($eventDateScope['start']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" max="<?= htmlspecialchars($eventDateScope['end']->format('Y-m-d\\TH:i'), ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400" />
                 </div>
               </div>
             </div>
@@ -1152,6 +1201,7 @@ render_header('Event Details', $user);
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h4 class="text-sm font-bold text-zinc-900 min-w-0">Certificate not received</h4>
             <div class="flex items-center gap-2 shrink-0">
+              <button type="button" id="btnNotifyMissingCerts" class="rounded-lg border border-orange-200 bg-orange-50 text-orange-800 text-[11px] font-bold px-3 py-1.5 hover:bg-orange-100 disabled:opacity-50" disabled>Notify missing</button>
               <button type="button" id="btnSelectAllMissingCerts" class="text-[11px] font-bold text-sky-700 hover:underline">Select eligible</button>
               <button type="button" id="btnSendSelectedMissingCerts" class="rounded-lg bg-sky-600 text-white text-[11px] font-bold px-3 py-1.5 hover:bg-sky-700 disabled:opacity-50" disabled>Send selected</button>
             </div>
@@ -1866,6 +1916,19 @@ const mainAiStatus = document.getElementById('mainAiStatus');
 const mainModalPanel = document.getElementById('modalContent');
 const eventModeInput = document.getElementById('event_mode');
 const seminarEditSection = document.getElementById('seminarEditSection');
+let originalEditScheduleSnapshot = '';
+
+function editScheduleSnapshot() {
+    const isSeminar = (eventModeInput?.value || 'simple') === 'seminar_based';
+    const dateFields = isSeminar
+        ? ['seminar1_start_local', 'seminar1_end_local', 'seminar2_start_local', 'seminar2_end_local']
+        : ['start_at_local', 'end_at_local'];
+    return JSON.stringify({
+        mode: isSeminar ? 'seminar_based' : 'simple',
+        seminar2Visible: isSeminar && !(seminar2Editor?.classList.contains('hidden')),
+        dates: dateFields.map((id) => document.getElementById(id)?.value || ''),
+    });
+}
 const seminar2Editor = document.getElementById('seminar2Editor');
 const btnToggleSeminar2 = document.getElementById('btnToggleSeminar2');
 const registrationCloseExtendInput = document.getElementById('registration_close_extend_days');
@@ -1950,14 +2013,28 @@ function daysBetweenUtc(a, b) {
 }
 
 /** End datetime-local selection must start at (and not precede) start. */
+function currentScheduleMinLocal() {
+    const min = new Date();
+    min.setMinutes(min.getMinutes() + 1);
+    min.setSeconds(0, 0);
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${min.getFullYear()}-${pad(min.getMonth() + 1)}-${pad(min.getDate())}T${pad(min.getHours())}:${pad(min.getMinutes())}`;
+}
+
+function refreshScheduleMinimums() {
+    const min = currentScheduleMinLocal();
+    ['start_at_local', 'end_at_local', 'seminar1_start_local', 'seminar1_end_local', 'seminar2_start_local', 'seminar2_end_local']
+        .forEach((id) => {
+            const input = document.getElementById(id);
+            if (input) input.min = min;
+        });
+}
+
 function syncEndMinFromStart(startInput, endInput) {
     if (!startInput || !endInput) return;
     const startValue = String(startInput.value || '').trim();
-    if (!startValue) {
-        endInput.removeAttribute('min');
-        return;
-    }
-    endInput.min = startValue;
+    const currentMin = currentScheduleMinLocal();
+    endInput.min = startValue && startValue > currentMin ? startValue : currentMin;
     const endValue = String(endInput.value || '').trim();
     if (endValue && endValue < startValue) {
         endInput.value = startValue;
@@ -2279,6 +2356,7 @@ btnToggleSeminar2?.addEventListener('click', () => {
 
 if (btnEdit) {
   btnEdit.addEventListener('click', () => {
+    refreshScheduleMinimums();
     resetMainEditorTools();
     currentEditCoverUrl = btnEdit.dataset.cover_image_url || '';
     resetEditCoverPicker();
@@ -2352,6 +2430,7 @@ if (btnEdit) {
             setSeminar2Visible(true);
         }
     }
+    originalEditScheduleSnapshot = editScheduleSnapshot();
 
     eventModal.classList.remove('opacity-0', 'pointer-events-none');
     modalContent.classList.remove('scale-95');
@@ -2372,9 +2451,10 @@ if (btnEdit) {
   btnClose.addEventListener('click', closeIt);
   backdrop.addEventListener('click', closeIt);
 
-  const startAtLocal = document.getElementById('start_at_local');
-  const endAtLocal = document.getElementById('end_at_local');
-  startAtLocal?.addEventListener('change', () => {
+const startAtLocal = document.getElementById('start_at_local');
+const endAtLocal = document.getElementById('end_at_local');
+refreshScheduleMinimums();
+startAtLocal?.addEventListener('change', () => {
     syncMainEventEndMin();
     refreshRegistrationClosePreview();
   });
@@ -2462,6 +2542,23 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
         payload.sessions = seminar2 ? [seminar1, seminar2] : [seminar1];
       } catch (seminarErr) {
         msg.textContent = seminarErr.message || 'Invalid seminar schedule.';
+        return;
+      }
+    }
+
+    if (originalEditScheduleSnapshot !== editScheduleSnapshot()) {
+      const dateScopeStart = new Date(<?= json_encode($eventDateScope['start']->format('c'), JSON_UNESCAPED_SLASHES) ?>);
+      const dateScopeEnd = new Date(<?= json_encode($eventDateScope['end']->format('c'), JSON_UNESCAPED_SLASHES) ?>);
+      const scheduleDates = Array.isArray(payload.sessions)
+        ? payload.sessions.flatMap((session) => [new Date(session.start_at), new Date(session.end_at)])
+        : [sd, ed];
+      if (scheduleDates.some((date) => Number.isNaN(date.getTime()) || date < dateScopeStart || date > dateScopeEnd)) {
+        msg.textContent = `Updated event dates must be within the 2-year scope (<?= htmlspecialchars($eventDateScope['label'], ENT_QUOTES, 'UTF-8') ?>).`;
+        return;
+      }
+      const now = new Date();
+      if (scheduleDates.some((date) => date < now)) {
+        msg.textContent = 'Updated event dates cannot be in the past. Choose today or a later date/time.';
         return;
       }
     }
@@ -2572,6 +2669,7 @@ const btnCloseCertAutoStatus = document.getElementById('btnCloseCertAutoStatus')
 const btnRefreshCertAutoStatus = document.getElementById('btnRefreshCertAutoStatus');
 const btnSelectAllMissingCerts = document.getElementById('btnSelectAllMissingCerts');
 const btnSendSelectedMissingCerts = document.getElementById('btnSendSelectedMissingCerts');
+const btnNotifyMissingCerts = document.getElementById('btnNotifyMissingCerts');
 const importCertModal = document.getElementById('importCertModal');
 const btnCloseImportCert = document.getElementById('btnCloseImportCert');
 const importCertStatus = document.getElementById('importCertStatus');
@@ -2602,6 +2700,45 @@ function updateMissingSendButtonState() {
   const n = document.querySelectorAll('#certStatusMissingList input.cert-missing-check:checked').length;
   btnSendSelectedMissingCerts.disabled = n === 0;
   btnSendSelectedMissingCerts.textContent = n > 0 ? `Send selected (${n})` : 'Send selected';
+  const missingCount = Array.from(document.querySelectorAll('#certStatusMissingList input.cert-missing-check'))
+    .filter((input) => /^[0-9a-f-]{36}$/i.test(input.value)).length;
+  if (btnNotifyMissingCerts) {
+    btnNotifyMissingCerts.disabled = missingCount === 0;
+    btnNotifyMissingCerts.textContent = missingCount > 0 ? `Notify missing (${missingCount})` : 'Notify missing';
+  }
+}
+
+function openMissingCertificateRecipientsInNotifications() {
+  const recipients = Array.from(document.querySelectorAll('#certStatusMissingList input.cert-missing-check'))
+    .map((input) => {
+      const label = input.closest('label');
+      const name = label?.querySelector('.cert-missing-student-name')?.textContent?.trim() || 'Student';
+      return { id: input.value.trim(), name };
+    })
+    .filter((recipient) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recipient.id))
+    .filter((recipient, index, list) => list.findIndex((item) => item.id === recipient.id) === index);
+
+  if (recipients.length === 0) {
+    window.alert('There are no missing student accounts to notify.');
+    return;
+  }
+  if (recipients.length > 250) {
+    window.alert(`There are ${recipients.length} missing students, but individual notifications are limited to 250 recipients. Please narrow the list before sending.`);
+    return;
+  }
+
+  try {
+    sessionStorage.setItem('pc_teacher_notification_prefill', JSON.stringify({
+      source: 'certificate_missing',
+      recipients,
+    }));
+  } catch (error) {
+    window.alert('Could not prepare the recipient list. Please try again.');
+    return;
+  }
+
+  closeCertAutoStatusModal();
+  window.location.href = '/teacher_notifications?prefill=certificate_missing';
 }
 
 function renderCertAutoStatus(data) {
@@ -2684,7 +2821,7 @@ function renderCertAutoStatus(data) {
         return `<label class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-2.5 flex items-start gap-2 ${blocked ? 'cursor-not-allowed' : 'cursor-pointer hover:border-amber-200'}">
           ${checkbox}
           <div class="min-w-0 flex-1">
-            <div class="text-sm font-bold text-zinc-900 truncate">${name}</div>
+            <div class="cert-missing-student-name text-sm font-bold text-zinc-900 truncate">${name}</div>
             <div class="text-xs text-zinc-500 truncate">${email}</div>
             <div class="text-[11px] text-amber-800 mt-0.5">${reason}</div>
             ${seminarLine}
@@ -2890,6 +3027,7 @@ btnSendSelectedMissingCerts?.addEventListener('click', () => {
     .map((el) => el.value);
   void sendMissingCertificates(ids);
 });
+btnNotifyMissingCerts?.addEventListener('click', openMissingCertificateRecipientsInNotifications);
 certAutoStatusModal?.addEventListener('click', (e) => {
   if (e.target === certAutoStatusModal) closeCertAutoStatusModal();
 });

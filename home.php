@@ -760,8 +760,8 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-10">
   <!-- Total Events -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-sky-300 transition-colors relative overflow-hidden">
+  <a href="/manage_events.php" aria-label="Open event management"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-sky-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-sky-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center flex-shrink-0">
@@ -775,11 +775,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Events' : 'Total Events' ?></div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Upcoming -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-emerald-300 transition-colors relative overflow-hidden">
+  <a href="<?= $isTeacher ? '/teacher_calendar.php' : '/admin_calendar.php' ?>" aria-label="Open upcoming events calendar"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-emerald-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-emerald-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -793,11 +793,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Upcoming' : 'Upcoming' ?></div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Published -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-orange-300 transition-colors relative overflow-hidden">
+  <a href="/events.php" aria-label="Browse published events"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-orange-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-orange-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -812,11 +812,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Published' : 'Published' ?></div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Pending proposals -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-amber-300 transition-colors relative overflow-hidden">
+  <a href="/manage_events.php" aria-label="Review pending events"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-amber-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-amber-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -831,11 +831,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Pending' : 'Pending' ?></div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Finished -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-zinc-400 transition-colors relative overflow-hidden">
+  <a href="/events.php" aria-label="Browse finished events"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-zinc-400 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-zinc-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -850,11 +850,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate"><?= $isTeacher ? 'My Finished' : 'Finished' ?></div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Total Students -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-indigo-300 transition-colors relative overflow-hidden">
+  <a href="<?= $isTeacher ? '/teacher_sections.php' : '/admin_users.php' ?>" aria-label="Open student directory"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-indigo-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-indigo-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -869,11 +869,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate">Students</div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Total Teachers or My Assistants -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-rose-300 transition-colors relative overflow-hidden">
+  <a href="<?= $role === 'admin' ? '/admin_users.php' : '/events.php' ?>" aria-label="<?= $role === 'admin' ? 'Open teacher directory' : 'Open events to view assistants' ?>"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-rose-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-rose-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -899,11 +899,11 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         </div>
       </div>
     </div>
-  </div>
+  </a>
 
   <!-- Total Blocks/Sections -->
-  <div
-    class="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-teal-300 transition-colors relative overflow-hidden">
+  <a href="<?= $isTeacher ? '/teacher_sections.php' : '/admin_sections.php' ?>" aria-label="Open blocks and sections"
+    class="block rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-sm group hover:border-teal-300 hover:-translate-y-0.5 hover:shadow-md transition-all relative overflow-hidden cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600">
     <div class="absolute top-0 right-0 w-24 h-24 bg-teal-400/10 blur-2xl rounded-bl-full pointer-events-none"></div>
     <div class="relative z-10 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <div
@@ -918,7 +918,7 @@ $totalAssistants = (int) ($sysCounts['assistants'] ?? 0);
         <div class="text-[11px] sm:text-[13px] font-medium text-zinc-600 truncate">Blocks</div>
       </div>
     </div>
-  </div>
+  </a>
 </div>
 
 
@@ -940,7 +940,8 @@ foreach ($events as $e) {
 // Build calendar event map keyed by "Y-m-d"
 $calEventMap = [];
 foreach ($events as $e) {
-  if (!empty($e['start_at']) && ($e['status'] ?? '') === 'published') {
+  $calendarStatus = strtolower(trim((string) ($e['status'] ?? '')));
+  if (!empty($e['start_at']) && in_array($calendarStatus, ['published', 'finished'], true)) {
     try {
       $d = (new DateTimeImmutable($e['start_at']))->setTimezone($manilaTz);
       $eEnd = !empty($e['end_at'])
@@ -952,7 +953,7 @@ foreach ($events as $e) {
 
       // Determine time-based status for the dot color
       $dotClass = 'bg-orange-500'; // upcoming
-      if ($eEnd && $eEnd < $now) {
+      if ($calendarStatus === 'finished' || ($eEnd && $eEnd < $now)) {
         $dotClass = 'bg-zinc-400'; // past
       } elseif ($d <= $now && (!$eEnd || $eEnd >= $now)) {
         $dotClass = 'bg-emerald-500'; // ongoing
@@ -1109,7 +1110,7 @@ $eventTypeIcons = [
           $dayEvents = $hasEvent ? $calEventMap[$dateKey] : [];
           $tooltipId = 'cal-tip-' . $day;
           ?>
-          <div class="relative flex flex-col items-center group/day">
+          <div class="relative flex flex-col items-center group/day" <?= $hasEvent ? 'data-calendar-day="' . htmlspecialchars($tooltipId) . '"' : '' ?>>
             <button class="w-7 h-7 rounded-full text-xs font-semibold flex items-center justify-center transition-all
                 <?= $isToday ? 'bg-orange-600 text-white shadow-md shadow-orange-200 font-bold' : 'hover:bg-zinc-100 text-zinc-700' ?>
                 <?= $hasEvent && !$isToday ? 'font-bold text-orange-700' : '' ?>" type="button" <?= $hasEvent ? 'data-has-event="1"' : '' ?>>
@@ -1135,24 +1136,25 @@ $eventTypeIcons = [
             <!-- Hover Tooltip -->
             <?php if ($hasEvent): ?>
               <div
-                class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 hidden group-hover/day:block pointer-events-none"
-                style="min-width:160px; max-width:220px;">
-                <div class="bg-zinc-900 text-white rounded-xl shadow-xl p-3 text-left">
-                  <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                id="<?= htmlspecialchars($tooltipId) ?>"
+                class="fixed hidden pointer-events-none"
+                style="z-index:2147483647; width:280px; max-width:calc(100vw - 1.5rem); max-height:min(18rem, calc(100vh - 1.5rem)); overflow-y:auto;">
+                <div class="bg-white text-zinc-900 rounded-2xl border border-zinc-200 shadow-2xl p-4 text-left">
+                  <p class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2.5">
                     <?= date('M d', mktime(0, 0, 0, $calMonth, $day, $calYear)) ?></p>
                   <?php foreach ($dayEvents as $ev): ?>
-                    <div class="flex items-start gap-1.5 mb-1 last:mb-0">
-                      <div class="w-1.5 h-1.5 rounded-full <?= $ev['dot'] ?> mt-1 flex-shrink-0"></div>
-                      <div>
-                        <p class="text-xs font-semibold text-white leading-tight"><?= htmlspecialchars($ev['title']) ?></p>
+                    <div class="flex items-start gap-2 mb-2 last:mb-0">
+                      <div class="w-2 h-2 rounded-full <?= $ev['dot'] ?> mt-1 flex-shrink-0"></div>
+                      <div class="min-w-0">
+                        <p class="text-xs font-semibold text-zinc-800 leading-snug break-words"><?= htmlspecialchars($ev['title']) ?></p>
                         <?php if ($ev['type']): ?>
-                          <p class="text-[10px] text-zinc-400"><?= htmlspecialchars(ucfirst($ev['type'])) ?></p>
+                          <p class="text-[10px] text-zinc-500 mt-0.5"><?= htmlspecialchars(ucfirst($ev['type'])) ?></p>
                         <?php endif; ?>
                       </div>
                     </div>
                   <?php endforeach; ?>
                 </div>
-                <div class="w-2.5 h-2.5 bg-zinc-900 rotate-45 mx-auto -mt-1.5 rounded-sm"></div>
+                <div class="w-2.5 h-2.5 bg-white border-r border-b border-zinc-200 rotate-45 mx-auto -mt-1.5 relative z-10"></div>
               </div>
             <?php endif; ?>
           </div>
@@ -1179,6 +1181,55 @@ $eventTypeIcons = [
 
 </div>
 
+<script>
+(() => {
+  let activeTooltip = null;
+
+  function hideCalendarTooltip() {
+    activeTooltip?.classList.add('hidden');
+    activeTooltip = null;
+  }
+
+  function showCalendarTooltip(day) {
+    const tooltip = document.getElementById(day.dataset.calendarDay || '');
+    if (!tooltip) return;
+
+    if (activeTooltip && activeTooltip !== tooltip) hideCalendarTooltip();
+    document.body.appendChild(tooltip);
+    tooltip.classList.remove('hidden');
+
+    const dayRect = day.getBoundingClientRect();
+    const tipRect = tooltip.getBoundingClientRect();
+    const padding = 12;
+    const gap = 10;
+    const left = Math.max(padding, Math.min(
+      dayRect.left + (dayRect.width - tipRect.width) / 2,
+      window.innerWidth - tipRect.width - padding
+    ));
+    let top = dayRect.top - tipRect.height - gap;
+    if (top < padding) {
+      top = Math.min(window.innerHeight - tipRect.height - padding, dayRect.bottom + gap);
+    }
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${Math.max(padding, top)}px`;
+    activeTooltip = tooltip;
+  }
+
+  document.querySelectorAll('[data-calendar-day]').forEach((day) => {
+    day.addEventListener('mouseenter', () => showCalendarTooltip(day));
+    day.addEventListener('mouseleave', hideCalendarTooltip);
+    day.addEventListener('focusin', () => showCalendarTooltip(day));
+    day.addEventListener('focusout', hideCalendarTooltip);
+  });
+
+  window.addEventListener('scroll', hideCalendarTooltip, { passive: true });
+  window.addEventListener('resize', hideCalendarTooltip);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') hideCalendarTooltip();
+  });
+})();
+</script>
+
 <?php
 render_footer();
-

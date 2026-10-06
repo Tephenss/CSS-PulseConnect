@@ -7,8 +7,10 @@ session_bootstrap();
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/supabase.php';
+require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/event_walkin.php';
 
 $attendanceWindowsPath = __DIR__ . '/../includes/event_attendance_windows.php';
 if (is_file($attendanceWindowsPath)) {
@@ -24,7 +26,8 @@ $data = require_post_json();
 require_csrf_from_json($data);
 
 $registrationId = isset($data['registration_id']) ? trim((string) $data['registration_id']) : '';
-if ($registrationId === '') {
+$walkInDocumentId = trim((string) ($data['walkin_id'] ?? ''));
+if ($registrationId === '' && $walkInDocumentId === '') {
     json_response(['ok' => false, 'error' => 'registration_id required'], 400);
 }
 
@@ -44,6 +47,83 @@ $writeHeaders = [
     'Authorization: Bearer ' . SUPABASE_KEY,
     'Prefer: return=representation',
 ];
+
+if ($walkInDocumentId !== '') {
+    $eventId = trim((string) ($data['event_id'] ?? ''));
+    if (!preg_match('/^[0-9a-f-]{36}$/i', $eventId)
+        || !preg_match('/^[a-f0-9]{64}$/i', $walkInDocumentId)) {
+        json_response(['ok' => false, 'error' => 'Invalid walk-in attendance record.'], 400);
+    }
+
+    $eventLookup = fetch_event_row_by_id($eventId, $readHeaders, 'id,created_by');
+    if (!($eventLookup['ok'] ?? false) || !is_array($eventLookup['event'] ?? null)) {
+        json_response(['ok' => false, 'error' => 'Event not found.'], 404);
+    }
+    $event = $eventLookup['event'];
+    $isOwner = trim((string) ($event['created_by'] ?? '')) !== ''
+        && hash_equals((string) $event['created_by'], (string) ($user['id'] ?? ''));
+    if ($role !== 'admin' && !$isOwner) {
+        json_response(['ok' => false, 'error' => 'Only the event creator or an administrator can reset attendance.'], 403);
+    }
+
+    $walkInResult = event_walkin_firestore_get($eventId, $walkInDocumentId);
+    if (!($walkInResult['ok'] ?? false)) {
+        json_response(['ok' => false, 'error' => 'Could not load walk-in attendance from Firebase.'], 503);
+    }
+    $walkIn = $walkInResult['row'] ?? null;
+    if (empty($walkInResult['exists']) || !is_array($walkIn)
+        || (string) ($walkIn['event_id'] ?? '') !== $eventId) {
+        json_response(['ok' => false, 'error' => 'Walk-in attendance record not found.'], 404);
+    }
+
+    $checkInAt = trim((string) ($walkIn['check_in_at'] ?? ''));
+    $checkOutAt = trim((string) ($walkIn['check_out_at'] ?? ''));
+    if ($checkInAt === '' && $checkOutAt === '') {
+        json_response(['ok' => false, 'error' => 'There is no walk-in attendance to reset.'], 409);
+    }
+
+    $nowIso = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('c');
+    $resetOut = $checkOutAt !== '';
+    $fields = $resetOut
+        ? ['check_out_at' => '', 'updated_at' => $nowIso]
+        : ['check_in_at' => '', 'check_out_at' => '', 'status' => 'unscanned', 'updated_at' => $nowIso];
+    $updated = event_walkin_firestore_update(
+        $eventId,
+        $walkInDocumentId,
+        $fields,
+        (string) ($walkInResult['update_time'] ?? '')
+    );
+    if (!($updated['ok'] ?? false)) {
+        $fresh = event_walkin_firestore_get($eventId, $walkInDocumentId);
+        $freshRow = $fresh['row'] ?? null;
+        if (is_array($freshRow)) {
+            $freshCheckOut = trim((string) ($freshRow['check_out_at'] ?? ''));
+            $freshCheckIn = trim((string) ($freshRow['check_in_at'] ?? ''));
+            if (($resetOut && $freshCheckOut === '') || (!$resetOut && $freshCheckIn === '')) {
+                json_response([
+                    'ok' => true,
+                    'reset_target' => $resetOut ? 'time_out' : 'time_in',
+                    'message' => $resetOut
+                        ? 'Time-out cleared. Time-in is kept — reset again to clear time-in.'
+                        : 'Time-in cleared. Student can be timed in again.',
+                ]);
+            }
+        }
+        json_response(['ok' => false, 'error' => 'Could not reset walk-in attendance. Please retry.'], 503);
+    }
+
+    json_response([
+        'ok' => true,
+        'reset_target' => $resetOut ? 'time_out' : 'time_in',
+        'message' => $resetOut
+            ? 'Time-out cleared. Time-in is kept — reset again to clear time-in.'
+            : 'Time-in cleared. Student can be timed in again.',
+    ]);
+}
+
+if ($registrationId === '') {
+    json_response(['ok' => false, 'error' => 'registration_id required'], 400);
+}
 
 /**
  * Time-out phase = Early Out is active, OR the event scheduled end has passed.

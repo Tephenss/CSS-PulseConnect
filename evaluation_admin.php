@@ -13,6 +13,7 @@ require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/registration_access.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/evaluation_feedback_lib.php';
+require_once __DIR__ . '/includes/evaluation_delivery.php';
 
 $user = require_role(['teacher', 'admin']);
 $role = (string) ($user['role'] ?? 'teacher');
@@ -45,6 +46,8 @@ if (!is_array($event)) {
 }
 
 $isEventCreator = (string) ($event['created_by'] ?? '') === $userId;
+$canManageEvaluationDelivery = $role === 'admin' || $isEventCreator;
+$canSendTeacherNotifications = $role === 'teacher' && $isEventCreator;
 
 // Questions tab is teacher-creator only — remove from admin.
 if ($tab === 'questions') {
@@ -188,6 +191,40 @@ if ($tab === 'feedback') {
     );
 }
 
+$pendingEvaluationRecipients = [];
+$pendingEvaluationEligibilityVerified = false;
+$eventFeedbackSection = $feedbackSections[0] ?? [];
+if ($tab === 'feedback' && !empty($eventFeedbackSection['has_questions'])) {
+    $eligibility = evaluation_delivery_eligible_students($eventId, $event, $headers);
+    if (!empty($eligibility['ok'])) {
+        $eligibleIdSet = array_fill_keys(
+            array_map('strval', $eligibility['student_ids'] ?? []),
+            true
+        );
+        foreach (($eventFeedbackSection['pending_recipients'] ?? []) as $pendingRecipient) {
+            if (!is_array($pendingRecipient)) {
+                continue;
+            }
+            $pendingId = trim((string) ($pendingRecipient['id'] ?? ''));
+            if ($pendingId === '' || !isset($eligibleIdSet[$pendingId])) {
+                continue;
+            }
+            $pendingEvaluationRecipients[$pendingId] = [
+                'id' => $pendingId,
+                'name' => (string) ($pendingRecipient['name'] ?? $pendingId),
+            ];
+        }
+        $pendingEvaluationRecipients = array_values($pendingEvaluationRecipients);
+        $pendingEvaluationEligibilityVerified = true;
+    }
+}
+$pendingEvaluationRecipientsJson = count($pendingEvaluationRecipients) <= 250
+    ? json_encode(
+        $pendingEvaluationRecipients,
+        JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE
+    )
+    : '[]';
+
 render_header('Evaluation Management', $user);
 ?>
 
@@ -199,12 +236,39 @@ render_header('Evaluation Management', $user);
       <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest rounded-md border px-2 py-0.5 <?= $statusColor ?>"><?= htmlspecialchars((string) ($event['status'] ?? '')) ?></span>
     </div>
     <?php if ($tab === 'feedback'): ?>
-      <button type="button" id="btn-export-feedback-pdf"
-        data-export-url="/evaluation_feedback_export.php?event_id=<?= rawurlencode($eventId) ?>&print=1"
-        class="inline-flex items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-[13px] font-bold text-orange-800 shadow-sm hover:bg-orange-100 hover:border-orange-300 transition-colors whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed">
-        <svg class="w-4 h-4 shrink-0 export-pdf-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12H9m1.5-12H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-        <span class="export-pdf-label">Export as PDF</span>
-      </button>
+      <div class="flex items-center gap-2 flex-wrap">
+        <?php if ($canManageEvaluationDelivery): ?>
+          <button type="button" id="btnEvalDeliveryStatus"
+            class="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-[13px] font-bold text-sky-800 shadow-sm hover:bg-sky-100 transition-colors whitespace-nowrap">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4.5-5.82V5a1.5 1.5 0 00-3 0v.18A6.002 6.002 0 006 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+            Evaluation Delivery
+          </button>
+        <?php endif; ?>
+        <?php if ($canSendTeacherNotifications && $pendingEvaluationEligibilityVerified && count($pendingEvaluationRecipients) > 0): ?>
+          <button type="button" id="btnNotifyEvaluationPending"
+            class="js-notify-evaluation-pending inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[13px] font-bold text-amber-900 shadow-sm hover:bg-amber-100 transition-colors whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60"
+            data-event-id="<?= htmlspecialchars($eventId, ENT_QUOTES, 'UTF-8') ?>"
+            data-section-label="the event evaluation"
+            data-recipients="<?= htmlspecialchars(is_string($pendingEvaluationRecipientsJson) ? $pendingEvaluationRecipientsJson : '[]', ENT_QUOTES, 'UTF-8') ?>"
+            <?= count($pendingEvaluationRecipients) > 250 ? 'disabled title="Individual notifications are limited to 250 recipients."' : '' ?>>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4.5-5.82V5a1.5 1.5 0 00-3 0v.18A6.002 6.002 0 006 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+            Notify pending (<?= count($pendingEvaluationRecipients) ?>)
+          </button>
+          <?php if (count($pendingEvaluationRecipients) > 250): ?>
+            <span class="text-xs text-amber-800">Individual notifications are limited to 250 recipients.</span>
+          <?php endif; ?>
+        <?php elseif ($canSendTeacherNotifications && !empty($eventFeedbackSection['has_questions']) && (int) ($eventFeedbackSection['pending_participants'] ?? 0) > 0 && !$pendingEvaluationEligibilityVerified): ?>
+          <span class="text-xs text-amber-800">Could not verify completed event time-outs; pending recipients are unavailable.</span>
+        <?php elseif ($canSendTeacherNotifications && $pendingEvaluationEligibilityVerified && !empty($eventFeedbackSection['has_questions']) && (int) ($eventFeedbackSection['pending_participants'] ?? 0) > 0): ?>
+          <span class="text-xs text-zinc-500">No attendees with a completed event time-out are still pending.</span>
+        <?php endif; ?>
+        <button type="button" id="btn-export-feedback-pdf"
+          data-export-url="/evaluation_feedback_export.php?event_id=<?= rawurlencode($eventId) ?>&print=1"
+          class="inline-flex items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-[13px] font-bold text-orange-800 shadow-sm hover:bg-orange-100 hover:border-orange-300 transition-colors whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed">
+          <svg class="w-4 h-4 shrink-0 export-pdf-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12H9m1.5-12H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+          <span class="export-pdf-label">Export as PDF</span>
+        </button>
+      </div>
     <?php endif; ?>
   </div>
 
@@ -444,6 +508,91 @@ render_header('Evaluation Management', $user);
     </div>
   <?php endif; ?>
 </div>
+
+<?php if ($tab === 'feedback' && $canSendTeacherNotifications): ?>
+  <script>
+    document.querySelectorAll('.js-notify-evaluation-pending').forEach((button) => {
+      button.addEventListener('click', () => {
+        let recipients = [];
+        try {
+          recipients = JSON.parse(button.dataset.recipients || '[]');
+        } catch (_) {
+          window.alert('Could not prepare the pending evaluation recipients. Refresh the page and try again.');
+          return;
+        }
+        if (!Array.isArray(recipients) || recipients.length === 0) {
+          window.alert('There are no pending evaluation recipients in this section.');
+          return;
+        }
+        if (recipients.length > 250) {
+          window.alert('Individual notifications are limited to 250 recipients. No recipients were selected.');
+          return;
+        }
+        try {
+          sessionStorage.setItem('pc_teacher_notification_prefill', JSON.stringify({
+            source: 'evaluation_pending',
+            event_id: button.dataset.eventId || '',
+            section_label: button.dataset.sectionLabel || 'Evaluation',
+            recipients,
+          }));
+        } catch (_) {
+          window.alert('Could not prepare the recipient list in this browser. Please allow session storage and try again.');
+          return;
+        }
+        window.location.href = '/teacher_notifications?prefill=evaluation_pending';
+      });
+    });
+  </script>
+<?php endif; ?>
+
+<?php if ($tab === 'feedback' && $canManageEvaluationDelivery): ?>
+  <div id="evalDeliveryModal" class="hidden fixed inset-0 z-[120] items-center justify-center bg-zinc-950/50 p-3 sm:p-6" style="background-color: rgba(24, 24, 27, 0.48); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);" role="dialog" aria-modal="true" aria-labelledby="evalDeliveryTitle">
+    <div class="w-full max-w-5xl max-h-[92vh] overflow-hidden rounded-3xl bg-white shadow-2xl flex flex-col">
+      <div class="flex items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 sm:px-6">
+        <div>
+          <h3 id="evalDeliveryTitle" class="text-lg sm:text-xl font-bold text-zinc-900">Evaluation Delivery Status</h3>
+          <p class="mt-1 text-sm text-zinc-500">See which eligible attendees have an evaluation notice in their app inbox.</p>
+        </div>
+        <button type="button" id="btnCloseEvalDelivery" class="rounded-lg px-3 py-2 text-xl leading-none text-zinc-500 hover:bg-zinc-100" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div class="rounded-2xl border border-zinc-200 bg-white p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Eligible attendees</div><div id="evalDeliveryEligibleCount" class="mt-1 text-2xl font-black text-zinc-900">—</div></div>
+          <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700">In-app notice recorded</div><div id="evalDeliveryReceivedCount" class="mt-1 text-2xl font-black text-emerald-900">—</div></div>
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-amber-700">Not sent yet</div><div id="evalDeliveryMissingCount" class="mt-1 text-2xl font-black text-amber-900">—</div></div>
+        </div>
+
+        <div class="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs leading-relaxed text-sky-900">
+          Eligibility follows the existing evaluation rule: the attendee must have a time-out (for multi-seminar events, from the final seminar). “In-app notice recorded” confirms an inbox entry; it cannot confirm that the student opened it or that a device displayed a push notification.
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-2 mb-4">
+          <input id="evalDeliverySearch" type="search" class="min-w-0 flex-1 rounded-xl border border-zinc-300 px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500" placeholder="Search attendee name or student number" aria-label="Search evaluation delivery recipients">
+          <button type="button" id="btnRefreshEvalDelivery" class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-bold text-zinc-700 hover:bg-zinc-50">Refresh</button>
+          <button type="button" id="btnSelectAllEvalMissing" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-bold text-amber-800 hover:bg-amber-100">Select not sent</button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <section class="rounded-2xl border border-emerald-200 overflow-hidden">
+            <div class="flex items-center justify-between bg-emerald-50 px-4 py-3"><h4 class="font-bold text-emerald-900">Notice in app inbox</h4><span id="evalDeliveryReceivedBadge" class="rounded-full bg-white px-2.5 py-1 text-xs font-black text-emerald-800">0</span></div>
+            <div id="evalDeliveryReceivedList" class="max-h-[42vh] overflow-y-auto p-3 space-y-2"><div class="py-6 text-center text-sm font-semibold text-zinc-400">Open this panel to load status.</div></div>
+          </section>
+          <section class="rounded-2xl border border-amber-200 overflow-hidden">
+            <div class="flex items-center justify-between bg-amber-50 px-4 py-3"><h4 class="font-bold text-amber-900">No in-app notice found</h4><span id="evalDeliveryMissingBadge" class="rounded-full bg-white px-2.5 py-1 text-xs font-black text-amber-800">0</span></div>
+            <div id="evalDeliveryMissingList" class="max-h-[42vh] overflow-y-auto p-3 space-y-2"><div class="py-6 text-center text-sm font-semibold text-zinc-400">Open this panel to load status.</div></div>
+          </section>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-5 py-4 sm:px-6">
+        <p id="evalDeliveryMessage" class="text-xs text-zinc-500" aria-live="polite">Only eligible attendees without an in-app notice can be selected for resend.</p>
+        <button type="button" id="btnResendEvalSelected" class="rounded-xl bg-sky-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">Resend selected (0)</button>
+      </div>
+    </div>
+  </div>
+<?php endif; ?>
+
 <script>
   document.querySelectorAll('.btnShowAdd').forEach((button) => {
     button.addEventListener('click', () => {
@@ -554,6 +703,199 @@ render_header('Evaluation Management', $user);
       window.location.reload();
     });
   });
+
+  (function () {
+    const openBtn = document.getElementById('btnEvalDeliveryStatus');
+    const modal = document.getElementById('evalDeliveryModal');
+    if (!openBtn || !modal) return;
+
+    const closeBtn = document.getElementById('btnCloseEvalDelivery');
+    const refreshBtn = document.getElementById('btnRefreshEvalDelivery');
+    const selectAllBtn = document.getElementById('btnSelectAllEvalMissing');
+    const resendBtn = document.getElementById('btnResendEvalSelected');
+    const search = document.getElementById('evalDeliverySearch');
+    const message = document.getElementById('evalDeliveryMessage');
+    let hasQuestions = false;
+
+    const escapeHtml = (value) => String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const formatDate = (value) => {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      });
+    };
+
+    const updateSelected = () => {
+      const checked = modal.querySelectorAll('.eval-delivery-check:checked');
+      resendBtn.disabled = checked.length === 0 || !hasQuestions;
+      resendBtn.textContent = `Resend selected (${checked.length})`;
+    };
+
+    const applySearch = () => {
+      const term = String(search?.value || '').trim().toLocaleLowerCase();
+      modal.querySelectorAll('[data-eval-delivery-row]').forEach((row) => {
+        const haystack = String(row.getAttribute('data-search') || '').toLocaleLowerCase();
+        row.classList.toggle('hidden', term !== '' && !haystack.includes(term));
+      });
+    };
+
+    const renderRows = (container, rows, kind) => {
+      if (!container) return;
+      if (!rows.length) {
+        container.innerHTML = `<div class="py-6 text-center text-sm font-semibold text-zinc-400">${kind === 'received' ? 'No in-app evaluation notices recorded yet.' : 'Everyone eligible has an in-app notice.'}</div>`;
+        return;
+      }
+      container.innerHTML = rows.map((row) => {
+        const id = escapeHtml(row.student_id || '');
+        const name = escapeHtml(row.name || 'Student');
+        const studentNo = escapeHtml(row.student_no || 'Student number unavailable');
+        const searchable = escapeHtml(`${row.name || ''} ${row.student_no || ''}`);
+        if (kind === 'received') {
+          const sentAt = escapeHtml(formatDate(row.sent_at || ''));
+          return `<div data-eval-delivery-row data-search="${searchable}" class="rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-3">
+            <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="truncate text-sm font-bold text-zinc-900">${name}</div><div class="mt-0.5 text-xs text-zinc-500">${studentNo}</div></div><span class="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-700">In inbox</span></div>
+            ${sentAt ? `<div class="mt-2 text-[11px] text-zinc-500">Recorded ${sentAt}</div>` : ''}
+          </div>`;
+        }
+        return `<div data-eval-delivery-row data-search="${searchable}" class="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-3">
+          <div class="flex items-start gap-2">
+            <input type="checkbox" class="eval-delivery-check mt-1 rounded border-zinc-300 text-sky-700 focus:ring-sky-500" value="${id}" aria-label="Select ${name} for evaluation resend">
+            <div class="min-w-0 flex-1"><div class="truncate text-sm font-bold text-zinc-900">${name}</div><div class="mt-0.5 text-xs text-zinc-500">${studentNo}</div><div class="mt-1 text-[11px] text-amber-800">No in-app evaluation notice found</div></div>
+            <button type="button" class="eval-delivery-send-one shrink-0 rounded-lg bg-sky-700 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50" data-student-id="${id}" ${hasQuestions ? '' : 'disabled title="Add evaluation questions before resending"'}>Resend</button>
+          </div>
+        </div>`;
+      }).join('');
+      container.querySelectorAll('.eval-delivery-check').forEach((checkbox) => checkbox.addEventListener('change', updateSelected));
+      container.querySelectorAll('.eval-delivery-send-one').forEach((button) => button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void resendStudents([button.dataset.studentId || '']);
+      }));
+    };
+
+    const renderStatus = (data) => {
+      const received = Array.isArray(data.received) ? data.received : [];
+      const missing = Array.isArray(data.missing) ? data.missing : [];
+      hasQuestions = data.has_questions === true;
+      document.getElementById('evalDeliveryEligibleCount').textContent = String(Number(data.eligible_count ?? received.length + missing.length));
+      document.getElementById('evalDeliveryReceivedCount').textContent = String(Number(data.received_count ?? received.length));
+      document.getElementById('evalDeliveryMissingCount').textContent = String(Number(data.missing_count ?? missing.length));
+      document.getElementById('evalDeliveryReceivedBadge').textContent = String(received.length);
+      document.getElementById('evalDeliveryMissingBadge').textContent = String(missing.length);
+      renderRows(document.getElementById('evalDeliveryReceivedList'), received, 'received');
+      renderRows(document.getElementById('evalDeliveryMissingList'), missing, 'missing');
+      if (!hasQuestions) {
+        message.textContent = 'No evaluation questions are configured, so resending is disabled.';
+      } else if (received.length + missing.length === 0) {
+        message.textContent = 'No eligible checked-out attendees were found for this event yet.';
+      } else {
+        message.textContent = 'Select attendees with no in-app notice, then resend the evaluation reminder.';
+      }
+      applySearch();
+      updateSelected();
+    };
+
+    const postAction = async (action, studentIds = []) => {
+      const response = await fetch('/api/evaluation_delivery_status.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          action,
+          event_id: <?= json_encode($eventId) ?>,
+          student_ids: studentIds,
+          csrf_token: window.CSRF_TOKEN || ''
+        })
+      });
+      const raw = await response.text();
+      let data;
+      try { data = JSON.parse(raw); } catch (_) { throw new Error(`Server returned an invalid response (HTTP ${response.status}).`); }
+      if (!response.ok || !data?.ok) throw new Error(data?.error || `Request failed (HTTP ${response.status}).`);
+      return data;
+    };
+
+    const loadStatus = async () => {
+      const receivedList = document.getElementById('evalDeliveryReceivedList');
+      const missingList = document.getElementById('evalDeliveryMissingList');
+      receivedList.innerHTML = '<div class="py-6 text-center text-sm font-semibold text-zinc-400">Loading status…</div>';
+      missingList.innerHTML = '<div class="py-6 text-center text-sm font-semibold text-zinc-400">Loading status…</div>';
+      message.textContent = 'Loading evaluation delivery status…';
+      try {
+        renderStatus(await postAction('status'));
+      } catch (error) {
+        const safe = escapeHtml(error?.message || 'Could not load status.');
+        receivedList.innerHTML = `<div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">${safe}</div>`;
+        missingList.innerHTML = '';
+        message.textContent = error?.message || 'Could not load status.';
+      }
+    };
+
+    const resendStudents = async (rawIds) => {
+      const ids = [...new Set((rawIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+      if (!ids.length || !hasQuestions) return;
+      if (!window.confirm(`Resend the evaluation reminder to ${ids.length} selected attendee(s)?`)) return;
+      resendBtn.disabled = true;
+      message.textContent = `Resending evaluation notice to ${ids.length} attendee(s)…`;
+      let recorded = 0;
+      let pushSent = 0;
+      let pushFailed = 0;
+      let pushSkipped = false;
+      let inboxVerified = true;
+      try {
+        for (let offset = 0; offset < ids.length; offset += 20) {
+          const result = await postAction('resend', ids.slice(offset, offset + 20));
+          recorded += Number(result.in_app_recorded || 0);
+          pushSent += Number(result.push_sent || 0);
+          pushFailed += Number(result.push_failed || 0);
+          pushSkipped = pushSkipped || result.push_skipped === true;
+          inboxVerified = inboxVerified && result.in_app_verified === true;
+        }
+        await loadStatus();
+        const pushSummary = pushSkipped
+          ? 'Some students have no registered push device; the in-app inbox remains available.'
+          : `Push tokens sent: ${pushSent}${pushFailed > 0 ? `, failed: ${pushFailed}` : ''}.`;
+        message.textContent = inboxVerified
+          ? `In-app notice verified for ${recorded} of ${ids.length} selected attendee(s). ${pushSummary}`
+          : `Resend was attempted for ${ids.length} attendee(s), but the in-app inbox could not be verified. Refresh to check. ${pushSummary}`;
+      } catch (error) {
+        await loadStatus();
+        message.textContent = `${error?.message || 'Resend failed.'} Refresh status before retrying.`;
+      } finally {
+        updateSelected();
+      }
+    };
+
+    const openModal = () => {
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      void loadStatus();
+    };
+    const closeModal = () => {
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    };
+
+    openBtn.addEventListener('click', openModal);
+    closeBtn?.addEventListener('click', closeModal);
+    modal.addEventListener('click', (event) => { if (event.target === modal) closeModal(); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !modal.classList.contains('hidden')) closeModal(); });
+    refreshBtn?.addEventListener('click', () => void loadStatus());
+    search?.addEventListener('input', applySearch);
+    selectAllBtn?.addEventListener('click', () => {
+      modal.querySelectorAll('.eval-delivery-check').forEach((checkbox) => { checkbox.checked = true; });
+      updateSelected();
+    });
+    resendBtn?.addEventListener('click', () => {
+      const ids = Array.from(modal.querySelectorAll('.eval-delivery-check:checked')).map((checkbox) => checkbox.value);
+      void resendStudents(ids);
+    });
+  })();
 
   (function () {
     const exportBtn = document.getElementById('btn-export-feedback-pdf');

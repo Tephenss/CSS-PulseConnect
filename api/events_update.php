@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/event_date_scope.php';
 require_once __DIR__ . '/../includes/registration_access.php';
 require_once __DIR__ . '/../includes/student_requirements.php';
 require_once __DIR__ . '/../includes/event_schedule_conflict.php';
@@ -22,6 +23,23 @@ function mode_to_structure(string $eventMode, array $sessions): string
     }
 
     return count($sessions) > 1 ? 'two_seminars' : 'one_seminar';
+}
+
+function event_session_schedule_fingerprint(array $sessions): string
+{
+    $ranges = [];
+    foreach ($sessions as $session) {
+        try {
+            $start = new DateTimeImmutable((string) ($session['start_at'] ?? ''));
+            $end = new DateTimeImmutable((string) ($session['end_at'] ?? ''));
+            $ranges[] = [$start->getTimestamp(), $end->getTimestamp()];
+        } catch (Throwable $e) {
+            $ranges[] = ['', ''];
+        }
+    }
+    sort($ranges);
+
+    return (string) json_encode($ranges);
 }
 
 function is_missing_column_error(array $response, string $column): bool
@@ -51,13 +69,13 @@ $readHeaders = [
 ];
 
 $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-    . '&select=id,status,created_by,title,event_for,start_at,registration_close_weeks,registration_close_extend_days,allow_registration'
+    . '&select=id,status,created_by,title,event_for,start_at,end_at,registration_close_weeks,registration_close_extend_days,allow_registration'
     . '&limit=1';
 $checkRes = supabase_request('GET', $checkUrl, $readHeaders);
 if (!$checkRes['ok']) {
     // Older DBs without extend column — still need weeks for extend math.
     $checkUrlFb = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,created_by,title,event_for,start_at,registration_close_weeks,allow_registration'
+        . '&select=id,status,created_by,title,event_for,start_at,end_at,registration_close_weeks,allow_registration'
         . '&limit=1';
     $checkRes = supabase_request('GET', $checkUrlFb, $readHeaders);
 }
@@ -80,6 +98,23 @@ $sessionsProvided = array_key_exists('sessions', $data);
 $sessions = $sessionsProvided
     ? normalize_event_sessions($data['sessions'] ?? null, isset($data['location']) ? clean_string((string) $data['location']) : '')
     : [];
+$scheduleChanged = $eventMode !== $currentEventMode;
+if ($eventMode === 'seminar_based' && $sessionsProvided) {
+    $scheduleChanged = $scheduleChanged
+        || event_session_schedule_fingerprint($sessions) !== event_session_schedule_fingerprint($currentSessions);
+} elseif ($eventMode === 'simple' && isset($data['start_at'], $data['end_at'])) {
+    try {
+        $newStart = new DateTimeImmutable((string) $data['start_at']);
+        $newEnd = new DateTimeImmutable((string) $data['end_at']);
+        $oldStart = new DateTimeImmutable((string) ($currentEvent['start_at'] ?? ''));
+        $oldEnd = new DateTimeImmutable((string) ($currentEvent['end_at'] ?? ''));
+        $scheduleChanged = $scheduleChanged
+            || $newStart->getTimestamp() !== $oldStart->getTimestamp()
+            || $newEnd->getTimestamp() !== $oldEnd->getTimestamp();
+    } catch (Throwable $e) {
+        $scheduleChanged = true;
+    }
+}
 
 // Allow title/location/description/start_at/end_at updates.
 $fields = [];
@@ -253,6 +288,33 @@ if ($eventMode === 'seminar_based') {
     $fields['end_at'] = (string) ($window['end_at'] ?? '');
 }
 
+if ($scheduleChanged) {
+    try {
+        $scheduleStart = new DateTimeImmutable((string) ($fields['start_at'] ?? $currentEvent['start_at'] ?? ''));
+        $scheduleEnd = new DateTimeImmutable((string) ($fields['end_at'] ?? $currentEvent['end_at'] ?? ''));
+    } catch (Throwable $e) {
+        json_response(['ok' => false, 'error' => 'Invalid event schedule.'], 400);
+    }
+    if (!event_datetime_is_in_date_scope($scheduleStart) || !event_datetime_is_in_date_scope($scheduleEnd)) {
+        json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
+    }
+    if ($scheduleStart < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
+        json_response(['ok' => false, 'error' => 'Event schedule cannot be in the past. Choose today or a later date/time.'], 400);
+    }
+    if ($eventMode === 'seminar_based') {
+        foreach ($sessions as $session) {
+            $sessionStart = new DateTimeImmutable((string) $session['start_at']);
+            $sessionEnd = new DateTimeImmutable((string) $session['end_at']);
+            if (!event_datetime_is_in_date_scope($sessionStart) || !event_datetime_is_in_date_scope($sessionEnd)) {
+                json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
+            }
+            if ($sessionStart < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
+                json_response(['ok' => false, 'error' => 'Seminar schedule cannot be in the past. Choose today or a later date/time.'], 400);
+            }
+        }
+    }
+}
+
 if (count($fields) === 0) {
     json_response(['ok' => false, 'error' => 'No fields to update'], 400);
 }
@@ -411,6 +473,38 @@ if ($role === 'teacher' && $studentRequirementsProvided) {
 }
 
 require_once __DIR__ . '/../includes/api_cache.php';
+
+if ($role === 'admin') {
+    $teacherId = trim((string) ($currentEvent['created_by'] ?? ''));
+    if ($teacherId !== '') {
+        try {
+            $ownerUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+                . '?select=id,role&id=eq.' . rawurlencode($teacherId)
+                . '&limit=1';
+            $ownerRes = supabase_request('GET', $ownerUrl, $readHeaders);
+            $ownerRows = $ownerRes['ok'] ? json_decode((string) $ownerRes['body'], true) : [];
+            $owner = is_array($ownerRows) && isset($ownerRows[0]) && is_array($ownerRows[0])
+                ? $ownerRows[0]
+                : null;
+
+            if (is_array($owner) && strtolower(trim((string) ($owner['role'] ?? ''))) === 'teacher') {
+                require_once __DIR__ . '/../includes/user_notifications.php';
+                dispatch_user_notifications(
+                    [$teacherId],
+                    'Event Updated by Admin',
+                    'The admin updated an event you created. Open it to review the latest schedule and details.',
+                    [
+                        'type' => 'admin_event_updated',
+                        'event_id' => $eventId,
+                    ]
+                );
+            }
+        } catch (Throwable $e) {
+            error_log('events_update admin notification: ' . $e->getMessage());
+        }
+    }
+}
+
 api_cache_bump_generation('manage_events');
 
 if (is_array($event)) {
@@ -479,4 +573,3 @@ if (is_array($registrationExtendNotify)) {
 }
 
 json_response(['ok' => true, 'event' => $event, 'push' => $push], 200);
-
