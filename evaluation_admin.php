@@ -976,7 +976,7 @@ render_header('Evaluation Management', $user);
 
       if (type === 'feedback-pdf-started') {
         exportStarted = true;
-        armExportTimeout(90000);
+        armExportTimeout(300000);
         return;
       }
 
@@ -1020,9 +1020,9 @@ render_header('Evaluation Management', $user);
       if (label) label.textContent = 'Generating PDF...';
 
       exportFrame = document.createElement('iframe');
-      exportFrame.setAttribute('aria-hidden', 'true');
+      exportFrame.setAttribute('title', 'Generating event feedback PDF');
       exportFrame.setAttribute('tabindex', '-1');
-      exportFrame.style.cssText = 'position:fixed;left:0;top:0;width:1100px;height:1400px;border:0;opacity:0;pointer-events:none;z-index:-1';
+      exportFrame.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;border:0;background:#fff;z-index:10000';
       exportFrame.src = exportUrl + (exportUrl.indexOf('?') >= 0 ? '&' : '?') + '_ts=' + Date.now();
       document.body.appendChild(exportFrame);
 

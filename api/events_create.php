@@ -96,8 +96,10 @@ if ($end <= $start) {
 if (!event_datetime_is_in_date_scope($start) || !event_datetime_is_in_date_scope($end)) {
     json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
 }
-if ($start < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
-    json_response(['ok' => false, 'error' => 'Event schedule cannot be in the past. Choose today or a later date/time.'], 400);
+$manilaTimezone = new DateTimeZone('Asia/Manila');
+$firstAllowedEventDate = (new DateTimeImmutable('tomorrow', $manilaTimezone))->setTime(0, 0, 0);
+if ($start->setTimezone($manilaTimezone) < $firstAllowedEventDate) {
+    json_response(['ok' => false, 'error' => 'Events must be scheduled at least one day in advance. Choose a date starting tomorrow.'], 400);
 }
 if ($eventMode === 'seminar_based') {
     foreach ($sessions as $session) {
@@ -106,8 +108,8 @@ if ($eventMode === 'seminar_based') {
         if (!event_datetime_is_in_date_scope($sessionStart) || !event_datetime_is_in_date_scope($sessionEnd)) {
             json_response(['ok' => false, 'error' => event_date_scope_error()], 400);
         }
-        if ($sessionStart < new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'))) {
-            json_response(['ok' => false, 'error' => 'Seminar schedule cannot be in the past. Choose today or a later date/time.'], 400);
+        if ($sessionStart->setTimezone($manilaTimezone) < $firstAllowedEventDate) {
+            json_response(['ok' => false, 'error' => 'Seminar events must be scheduled at least one day in advance. Choose a date starting tomorrow.'], 400);
         }
     }
 }

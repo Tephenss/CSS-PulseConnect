@@ -6069,7 +6069,7 @@ if (btnRejectProposal && rejectModal) {
             const res = await fetch('/api/events_approve.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
+                body: JSON.stringify({ event_id, status: 'pending', reason, csrf_token: window.CSRF_TOKEN })
             });
             const data = await res.json();
             if (!data.ok) throw new Error(data.error || 'Failed to reject');

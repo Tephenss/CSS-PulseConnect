@@ -26,7 +26,7 @@ if ($eventId === '') {
 $headers = proposal_requirement_headers();
 $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
     . '?id=eq.' . rawurlencode($eventId)
-    . '&select=id,title,status,created_by,proposal_stage'
+    . '&select=id,title,status,description,created_by,proposal_stage'
     . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
 if (!$eventRes['ok']) {
@@ -47,42 +47,50 @@ if (strtolower(trim((string) ($event['status'] ?? ''))) !== 'pending') {
     json_response(['ok' => false, 'error' => 'Only pending proposals can be submitted for review.'], 400);
 }
 
+$isRevisionResubmission = str_contains((string) ($event['description'] ?? ''), '[REJECT_REASON:');
+
 $requirements = fetch_proposal_requirements_map([$eventId], $headers)[$eventId] ?? [];
-if ($requirements === []) {
+if ($requirements === [] && !$isRevisionResubmission) {
     json_response(['ok' => false, 'error' => 'Add the required proposal documents before submitting for review.'], 400);
 }
 
 $submissionMap = fetch_proposal_submissions_map([$eventId], $headers)[$eventId] ?? [];
 $summary = build_proposal_requirement_summary($requirements, $submissionMap);
-if (($summary['complete'] ?? false) !== true) {
+if ($requirements !== [] && ($summary['complete'] ?? false) !== true) {
     $submitted = (int) ($summary['submitted'] ?? 0);
     $total = (int) ($summary['total'] ?? count($requirements));
     json_response(['ok' => false, 'error' => 'Upload all required proposal documents before submitting for review. (' . $submitted . '/' . $total . ')'], 400);
 }
 
-$documentsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_proposal_documents'
-    . '?event_id=eq.' . rawurlencode($eventId)
-    . '&teacher_id=eq.' . rawurlencode($teacherId);
-$documentsPayload = json_encode([
-    'admin_visible' => true,
-    'visible_at' => gmdate('c'),
-    'updated_at' => gmdate('c'),
-], JSON_UNESCAPED_SLASHES);
-if (!is_string($documentsPayload)) {
-    json_response(['ok' => false, 'error' => 'Unable to prepare proposal document visibility payload.'], 500);
+if ($requirements !== []) {
+    $documentsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_proposal_documents'
+        . '?event_id=eq.' . rawurlencode($eventId)
+        . '&teacher_id=eq.' . rawurlencode($teacherId);
+    $documentsPayload = json_encode([
+        'admin_visible' => true,
+        'visible_at' => gmdate('c'),
+        'updated_at' => gmdate('c'),
+    ], JSON_UNESCAPED_SLASHES);
+    if (!is_string($documentsPayload)) {
+        json_response(['ok' => false, 'error' => 'Unable to prepare proposal document visibility payload.'], 500);
+    }
+
+    $documentsRes = supabase_request('PATCH', $documentsUrl, proposal_requirement_write_headers(), $documentsPayload);
+    if (!$documentsRes['ok']) {
+        json_response(['ok' => false, 'error' => build_error($documentsRes['body'] ?? null, (int) ($documentsRes['status'] ?? 0), $documentsRes['error'] ?? null, 'Failed to reveal the uploaded proposal documents')], 500);
+    }
 }
 
-$documentsRes = supabase_request('PATCH', $documentsUrl, proposal_requirement_write_headers(), $documentsPayload);
-if (!$documentsRes['ok']) {
-    json_response(['ok' => false, 'error' => build_error($documentsRes['body'] ?? null, (int) ($documentsRes['status'] ?? 0), $documentsRes['error'] ?? null, 'Failed to reveal the uploaded proposal documents')], 500);
-}
-
-$eventUpdatePayload = json_encode([
+$eventUpdate = [
     'proposal_stage' => 'under_review',
     'requirements_requested_at' => gmdate('c'),
     'requirements_submitted_at' => gmdate('c'),
     'updated_at' => gmdate('c'),
-], JSON_UNESCAPED_SLASHES);
+];
+if ($isRevisionResubmission) {
+    $eventUpdate['description'] = trim((string) preg_replace('/\[REJECT_REASON:.*?\]\s*/s', '', (string) ($event['description'] ?? '')));
+}
+$eventUpdatePayload = json_encode($eventUpdate, JSON_UNESCAPED_SLASHES);
 if (!is_string($eventUpdatePayload)) {
     json_response(['ok' => false, 'error' => 'Unable to prepare the proposal review payload.'], 500);
 }

@@ -57,6 +57,8 @@ declare(strict_types=1);
       background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 55%, #b45309 100%);
       color: #fff;
       padding: 24px 28px;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
     .export-cover .kicker {
       font-size: 11px;
@@ -127,8 +129,14 @@ declare(strict_types=1);
         size: A4;
         margin: 12mm;
       }
-      .no-print { display: none !important; }
+      .no-print,
+      .export-generating-banner { display: none !important; }
       .export-page { max-width: none; padding: 0; }
+      .export-cover,
+      .feedback-indicator-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
       .feedback-scroll-list { max-height: none !important; overflow: visible !important; }
       .rounded-2xl { overflow: visible !important; }
       .feedback-bar-chart,
@@ -151,11 +159,11 @@ declare(strict_types=1);
   <div class="export-toolbar no-print">
     <div>
       <strong>PulseConnect Event Feedback</strong>
-      <div class="text-xs text-zinc-500 mt-0.5">Download a clean PDF without browser URL/date headers.</div>
+      <div class="text-xs text-zinc-500 mt-0.5">Use your browser's print dialog to save this report as a PDF.</div>
     </div>
     <div class="flex gap-2">
-      <button type="button" class="btn-save-pdf" id="btn-download-pdf">Download PDF</button>
-      <button type="button" class="btn-close" onclick="window.close()">Close</button>
+      <button type="button" class="btn-save-pdf" id="btn-download-pdf">Print / Save PDF</button>
+      <button type="button" class="btn-close" id="btn-close-export">Close</button>
     </div>
   </div>
 
@@ -176,21 +184,12 @@ declare(strict_types=1);
     </div>
   </div>
 
-  <script src="/assets/js/html2pdf.bundle.min.js"></script>
   <script>
     (function () {
-      const pdfFilename = <?= json_encode(
-          preg_replace('/[^\p{L}\p{N}\s\-_]+/u', '', $eventTitle) ?: 'event-feedback',
-          JSON_UNESCAPED_UNICODE
-      ) ?> + '-feedback.pdf';
       const autoPrint = <?= $autoPrint ? 'true' : 'false' ?>;
       const inIframe = window.parent && window.parent !== window;
-      let started = false;
-      let attempt = 0;
-
-      function pdfReady() {
-        return typeof html2pdf !== 'undefined';
-      }
+      let printing = false;
+      let printFallback = null;
 
       function notifyParent(type, message, extra) {
         if (!inIframe) return;
@@ -238,121 +237,69 @@ declare(strict_types=1);
         });
       }
 
-      async function buildPdfBlob(element) {
-        return html2pdf().set({
-          margin: [8, 8, 8, 8],
-          filename: pdfFilename,
-          image: { type: 'jpeg', quality: 0.92 },
-          html2canvas: {
-            scale: 1.5,
-            useCORS: true,
-            allowTaint: true,
-            letterRendering: true,
-            logging: false,
-            backgroundColor: '#ffffff',
-          },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-          pagebreak: {
-            mode: ['css', 'legacy'],
-            avoid: ['.feedback-indicator-card', '.export-cover'],
-          },
-        }).from(element).outputPdf('blob');
-      }
-
-      function triggerLocalDownload(blob) {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = pdfFilename;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-      }
-
-      async function downloadCleanPdf() {
-        if (started) return;
-        started = true;
-        attempt += 1;
-
+      function finishPrint() {
+        if (!printing) return;
+        printing = false;
+        if (printFallback) {
+          window.clearTimeout(printFallback);
+          printFallback = null;
+        }
         const btn = document.getElementById('btn-download-pdf');
-        const element = document.querySelector('.export-page');
-        if (!element) {
-          notifyParent('feedback-pdf-error', 'Export content missing.');
-          started = false;
-          return;
-        }
-
-        if (!pdfReady()) {
-          notifyParent('feedback-pdf-error', 'PDF generator failed to load.');
-          if (!autoPrint) {
-            alert('PDF generator failed to load. Please refresh and try again.');
-          }
-          started = false;
-          return;
-        }
-
-        const originalLabel = btn ? btn.textContent : '';
         if (btn) {
-          btn.disabled = true;
-          btn.textContent = 'Generating PDF...';
+          btn.disabled = false;
         }
+        notifyParent('feedback-pdf-done');
+      }
 
+      async function printReport() {
+        if (printing) return;
+        printing = true;
+        const btn = document.getElementById('btn-download-pdf');
+        if (btn) btn.disabled = true;
         try {
           await waitForRenderReady();
           notifyParent('feedback-pdf-started');
-
-          const blob = await buildPdfBlob(element);
-          if (!(blob instanceof Blob)) {
-            throw new Error('PDF blob missing');
-          }
-
-          if (inIframe) {
-            notifyParent('feedback-pdf-blob', '', { blob: blob, filename: pdfFilename });
-          } else {
-            triggerLocalDownload(blob);
-            notifyParent('feedback-pdf-done');
-          }
+          window.setTimeout(function () {
+            printFallback = window.setTimeout(finishPrint, 300000);
+            try {
+              window.print();
+            } catch (err) {
+              console.error(err);
+              printing = false;
+              window.clearTimeout(printFallback);
+              printFallback = null;
+              if (btn) btn.disabled = false;
+              if (inIframe) {
+                notifyParent('feedback-pdf-error', 'Could not open the print dialog. Please try again.');
+              } else {
+                alert('Could not open the print dialog. Please try again.');
+              }
+            }
+          }, 150);
         } catch (err) {
           console.error(err);
-          if (attempt < 2) {
-            started = false;
-            await new Promise(function (resolve) { window.setTimeout(resolve, 600); });
-            return downloadCleanPdf();
-          }
-          notifyParent('feedback-pdf-error', 'Could not generate PDF.');
-          if (!autoPrint) {
-            alert('Could not generate PDF. Please try again.');
-          }
-        } finally {
-          if (btn) {
-            btn.disabled = false;
-            btn.textContent = originalLabel || 'Download PDF';
+          printing = false;
+          if (btn) btn.disabled = false;
+          if (inIframe) {
+            notifyParent('feedback-pdf-error', 'Could not open the print dialog. Please try again.');
+          } else {
+            alert('Could not prepare the report for printing. Please try again.');
           }
         }
       }
 
-      function startWhenReady(tries) {
-        const count = typeof tries === 'number' ? tries : 0;
-        if (!pdfReady()) {
-          if (count >= 120) {
-            notifyParent('feedback-pdf-error', 'PDF generator timed out loading.');
-            return;
-          }
-          window.setTimeout(function () { startWhenReady(count + 1); }, 100);
-          return;
+      window.addEventListener('afterprint', finishPrint);
+      document.getElementById('btn-download-pdf')?.addEventListener('click', printReport);
+      document.getElementById('btn-close-export')?.addEventListener('click', function () {
+        if (inIframe) {
+          finishPrint();
+        } else {
+          window.close();
         }
-        if (autoPrint) {
-          downloadCleanPdf();
-        }
-      }
-
-      document.getElementById('btn-download-pdf')?.addEventListener('click', function () {
-        started = false;
-        attempt = 0;
-        downloadCleanPdf();
       });
-      window.addEventListener('load', function () { startWhenReady(0); });
+      window.addEventListener('load', function () {
+        if (autoPrint) printReport();
+      });
     })();
   </script>
 </body>

@@ -30,6 +30,37 @@ $platform = trim((string) ($data['platform'] ?? 'android'));
 $deviceLabel = trim((string) ($data['device_label'] ?? ''));
 $purpose = mobile_email_otp_normalize_purpose((string) ($data['purpose'] ?? 'login'));
 
+$isIpKey = str_starts_with($deviceKey, 'ip:');
+$isInstallKey = str_starts_with($deviceKey, 'install:');
+$validDeviceKey = $isIpKey;
+if ($isInstallKey) {
+    $installId = substr($deviceKey, strlen('install:'));
+    $validDeviceKey = $installId !== '' && (bool) preg_match('/^[a-f0-9-]{16,80}$/', $installId);
+}
+
+// Older app builds may omit or use an unsupported install-key format. Match the
+// existing mobile trust endpoints by falling back to the request's network key.
+if ($purpose === 'login' && !$validDeviceKey) {
+    $deviceKey = device_trust_ip_key();
+    $isIpKey = str_starts_with($deviceKey, 'ip:');
+    $validDeviceKey = $isIpKey;
+}
+
+if ($purpose === 'login' && !$validDeviceKey) {
+    json_response([
+        'ok' => false,
+        'error' => 'Unable to identify this device or network. Please try again.',
+        'device_trusted' => false,
+    ], 400);
+}
+if ($deviceKey !== '' && !$validDeviceKey) {
+    json_response([
+        'ok' => false,
+        'error' => 'Invalid device identifier.',
+        'device_trusted' => false,
+    ], 400);
+}
+
 // Prefer session when present (daily re-verify / login OTP).
 // Signup OTP must use claimed user_id only — a leftover session from another
 // account would otherwise fail with "user_id does not match mobile session."
@@ -80,6 +111,36 @@ if (!($codeRes['ok'] ?? false)) {
 $codeRows = json_decode((string) $codeRes['body'], true);
 $row = is_array($codeRows) && isset($codeRows[0]) && is_array($codeRows[0]) ? $codeRows[0] : null;
 if (!$row) {
+    // A retry after the code was consumed should still succeed for this exact trusted device.
+    $trustedDeviceRes = null;
+    if ($purpose === 'login' && $sessionToken !== '' && $validDeviceKey) {
+        $trustedDeviceRes = supabase_request(
+            'GET',
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/trusted_devices'
+                . '?select=id'
+                . '&user_id=eq.' . rawurlencode($userId)
+                . '&device_key=eq.' . rawurlencode($deviceKey)
+                . '&limit=1',
+            device_trust_headers()
+        );
+    }
+    $trustedDeviceRows = json_decode((string) ($trustedDeviceRes['body'] ?? ''), true);
+    if (($trustedDeviceRes['ok'] ?? false) === true
+        && is_array($trustedDeviceRows)
+        && isset($trustedDeviceRows[0])
+        && is_array($trustedDeviceRows[0])) {
+        json_response([
+            'ok' => true,
+            'message' => 'This device is already verified.',
+            'purpose' => $purpose,
+            'user' => isset($sessionUser) && is_array($sessionUser)
+                ? mobile_user_strip_secrets($sessionUser)
+                : null,
+            'device_trusted' => true,
+            'already_verified' => true,
+        ], 200);
+    }
+
     json_response([
         'ok' => false,
         'error' => $purpose === 'signup'
@@ -144,43 +205,37 @@ if (!$userRes['ok']) {
     json_response(['ok' => false, 'error' => 'Failed to update verification status.'], 500);
 }
 
-// Delete only this purpose's code so signup/login stay independent.
+$userRows = json_decode((string) $userRes['body'], true);
+$user = is_array($userRows) && isset($userRows[0]) && is_array($userRows[0])
+    ? mobile_user_strip_secrets($userRows[0])
+    : null;
+
+// Trust the device before consuming its OTP so a transient database failure is retryable.
+$trustedDevice = false;
+if ($deviceKey !== '') {
+    $upsert = device_trust_upsert(
+        $userId,
+        $deviceKey,
+        $platform !== '' ? $platform : 'android',
+        $deviceLabel !== '' ? $deviceLabel : $deviceKey
+    );
+    $trustedDevice = ($upsert['ok'] ?? false) === true;
+    if (!$trustedDevice) {
+        json_response([
+            'ok' => false,
+            'error' => 'Your email was verified, but this device could not be saved as trusted. Please try again.',
+            'device_trusted' => false,
+        ], 503);
+    }
+}
+
+// Delete only this purpose's code after both account verification and device trust succeed.
 $deleteUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/email_verification_codes'
     . '?user_id=eq.' . rawurlencode($userId);
 if ($purposeFilterOk) {
     $deleteUrl .= '&purpose=eq.' . rawurlencode($purpose);
 }
 supabase_request('DELETE', $deleteUrl, $headers);
-
-$userRows = json_decode((string) $userRes['body'], true);
-$user = is_array($userRows) && isset($userRows[0]) && is_array($userRows[0])
-    ? mobile_user_strip_secrets($userRows[0])
-    : null;
-
-// After a successful OTP, trust this phone install so signup → login does not
-// demand a second code on the same device.
-$trustedDevice = false;
-if ($deviceKey !== '') {
-    $isIpKey = str_starts_with($deviceKey, 'ip:');
-    $isInstallKey = str_starts_with($deviceKey, 'install:');
-    if ($isIpKey || $isInstallKey) {
-        $validInstall = true;
-        if ($isInstallKey) {
-            $installId = substr($deviceKey, strlen('install:'));
-            $validInstall = $installId !== '' && (bool) preg_match('/^[a-f0-9-]{16,80}$/', $installId);
-        }
-        if ($validInstall) {
-            $upsert = device_trust_upsert(
-                $userId,
-                $deviceKey,
-                $platform !== '' ? $platform : 'android',
-                $deviceLabel !== '' ? $deviceLabel : $deviceKey
-            );
-            $trustedDevice = (($upsert['ok'] ?? false) === true)
-                || (($upsert['missing_table'] ?? false) === true);
-        }
-    }
-}
 
 json_response([
     'ok' => true,

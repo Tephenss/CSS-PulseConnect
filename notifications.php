@@ -57,7 +57,7 @@ render_header('Notifications', $user);
           $description = trim((string) ($item['description'] ?? ''));
           $link = trim((string) ($item['link'] ?? '/notifications.php'));
         ?>
-        <a href="<?= htmlspecialchars($link) ?>" class="block px-5 py-4 hover:bg-zinc-50 transition">
+        <a href="<?= htmlspecialchars($link) ?>" class="block px-5 py-5 hover:bg-zinc-50 transition">
           <div class="flex items-start gap-4">
             <div class="mt-1 w-10 h-10 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center flex-shrink-0">
               <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -66,13 +66,13 @@ render_header('Notifications', $user);
             </div>
             <div class="min-w-0 flex-1">
               <?php if ($area !== ''): ?>
-                <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-1"><?= htmlspecialchars($area) ?></div>
+                <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-1" style="overflow-wrap:anywhere"><?= htmlspecialchars($area) ?></div>
               <?php endif; ?>
-              <div class="flex items-start justify-between gap-4">
-                <h4 class="text-sm font-bold text-zinc-900"><?= htmlspecialchars($title) ?></h4>
-                <span class="text-[11px] font-medium text-zinc-400 whitespace-nowrap"><?= htmlspecialchars($createdAtLabel) ?></span>
+              <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-4">
+                <h4 class="min-w-0 text-sm font-bold leading-snug text-zinc-900" style="overflow-wrap:anywhere"><?= htmlspecialchars($title) ?></h4>
+                <time class="shrink-0 text-[11px] font-medium text-zinc-400"><?= htmlspecialchars($createdAtLabel) ?></time>
               </div>
-              <p class="text-sm text-zinc-600 mt-1 leading-relaxed"><?= htmlspecialchars($description) ?></p>
+              <p class="text-sm text-zinc-600 mt-2 leading-relaxed whitespace-pre-wrap" style="overflow-wrap:anywhere"><?= htmlspecialchars($description) ?></p>
             </div>
           </div>
         </a>

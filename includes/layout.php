@@ -247,7 +247,7 @@ function render_header(string $title, ?array $user): void
                 </div>
                 
                 <div class="px-5 py-3 border-t border-zinc-100 bg-zinc-50 rounded-b-2xl">
-                    <a href="/notifications" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
+                    <a href="/notifications.php" class="block text-center text-xs font-semibold text-emerald-600 hover:text-emerald-800 transition">See All Notifications</a>
                 </div>
             </div>
 
@@ -414,8 +414,7 @@ function render_header(string $title, ?array $user): void
                     const areaLabel = escapeNotificationHtml(item.area || "Notification");
                     const title = escapeNotificationHtml(item.title || "Notification");
                     const description = escapeNotificationHtml(item.description || "");
-                    const link = String(item.link || "/notifications");
-                    const safeLink = link.startsWith("/") && !link.startsWith("//") ? link : "/notifications";
+                    const safeLink = "/notifications.php";
                     const rowStyle = isRead
                         ? "bg-white border-l-4 border-l-transparent hover:bg-zinc-50/80"
                         : "bg-emerald-50/70 border-l-4 border-l-emerald-500 hover:bg-emerald-50";

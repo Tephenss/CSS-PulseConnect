@@ -346,6 +346,12 @@ $status = isset($data['status']) ? trim((string) $data['status']) : 'approved';
 $rejectionReason = isset($data['reason']) ? trim((string) $data['reason']) : '';
 $teacherIds = normalize_id_list($data['teacher_ids'] ?? null);
 
+// Older clients sent "archived" for proposal rejections. Keep those requests
+// in the approval workflow when they include an admin revision note.
+if ($status === 'archived' && $rejectionReason !== '') {
+    $status = 'pending';
+}
+
 if ($eventId === '') {
     json_response(['ok' => false, 'error' => 'event_id required'], 400);
 }
@@ -421,16 +427,23 @@ $payload = [
 
 if ($status === 'approved' && $supportsProposalStage) {
     $payload['proposal_stage'] = 'approved';
+} elseif ($status === 'pending' && $rejectionReason !== '' && $supportsProposalStage) {
+    $payload['proposal_stage'] = 'under_review';
 }
 
 if ($status === 'published' && $previousStatus !== 'published') {
     $payload['allow_registration'] = normalize_registration_bool($existingEvent['is_free_event'] ?? true);
 }
 
-if (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
+if (in_array($status, ['draft', 'pending', 'archived'], true) && $rejectionReason !== '') {
     $cleanDesc = (string) ($existingEvent['description'] ?? '');
     $cleanDesc = preg_replace('/\[REJECT_REASON:.*?\]\s*/s', '', $cleanDesc);
     $payload['description'] = '[REJECT_REASON: ' . $rejectionReason . '] ' . $cleanDesc;
+} elseif (in_array($status, ['approved', 'published'], true)) {
+    $description = (string) ($existingEvent['description'] ?? '');
+    if (str_contains($description, '[REJECT_REASON:')) {
+        $payload['description'] = trim((string) preg_replace('/\[REJECT_REASON:.*?\]\s*/s', '', $description));
+    }
 }
 
 $updateHeaders = $headers;
@@ -669,7 +682,7 @@ api_cache_bump_generation('manage_events');
 $notifyTeacher = false;
 if ($status === 'approved') {
     $notifyTeacher = true;
-} elseif (in_array($status, ['draft', 'archived'], true) && $rejectionReason !== '') {
+} elseif (in_array($status, ['draft', 'pending', 'archived'], true) && $rejectionReason !== '') {
     $notifyTeacher = true;
 }
 

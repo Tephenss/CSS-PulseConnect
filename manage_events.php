@@ -575,6 +575,14 @@ render_header('Manage Events', $user);
     border-color: #ea580c !important;
   }
 
+  .flatpickr-day.flatpickr-disabled,
+  .flatpickr-day.flatpickr-disabled:hover {
+    color: #a1a1aa !important;
+    background: #f4f4f5 !important;
+    border-color: transparent !important;
+    cursor: not-allowed !important;
+  }
+
   .flatpickr-input[readonly] {
     background-color: #fff !important;
     cursor: pointer;
@@ -885,7 +893,7 @@ render_header('Manage Events', $user);
         <div id="step3" class="space-y-4 hidden pb-4">
           <p class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
             Event dates must be within the 2-year scope: January 1, <?= (int) $eventDateScope['start_year'] ?>
-            to December 31, <?= (int) $eventDateScope['end_year'] ?>. Past dates and times are not allowed.
+            to December 31, <?= (int) $eventDateScope['end_year'] ?>. Events must be scheduled at least one day in advance; today's date is unavailable.
           </p>
           <div>
             <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Grace Time (Minutes)</label>
@@ -1951,7 +1959,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                   <?php endif; ?>
                 </div>
 
-                <?php if ($status === 'archived' && $isRejected): ?>
+                <?php if ($isRejected && $status === 'pending'): ?>
                       <div class="proposal-reject-remark mb-3 p-3 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs shadow-sm">
                     <div class="flex items-center gap-2 font-bold mb-1.5 text-rose-700">
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
@@ -2102,6 +2110,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                     class="btnEdit rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50 transition font-medium"
                       data-id="<?= htmlspecialchars($eid) ?>"
                     data-status="<?= htmlspecialchars($status) ?>"
+                    data-is-rejected="<?= $isRejected ? '1' : '0' ?>"
                       data-title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>"
                       data-location="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
                     data-location-full="<?= htmlspecialchars((string) ($e['location'] ?? '')) ?>"
@@ -3016,6 +3025,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
   let teacherProposalEditState = {
     status: '',
     stage: '',
+    is_rejected: false,
     requirements: [],
     submissions: [],
   };
@@ -3123,6 +3133,11 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
   function earliestAllowedScheduleDateTime() {
     const now = new Date();
+    if ((document.getElementById('mode')?.value || 'create') === 'create') {
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 7, 0, 0, 0);
+      return tomorrow;
+    }
+
     const d = new Date(now);
     const minute = d.getMinutes() + 1;
     d.setSeconds(0, 0);
@@ -3281,7 +3296,13 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         return { message: `All event and seminar dates must be within the 2-year scope (${dateScopeLabel}).`, inputId: entry.inputId };
       }
       if (notPastFloor && date < notPastFloor) {
-        return { message: 'Event and seminar schedules cannot be in the past. Choose a time from now onward.', inputId: entry.inputId };
+        const isCreate = (document.getElementById('mode')?.value || 'create') === 'create';
+        return {
+          message: isCreate
+            ? 'Events must be scheduled at least one day in advance. Today is not available.'
+            : 'Event and seminar schedules cannot be in the past. Choose a time from now onward.',
+          inputId: entry.inputId,
+        };
       }
     }
     return null;
@@ -3691,6 +3712,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     teacherProposalEditState = {
       status: '',
       stage: '',
+      is_rejected: false,
       requirements: [],
       submissions: [],
     };
@@ -3775,6 +3797,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
       teacherProposalEditState = {
         status: String(source.dataset.status || '').trim().toLowerCase(),
         stage: String(source.dataset.proposal_stage || '').trim().toLowerCase(),
+        is_rejected: source.dataset.isRejected === '1',
         requirements: Array.isArray(requirements) ? requirements : [],
         submissions: Array.isArray(submissions) ? submissions : [],
       };
@@ -4308,7 +4331,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
       const submitLabel = document.querySelector('#btnSubmit span:last-child');
       if (submitLabel) {
         const sourceStatus = String(ds('status') || '').trim().toLowerCase();
-        submitLabel.textContent = teacherProposalMode && sourceStatus === 'archived'
+        submitLabel.textContent = teacherProposalMode && (sourceStatus === 'archived' || source.dataset.isRejected === '1')
           ? 'Resubmit for Review'
           : (teacherProposalMode && String(ds('proposal_stage') || '').trim().toLowerCase() === 'pending_requirements'
             ? 'Submit for Review'
@@ -5471,7 +5494,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
           const minAllowed = earliestAllowedScheduleDateTime();
           const hasEarlySeminar = sessions.some((session) => new Date(session.start_at) < minAllowed);
           if (hasEarlySeminar) {
-            throw new Error('Seminar start date/time must be current or future (starting 7:00 AM).');
+            throw new Error('Seminar events must be scheduled at least one day in advance. Choose a date starting tomorrow.');
           }
         }
 
@@ -5498,7 +5521,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
           throw new Error('Event time must be 7:00 AM or later, and minutes must be 00 or 30 only.');
         }
         if (mode === 'create' && startDate < earliestAllowedScheduleDateTime()) {
-          throw new Error('Start date/time must be current or future (starting 7:00 AM).');
+          throw new Error('Events must be scheduled at least one day in advance. Choose a date starting tomorrow.');
         }
         endDate = new Date(
           startDate.getFullYear(),
@@ -5690,7 +5713,8 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         draftEventId = '';
       } else if (teacherProposalMode && mode === 'edit') {
         const eventId = String(payload.event_id || '').trim();
-        const shouldSubmitForReview = teacherProposalEditState.status === 'archived'
+        const shouldSubmitForReview = teacherProposalEditState.is_rejected
+          || teacherProposalEditState.status === 'archived'
           || teacherProposalEditState.stage === 'pending_requirements';
 
         if (shouldSubmitForReview && !eventId) {
@@ -5720,7 +5744,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
         if (shouldSubmitForReview) {
           showWizardStepProgress(
-            teacherProposalEditState.status === 'archived'
+            (teacherProposalEditState.status === 'archived' || teacherProposalEditState.is_rejected)
               ? 'Submitting updated proposal for admin review...'
               : 'Submitting proposal for admin review...'
           );
@@ -5739,7 +5763,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
       showWizardFooterStatus(
         (teacherProposalMode && mode === 'create')
           ? 'Proposal submitted for admin review!'
-          : (teacherProposalMode && mode === 'edit' && (teacherProposalEditState.status === 'archived' || teacherProposalEditState.stage === 'pending_requirements'))
+          : (teacherProposalMode && mode === 'edit' && (teacherProposalEditState.status === 'archived' || teacherProposalEditState.is_rejected || teacherProposalEditState.stage === 'pending_requirements'))
             ? 'Proposal submitted for admin review!'
             : 'Success!',
         'success'
@@ -6205,8 +6229,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         const res = await fetch('/api/events_approve.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // Archiving as rejection
-          body: JSON.stringify({ event_id, status: 'archived', reason, csrf_token: window.CSRF_TOKEN })
+          body: JSON.stringify({ event_id, status: 'pending', reason, csrf_token: window.CSRF_TOKEN })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'Failed');
@@ -6892,7 +6915,6 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
   }
 
   function formatLiveStatusLabel(status, isRejected) {
-    if (isRejected) return 'Rejected';
     const normalized = String(status || '').toLowerCase();
     if (!normalized) return 'Unknown';
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -6973,6 +6995,8 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
     if (isRejected && eventData.reject_reason) {
       upsertRejectRemark(card, eventData.reject_reason);
+    } else {
+      card.querySelector('.proposal-reject-remark')?.classList.add('hidden');
     }
 
     const stageStyle = liveStageStyles[eventData.proposal_stage] || liveStageStyles.pending_requirements;

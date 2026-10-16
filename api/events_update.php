@@ -69,13 +69,13 @@ $readHeaders = [
 ];
 
 $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-    . '&select=id,status,created_by,title,event_for,start_at,end_at,registration_close_weeks,registration_close_extend_days,allow_registration'
+    . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_close_weeks,registration_close_extend_days,allow_registration'
     . '&limit=1';
 $checkRes = supabase_request('GET', $checkUrl, $readHeaders);
 if (!$checkRes['ok']) {
     // Older DBs without extend column — still need weeks for extend math.
     $checkUrlFb = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,created_by,title,event_for,start_at,end_at,registration_close_weeks,allow_registration'
+        . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_close_weeks,allow_registration'
         . '&limit=1';
     $checkRes = supabase_request('GET', $checkUrlFb, $readHeaders);
 }
@@ -333,13 +333,20 @@ if ($role === 'teacher') {
         json_response(['ok' => false, 'error' => 'Only pending, published, or rejected events can be edited'], 409);
     }
 
-    // If it was archived (rejected), move it back to pending for review
-    if ($currentStatus === 'archived') {
+    $isRejectedProposal = str_contains((string) ($currentEvent['description'] ?? ''), '[REJECT_REASON:');
+
+    // Legacy rejected rows may still be archived; restore them as pending when edited.
+    if ($currentStatus === 'archived' && $isRejectedProposal) {
         $fields['status'] = 'pending';
-        // Optional: clear the [REJECT_REASON] if they are updating the description
-        if (isset($fields['description'])) {
-            $fields['description'] = trim(preg_replace('/\[REJECT_REASON:.*?\]/', '', (string)$fields['description']));
-        }
+    }
+
+    // Keep the rejection marker until the explicit resubmit endpoint clears it.
+    if ($isRejectedProposal && isset($fields['description'])) {
+        $currentDescription = (string) ($currentEvent['description'] ?? '');
+        preg_match('/\[REJECT_REASON:\s*(.*?)\]/s', $currentDescription, $reasonMatch);
+        $reason = trim((string) ($reasonMatch[1] ?? 'Proposal review required.'));
+        $editedDescription = trim((string) preg_replace('/\[REJECT_REASON:.*?\]\s*/s', '', (string) $fields['description']));
+        $fields['description'] = '[REJECT_REASON: ' . $reason . '] ' . $editedDescription;
     }
 }
 
