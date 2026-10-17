@@ -34,7 +34,7 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,is_free_event&id=eq.' . rawurlencode($eventId) . '&limit=1';
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,is_free_event,event_mode,event_structure&id=eq.' . rawurlencode($eventId) . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
 $eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : [];
 $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
@@ -64,6 +64,12 @@ if ($tab === 'questions') {
 
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = count($sessions) > 0;
+$eventStructure = resolve_event_structure_key($event, $sessions);
+$eventStructureLabel = match ($eventStructure) {
+    'one_seminar' => 'One seminar',
+    'two_seminars' => 'Two seminars',
+    default => 'Simple event',
+};
 $isFinishedEvent = strtolower(trim((string) ($event['status'] ?? ''))) === 'finished';
 if ($isFinishedEvent && $tab === 'questions') {
     header('Location: /evaluation_admin?event_id=' . rawurlencode($eventId) . '&tab=feedback');
@@ -93,6 +99,14 @@ $eventQuestionsRes = supabase_request('GET', $eventQuestionsUrl, $headers);
 $eventQuestionRows = $eventQuestionsRes['ok'] ? json_decode((string) $eventQuestionsRes['body'], true) : [];
 $eventQuestions = is_array($eventQuestionRows) ? $eventQuestionRows : [];
 $eventQuestions = evaluation_sort_questions_by_type($eventQuestions);
+$eventQuestionPresetSnapshot = array_map(
+    static fn (array $question): array => [
+        'question_text' => (string) ($question['question_text'] ?? ''),
+        'field_type' => strtolower(trim((string) ($question['field_type'] ?? 'text'))) === 'rating' ? 'rating' : 'text',
+        'required' => !empty($question['required']),
+    ],
+    array_values(array_filter($eventQuestions, 'is_array'))
+);
 foreach ($eventQuestions as $question) {
     $isRating = strtolower(trim((string) ($question['field_type'] ?? 'text'))) === 'rating';
     $groupKey = $isRating ? 'Rating (1–5)' : 'Comment / Text';
@@ -179,6 +193,40 @@ if ($usesSessions) {
             : 0;
     }
 }
+
+$questionPresetSets = [
+    'event_questions' => $eventQuestionPresetSnapshot,
+    'seminars' => [],
+];
+foreach (array_values($sessions) as $sessionIndex => $session) {
+    $sessionId = trim((string) ($session['id'] ?? ''));
+    if ($sessionId === '') {
+        continue;
+    }
+    $seminarQuestions = array_values(array_filter(
+        $sessionQuestions,
+        static fn (array $question): bool => (string) ($question['session_id'] ?? '') === $sessionId
+    ));
+    $questionPresetSets['seminars'][] = [
+        'seminar_no' => $sessionIndex + 1,
+        'questions' => array_map(
+            static fn (array $question): array => [
+                'question_text' => (string) ($question['question_text'] ?? ''),
+                'field_type' => strtolower(trim((string) ($question['field_type'] ?? 'text'))) === 'rating' ? 'rating' : 'text',
+                'required' => !empty($question['required']),
+            ],
+            $seminarQuestions
+        ),
+    ];
+}
+$presetQuestionCount = count($questionPresetSets['event_questions']);
+foreach ($questionPresetSets['seminars'] as $seminarSet) {
+    $presetQuestionCount += count($seminarSet['questions']);
+}
+$questionPresetSetsJson = json_encode(
+    $questionPresetSets,
+    JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE
+) ?: '{"event_questions":[],"seminars":[]}';
 
 if ($tab === 'feedback') {
     $feedbackSections = evaluation_feedback_load_sections(
@@ -305,10 +353,34 @@ render_header('Evaluation Management', $user);
               <div class="text-lg font-bold text-zinc-900">Event Questions</div>
               <p class="text-xs text-zinc-500 mt-1">General questions not tied to a specific seminar.</p>
             </div>
-            <button type="button" class="btnShowAdd inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition" data-target="event">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
-              Add Question
-            </button>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" id="btnToggleQuestionPresets" aria-expanded="false" aria-controls="questionPresetsPanel" class="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50 transition">
+                <svg class="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 4.5h13.5v15l-6.75-3.75-6.75 3.75v-15z"/></svg>
+                Question Presets
+              </button>
+              <button type="button" class="btnShowAdd inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition" data-target="event">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Add Question
+              </button>
+            </div>
+          </div>
+
+          <div id="questionPresetsPanel" class="hidden mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+            <div class="mb-3">
+              <h4 class="text-sm font-bold text-zinc-900">Reusable question presets</h4>
+              <p class="mt-1 text-xs text-zinc-500">For <strong><?= htmlspecialchars($eventStructureLabel, ENT_QUOTES, 'UTF-8') ?></strong>. Saves Event Questions and all Seminar Questions; reusing adds them back to the matching sections.</p>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <select id="questionPresetSelect" class="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" aria-label="Saved question presets">
+                <option value="">Loading saved presets...</option>
+              </select>
+              <button type="button" id="btnApplyQuestionPreset" disabled class="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">Add preset</button>
+              <button type="button" id="btnRemoveQuestionPreset" disabled class="rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50">Remove preset</button>
+              <button type="button" id="btnSaveQuestionPreset" <?= $presetQuestionCount > 0 ? '' : 'disabled' ?> class="rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">Save current</button>
+            </div>
+            <p id="questionPresetMessage" class="mt-2 min-h-4 text-xs text-zinc-500" aria-live="polite">
+              <?= $presetQuestionCount > 0 ? 'Saving includes question wording, response type, and required setting for each section.' : 'Add at least one event or seminar question before saving a preset.' ?>
+            </p>
           </div>
 
           <div class="newQuestionCard hidden relative bg-emerald-50/50 rounded-3xl border-2 border-emerald-500/30 p-6 shadow-sm mb-4" data-target="event">
@@ -392,6 +464,21 @@ render_header('Evaluation Management', $user);
               </div>
             </div>
           <?php endforeach; ?>
+        </div>
+
+        <div id="saveQuestionPresetModal" class="fixed inset-0 z-[120] hidden items-center justify-center bg-zinc-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="saveQuestionPresetTitle">
+          <div class="absolute inset-0" data-close-question-preset-modal></div>
+          <form id="saveQuestionPresetForm" class="relative w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xl">
+            <h3 id="saveQuestionPresetTitle" class="text-lg font-bold text-zinc-900">Save question preset</h3>
+            <p class="mt-1 text-sm text-zinc-500">This saves Event Questions and each seminar's questions in their matching sections.</p>
+            <label for="questionPresetName" class="mt-4 block text-xs font-bold text-zinc-700">Preset name</label>
+            <input id="questionPresetName" name="preset_name" maxlength="80" required class="mt-1.5 w-full rounded-xl border border-zinc-300 px-3.5 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" placeholder="e.g. General seminar feedback">
+            <p id="saveQuestionPresetError" class="mt-2 min-h-4 text-xs text-rose-600" aria-live="polite"></p>
+            <div class="mt-5 flex justify-end gap-2">
+              <button type="button" id="btnCancelSaveQuestionPreset" class="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button type="submit" id="btnConfirmSaveQuestionPreset" class="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800">Save preset</button>
+            </div>
+          </form>
         </div>
 
         <?php if ($usesSessions): ?>
@@ -703,6 +790,215 @@ render_header('Evaluation Management', $user);
       window.location.reload();
     });
   });
+
+  (function () {
+    const toggleButton = document.getElementById('btnToggleQuestionPresets');
+    const panel = document.getElementById('questionPresetsPanel');
+    const presetSelect = document.getElementById('questionPresetSelect');
+    const applyButton = document.getElementById('btnApplyQuestionPreset');
+    const removeButton = document.getElementById('btnRemoveQuestionPreset');
+    const saveButton = document.getElementById('btnSaveQuestionPreset');
+    const message = document.getElementById('questionPresetMessage');
+    const modal = document.getElementById('saveQuestionPresetModal');
+    const saveForm = document.getElementById('saveQuestionPresetForm');
+    if (!toggleButton || !panel || !presetSelect || !applyButton || !removeButton || !saveButton || !message || !modal || !saveForm) return;
+
+    const eventId = <?= json_encode($eventId, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+    const eventStructureLabel = <?= json_encode($eventStructureLabel, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+    const questionSets = <?= $questionPresetSetsJson ?>;
+    const questionCount = <?= (int) $presetQuestionCount ?>;
+    let presets = [];
+
+    const setMessage = (text, isError = false) => {
+      message.textContent = text;
+      message.classList.toggle('text-rose-600', isError);
+      message.classList.toggle('text-zinc-500', !isError);
+    };
+
+    const readJson = async (response) => {
+      const raw = await response.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (_) {
+        throw new Error(`Server returned an invalid response (HTTP ${response.status}).`);
+      }
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || `Request failed (HTTP ${response.status}).`);
+      }
+      return data;
+    };
+
+    const loadPresets = async (selectId = '') => {
+      presetSelect.innerHTML = '';
+      const loadingOption = document.createElement('option');
+      loadingOption.value = '';
+      loadingOption.textContent = 'Loading saved presets...';
+      presetSelect.appendChild(loadingOption);
+      applyButton.disabled = true;
+      removeButton.disabled = true;
+
+      try {
+        const url = `/api/evaluation_question_presets.php?event_id=${encodeURIComponent(eventId)}`;
+        const data = await readJson(await fetch(url, { headers: { Accept: 'application/json' } }));
+        presets = Array.isArray(data.presets) ? data.presets : [];
+        presetSelect.innerHTML = '';
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = presets.length ? 'Choose a saved preset...' : `No presets for ${eventStructureLabel}`;
+        presetSelect.appendChild(placeholder);
+
+        presets.forEach((preset) => {
+          const option = document.createElement('option');
+          option.value = preset.id;
+          option.textContent = `${preset.preset_name} (${preset.question_count} questions)`;
+          presetSelect.appendChild(option);
+        });
+
+        if (selectId && presets.some((preset) => preset.id === selectId)) {
+          presetSelect.value = selectId;
+        }
+        applyButton.disabled = !presetSelect.value;
+        removeButton.disabled = !presetSelect.value;
+        setMessage(presets.length
+          ? `${presets.length} saved preset${presets.length === 1 ? '' : 's'} available. Applying one adds its questions to this event.`
+          : `No saved presets for ${eventStructureLabel} yet. Save your current event questions to reuse them on matching events.`);
+      } catch (error) {
+        presets = [];
+        presetSelect.innerHTML = '';
+        const errorOption = document.createElement('option');
+        errorOption.value = '';
+        errorOption.textContent = 'Could not load presets';
+        presetSelect.appendChild(errorOption);
+        applyButton.disabled = true;
+        removeButton.disabled = true;
+        setMessage(error.message || 'Could not load question presets.', true);
+      }
+    };
+
+    const closeModal = () => {
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    };
+
+    toggleButton.addEventListener('click', () => {
+      const willOpen = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !willOpen);
+      toggleButton.setAttribute('aria-expanded', String(willOpen));
+      if (willOpen && presets.length === 0) loadPresets();
+    });
+
+    presetSelect.addEventListener('change', () => {
+      applyButton.disabled = !presetSelect.value;
+      removeButton.disabled = !presetSelect.value;
+    });
+
+    removeButton.addEventListener('click', async () => {
+      const preset = presets.find((item) => item.id === presetSelect.value);
+      if (!preset) return;
+      if (!confirm(`Remove the saved preset "${preset.preset_name}"? This will not remove questions already added to events.`)) return;
+
+      removeButton.disabled = true;
+      removeButton.textContent = 'Removing...';
+      try {
+        await readJson(await fetch('/api/evaluation_question_presets.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            action: 'delete',
+            event_id: eventId,
+            preset_id: preset.id,
+            csrf_token: window.CSRF_TOKEN || ''
+          })
+        }));
+        await loadPresets();
+        setMessage(`Removed "${preset.preset_name}". Questions already added to events are unchanged.`);
+      } catch (error) {
+        setMessage(error.message || 'Could not remove this preset.', true);
+        removeButton.disabled = !presetSelect.value;
+      } finally {
+        removeButton.textContent = 'Remove preset';
+      }
+    });
+
+    saveButton.addEventListener('click', () => {
+      if (!questionSets || questionCount === 0) {
+        setMessage('Add at least one event or seminar question before saving a preset.', true);
+        return;
+      }
+      document.getElementById('saveQuestionPresetError').textContent = '';
+      document.getElementById('questionPresetName').value = '';
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      document.getElementById('questionPresetName').focus();
+    });
+
+    document.getElementById('btnCancelSaveQuestionPreset').addEventListener('click', closeModal);
+    modal.querySelector('[data-close-question-preset-modal]').addEventListener('click', closeModal);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    });
+
+    saveForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const nameInput = document.getElementById('questionPresetName');
+      const errorText = document.getElementById('saveQuestionPresetError');
+      const submitButton = document.getElementById('btnConfirmSaveQuestionPreset');
+      submitButton.disabled = true;
+      submitButton.textContent = 'Saving...';
+      errorText.textContent = '';
+
+      try {
+        const data = await readJson(await fetch('/api/evaluation_question_presets.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            action: 'save',
+            event_id: eventId,
+            preset_name: nameInput.value,
+            questions: questionSets,
+            csrf_token: window.CSRF_TOKEN || ''
+          })
+        }));
+        closeModal();
+        await loadPresets(data.preset?.id || '');
+        setMessage(`Saved "${data.preset?.preset_name || nameInput.value.trim()}" for reuse.`);
+      } catch (error) {
+        errorText.textContent = error.message || 'Could not save this preset.';
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Save preset';
+      }
+    });
+
+    applyButton.addEventListener('click', async () => {
+      const preset = presets.find((item) => item.id === presetSelect.value);
+      if (!preset) return;
+      const questionCount = Number(preset.question_count || 0);
+      if (!confirm(`Replace the current Event and Seminar questions with the ${questionCount} question${questionCount === 1 ? '' : 's'} in "${preset.preset_name}"? Only questions from this preset will remain. Replacement is blocked if feedback has already been submitted.`)) return;
+
+      applyButton.disabled = true;
+      applyButton.textContent = 'Applying...';
+      try {
+        await readJson(await fetch('/api/evaluation_question_presets.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            action: 'apply',
+            event_id: eventId,
+            preset_id: preset.id,
+            csrf_token: window.CSRF_TOKEN || ''
+          })
+        }));
+        window.location.reload();
+      } catch (error) {
+        setMessage(error.message || 'Could not apply this preset.', true);
+        applyButton.disabled = !presetSelect.value;
+        applyButton.textContent = 'Add preset';
+      }
+    });
+  })();
 
   (function () {
     const openBtn = document.getElementById('btnEvalDeliveryStatus');

@@ -81,6 +81,34 @@ function normalize_event_mode(?string $rawMode): string
     return 'simple';
 }
 
+function resolve_event_structure_key(array $event, array $sessions): string
+{
+    // Session rows are the source of truth when the database has them; older
+    // events may have a stale event_structure value such as "simple".
+    $sessionCount = count($sessions);
+    if ($sessionCount > 1) {
+        return 'two_seminars';
+    }
+    if ($sessionCount === 1) {
+        return 'one_seminar';
+    }
+
+    $structure = strtolower(trim((string) ($event['event_structure'] ?? '')));
+    if (in_array($structure, ['one_seminar', 'two_seminars'], true)) {
+        return $structure;
+    }
+
+    $mode = strtolower(trim((string) ($event['event_mode'] ?? 'simple')));
+    if ($mode === 'two_seminars') {
+        return 'two_seminars';
+    }
+    if (in_array($mode, ['seminar_based', 'one_seminar'], true)) {
+        return 'one_seminar';
+    }
+
+    return 'simple';
+}
+
 function event_uses_sessions(array $event): bool
 {
     if (isset($event['sessions']) && is_array($event['sessions']) && count($event['sessions']) > 0) {

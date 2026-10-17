@@ -51,12 +51,17 @@ $startAt = isset($data['start_at']) ? (string) $data['start_at'] : '';
 $endAt = isset($data['end_at']) ? (string) $data['end_at'] : '';
 $eventType = isset($data['event_type']) ? clean_string((string) $data['event_type']) : 'Event';
 $eventFor = isset($data['event_for']) ? clean_string((string) $data['event_for']) : 'All';
-$graceTime = isset($data['grace_time']) ? clean_string((string) $data['grace_time']) : '30';
+$graceTimeRaw = isset($data['grace_time']) ? trim((string) $data['grace_time']) : '30';
 $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 $eventMode = normalize_event_mode(isset($data['event_mode']) ? (string) $data['event_mode'] : 'simple');
 $sessions = normalize_event_sessions($data['sessions'] ?? null, $location);
 $proposalRequirements = is_array($data['proposal_requirements'] ?? null) ? $data['proposal_requirements'] : [];
 $studentRequirements = is_array($data['student_requirements'] ?? null) ? $data['student_requirements'] : [];
+
+if (!preg_match('/\A\d{1,3}\z/', $graceTimeRaw) || (int) $graceTimeRaw > 90) {
+    json_response(['ok' => false, 'error' => 'Grace period must be between 0 and 90 minutes.'], 400);
+}
+$graceTime = (string) (int) $graceTimeRaw;
 
 if ($eventMode === 'seminar_based') {
     if (count($sessions) === 0) {

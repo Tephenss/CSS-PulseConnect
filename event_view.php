@@ -779,15 +779,15 @@ render_header('Event Details', $user);
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label for="grace_time" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Time (Minutes)</label>
+              <label for="grace_time" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Grace Period</label>
               <div class="relative">
                 <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-zinc-400">
                   <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
-                <input id="grace_time" name="grace_time" type="number" min="0" step="1" value="30"
+                <input id="grace_time" name="grace_time" type="text" inputmode="numeric" maxlength="2" pattern="[0-9]{1,2}" value="30"
                   class="w-full rounded-xl bg-white border border-zinc-200 pl-11 pr-4 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
               </div>
-              <p class="text-[11px] text-zinc-500 mt-1.5">Time-in window after the event (or seminar) start. 0 = closes at start.</p>
+              <p class="text-[11px] text-zinc-500 mt-1.5">Enter 0 to 90 minutes. This controls the time-in window.</p>
             </div>
             <div>
               <label for="target_course" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Target Course</label>
@@ -1915,6 +1915,11 @@ const mainUndoBtn = document.getElementById('mainUndoBtn');
 const mainAiStatus = document.getElementById('mainAiStatus');
 const mainModalPanel = document.getElementById('modalContent');
 const eventModeInput = document.getElementById('event_mode');
+const gracePeriodInput = document.getElementById('grace_time');
+gracePeriodInput?.addEventListener('input', () => {
+    const digits = gracePeriodInput.value.replace(/\D/g, '').slice(0, 2);
+    gracePeriodInput.value = Number(digits) > 90 ? '90' : digits;
+});
 const seminarEditSection = document.getElementById('seminarEditSection');
 let originalEditScheduleSnapshot = '';
 
@@ -2492,9 +2497,9 @@ document.getElementById('btnSubmitForm')?.addEventListener('click', async () => 
     }
 
     const graceRaw = String(document.getElementById('grace_time')?.value || '').trim();
-    const graceParsed = Number.parseInt(graceRaw, 10);
-    if (!Number.isFinite(graceParsed) || graceParsed < 0) {
-        msg.textContent = 'Grace time must be 0 or greater.';
+    const graceParsed = Number(graceRaw);
+    if (graceRaw === '' || !Number.isInteger(graceParsed) || graceParsed < 0 || graceParsed > 90) {
+        msg.textContent = 'Grace period must be between 0 and 90 minutes.';
         document.getElementById('grace_time')?.focus();
         return;
     }

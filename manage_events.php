@@ -727,7 +727,7 @@ render_header('Manage Events', $user);
               <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Target Course</label>
               <select id="target_course" name="target_course"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-[38px] text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition appearance-none">
-                <option value="ALL" selected>All Courses</option>
+                <option value="ALL" selected>All Program</option>
                 <option value="BSIT">BSIT (All)</option>
                 <option value="BSIT-SD">BSIT-SD</option>
                 <option value="BSIT-BA">BSIT-BA</option>
@@ -896,15 +896,16 @@ render_header('Manage Events', $user);
             to December 31, <?= (int) $eventDateScope['end_year'] ?>. Events must be scheduled at least one day in advance; today's date is unavailable.
           </p>
           <div>
-            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Grace Time (Minutes)</label>
+            <label class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide field-req">Grace Period</label>
             <div class="field-icon-wrap">
               <svg class="field-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <input id="grace_time" name="grace_time" type="number" min="0" value="30"
+              <input id="grace_time" name="grace_time" type="text" inputmode="numeric" maxlength="2" pattern="[0-9]{1,2}" value="30"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition" />
             </div>
+            <p class="mt-1.5 text-[11px] text-zinc-500">Enter 0 to 90 minutes.</p>
           </div>
 
           <div id="simpleScheduleSection" class="space-y-4">
@@ -1660,6 +1661,102 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     40% { box-shadow: 0 0 0 6px rgba(249, 115, 22, 0.12); }
     100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
   }
+
+  /* ══════════════════════════════════════════════════
+     FOLDER-STYLE VIEW MODES (List, Card, Compact)
+     ══════════════════════════════════════════════════ */
+  .event-card.hidden,
+  .event-card[style*="display: none"] {
+    display: none !important;
+  }
+
+  /* ── 1. LIST VIEW (Default Detailed Rows) ── */
+  #eventsListWrapper.events-view-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  #eventsListWrapper.events-view-list .event-card-cover {
+    display: none !important;
+  }
+
+  /* ── 2. CARD VIEW (Folder Grid / Tiles) ── */
+  #eventsListWrapper.events-view-card {
+    display: grid !important;
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+    gap: 1.25rem !important;
+  }
+  @media (min-width: 640px) {
+    #eventsListWrapper.events-view-card {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+  }
+  @media (min-width: 1200px) {
+    #eventsListWrapper.events-view-card {
+      grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+  }
+  #eventsListWrapper.events-view-card .event-card:not(.hidden) {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    border-radius: 1rem !important;
+    overflow: hidden !important;
+    background-color: #ffffff !important;
+    border-width: 1px !important;
+    border-left-width: 4px !important;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05) !important;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease !important;
+  }
+  #eventsListWrapper.events-view-card .event-card.in-view:hover {
+    transform: translateY(-3px) !important;
+    box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.04) !important;
+  }
+  #eventsListWrapper.events-view-card .event-card-cover {
+    display: block !important;
+  }
+  #eventsListWrapper.events-view-card .event-card-content {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 1 auto !important;
+    padding: 1rem !important;
+    justify-content: space-between !important;
+  }
+  #eventsListWrapper.events-view-card .event-icon-box {
+    display: none !important;
+  }
+  #eventsListWrapper.events-view-card .event-title {
+    white-space: normal !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+    font-size: 0.95rem !important;
+    line-height: 1.35 !important;
+  }
+  #eventsListWrapper.events-view-card .event-meta-row {
+    margin-top: 0.75rem !important;
+    gap: 0.45rem !important;
+  }
+  #eventsListWrapper.events-view-card .event-meta-row > span {
+    font-size: 0.75rem !important;
+  }
+  #eventsListWrapper.events-view-card .proposal-progress-section {
+    margin-top: 0.75rem !important;
+    padding: 0.5rem 0.75rem !important;
+  }
+  #eventsListWrapper.events-view-card .event-admin-actions {
+    width: 100% !important;
+    margin-top: 1rem !important;
+    padding-top: 0.75rem !important;
+    padding-left: 0 !important;
+    border-top: 1px solid #f1f5f9 !important;
+    justify-content: flex-end !important;
+  }
+  #eventsListWrapper.events-view-card #eventListEmptyState {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+  }
 </style>
 
 <!-- ═══════  EVENTS TABLE  ═══════ -->
@@ -1777,6 +1874,38 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         </div>
       </div>
     </div>
+
+    <!-- Folder-Style View Options Switcher (List, Cards, Compact) -->
+    <div class="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 self-stretch md:self-auto">
+      <div class="inline-flex items-center p-1 bg-white border border-zinc-200 rounded-xl shadow-sm text-zinc-500 gap-0.5" role="group" aria-label="Folder view options">
+        <span class="text-[11px] font-semibold text-zinc-400 pl-2 pr-1 hidden lg:inline-flex items-center gap-1.5 select-none">
+          <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.625-10.5H5.25A2.25 2.25 0 003 4.5v15a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 19.5V8.25a2.25 2.25 0 00-2.25-2.25h-5.625l-2.25-2.25z" />
+          </svg>
+          View:
+        </span>
+
+        <!-- List View Button -->
+        <button type="button" id="btnViewList" data-view="list"
+          class="view-mode-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-transparent text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
+          title="List View — Detailed rows">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+          </svg>
+          <span class="hidden sm:inline">List</span>
+        </button>
+
+        <!-- Card View (Grid) Button -->
+        <button type="button" id="btnViewCard" data-view="card"
+          class="view-mode-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-transparent text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
+          title="Card View — Folder tiles with cover image">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+          </svg>
+          <span class="hidden sm:inline">Cards</span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <div class="relative overflow-hidden rounded-xl border border-zinc-100 bg-zinc-50/10 mt-4">
@@ -1789,7 +1918,22 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     </div>
 
     <div id="eventScrollContainer" class="event-scroll-container" data-live-list-hash="<?= htmlspecialchars($liveListHash) ?>">
-      <div class="space-y-3 pb-24">
+      <div id="eventsListWrapper" class="events-view-list space-y-3 pb-24" data-current-view="list">
+        <script>
+          (function() {
+            try {
+              var v = localStorage.getItem('pulseconnect_manage_events_view');
+              if (v === 'card') {
+                var w = document.getElementById('eventsListWrapper');
+                if (w) {
+                  w.classList.remove('events-view-list', 'space-y-3');
+                  w.classList.add('events-view-card');
+                  w.dataset.currentView = 'card';
+                }
+              }
+            } catch (e) {}
+          })();
+        </script>
         <?php foreach ($events as $e): ?>
       <?php
           $status = (string) ($e['status'] ?? '');
@@ -1921,19 +2065,42 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
             data-proposal-stage="<?= htmlspecialchars($proposalStage) ?>"
             data-proposal-revision="<?= htmlspecialchars($liveRevision) ?>"
             data-live-updated-at="<?= htmlspecialchars((string) ($e['updated_at'] ?? '')) ?>">
-        <div class="flex flex-col lg:flex-row lg:items-center gap-3 p-4">
+        
+        <?php $coverUrl = trim((string) ($e['cover_image_url'] ?? '')); ?>
+        <!-- Card View Cover Banner -->
+        <div class="event-card-cover relative w-full h-36 bg-zinc-100 overflow-hidden rounded-t-xl hidden">
+          <?php if ($coverUrl !== ''): ?>
+            <img src="<?= htmlspecialchars($coverUrl) ?>" alt="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+          <?php else: ?>
+            <div class="w-full h-full bg-gradient-to-br from-zinc-100 via-slate-100 to-zinc-200 flex items-center justify-center relative">
+              <div class="absolute inset-0 opacity-25 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:10px_10px]"></div>
+              <div class="w-12 h-12 rounded-2xl bg-white/90 backdrop-blur-sm border border-zinc-200/80 shadow-sm flex items-center justify-center <?= $statusConfig['text'] ?>">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <?= $statusConfig['icon'] ?>
+                </svg>
+              </div>
+            </div>
+          <?php endif; ?>
+          <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 pointer-events-none">
+            <span class="inline-flex items-center gap-1 text-[10px] font-bold text-zinc-800 bg-white/95 backdrop-blur-md px-2 py-0.5 rounded-md border border-white/80 shadow-sm">
+              <?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>
+            </span>
+          </div>
+        </div>
+
+        <div class="event-card-content flex flex-col lg:flex-row lg:items-center gap-3 p-4">
 
           <!-- Event Info -->
           <div class="flex-1 min-w-0">
             <div class="flex items-start gap-3">
                   <div
-                    class="hidden sm:flex w-10 h-10 rounded-xl <?= $statusConfig['bg'] ?> border <?= $statusConfig['border'] ?> items-center justify-center flex-shrink-0 mt-0.5">
+                    class="event-icon-box hidden sm:flex w-10 h-10 rounded-xl <?= $statusConfig['bg'] ?> border <?= $statusConfig['border'] ?> items-center justify-center flex-shrink-0 mt-0.5">
                     <svg class="w-5 h-5 <?= $statusConfig['text'] ?>" fill="none" stroke="currentColor" stroke-width="1.8"
                       viewBox="0 0 24 24"><?= $statusConfig['icon'] ?></svg>
               </div>
               <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2 mb-1">
-                      <h3 class="text-sm font-semibold text-zinc-900 truncate">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                      <h3 class="event-title text-sm font-semibold text-zinc-900 truncate" title="<?= htmlspecialchars((string) ($e['title'] ?? '')) ?>">
                         <?= htmlspecialchars((string) ($e['title'] ?? '')) ?></h3>
                       <span
                         class="event-status-badge text-[10px] font-medium rounded-full border px-2 py-0.5 <?= $statusConfig['bg'] ?> <?= $statusConfig['text'] ?> <?= $statusConfig['border'] ?> flex-shrink-0">
@@ -1977,19 +2144,19 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                   </div>
                 <?php endif; ?>
 
-                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-600 mt-1">
+                <div class="event-meta-row flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-600 mt-1">
                       <span
-                        class="flex items-center gap-1 font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
+                        class="event-type-chip flex items-center gap-1 font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
                     <?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>
                   </span>
-                  <span class="flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded font-medium border border-zinc-200">
+                  <span class="event-target-chip flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded font-medium border border-zinc-200">
                         Target: <?= htmlspecialchars(format_target_participant((string) ($e['event_for'] ?? 'All'))) ?>
                   </span>
                       <span
-                        class="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-100">
+                        class="event-grace-chip flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-100">
                         Grace: <?= htmlspecialchars((string) ($e['grace_time'] ?? '30')) ?>m
                   </span>
-                  <span class="flex items-center gap-1">
+                  <span class="event-date-chip flex items-center gap-1">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round"
                             d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
@@ -1997,7 +2164,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                     <?= htmlspecialchars($formattedDate) ?>
                   </span>
                   <?php if (!empty($e['location'])): ?>
-                  <span class="flex items-center gap-1">
+                  <span class="event-location-chip flex items-center gap-1">
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
                             <path stroke-linecap="round" stroke-linejoin="round"
@@ -2008,7 +2175,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                   <?php endif; ?>
                 </div>
                 <?php if (!empty($e['created_at'])): ?>
-                  <p class="text-[11px] text-zinc-400 mt-2 font-medium">
+                  <p class="event-submitted-date text-[11px] text-zinc-400 mt-2 font-medium">
                         Submitted: <?= (new DateTimeImmutable((string) $e['created_at']))->format('F d, Y') ?>
                   </p>
                 <?php endif; ?>
@@ -3032,6 +3199,11 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
   const structureOptions = Array.from(document.querySelectorAll('.structure-option'));
   const eventModeInput = document.getElementById('event_mode');
+  const gracePeriodInput = document.getElementById('grace_time');
+  gracePeriodInput?.addEventListener('input', () => {
+    const digits = gracePeriodInput.value.replace(/\D/g, '').slice(0, 2);
+    gracePeriodInput.value = Number(digits) > 90 ? '90' : digits;
+  });
   const seminarCountInput = document.getElementById('seminar_count');
   const simpleScheduleSection = document.getElementById('simpleScheduleSection');
   const seminarScheduleSection = document.getElementById('seminarScheduleSection');
@@ -5000,9 +5172,9 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
     if (currentStep === 3) {
       const graceRaw = String(document.getElementById('grace_time')?.value || '').trim();
-      const graceNum = Number.parseInt(graceRaw, 10);
-      if (!Number.isFinite(graceNum) || graceNum < 0) {
-        return fail('Grace time must be 0 or greater.', 'grace_time');
+      const graceNum = Number(graceRaw);
+      if (graceRaw === '' || !Number.isInteger(graceNum) || graceNum < 0 || graceNum > 90) {
+        return fail('Grace period must be between 0 and 90 minutes.', 'grace_time');
       }
 
       const eventMode = (eventModeInput?.value || 'simple').trim();
@@ -5138,7 +5310,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     if (msg.includes('settlement') || msg.includes('event fee')) return { focusId: 'event_fee', step: 1 };
     if (msg.includes('student limit')) return { focusId: 'registration_limit', step: 1 };
     if (msg.includes('description')) return { focusId: 'description', step: 2 };
-    if (msg.includes('grace time')) return { focusId: 'grace_time', step: 3 };
+    if (msg.includes('grace')) return { focusId: 'grace_time', step: 3 };
     if (msg.includes('seminar 2')) {
       if (msg.includes('title')) return { focusId: 'seminar2_title', step: 3 };
       if (msg.includes('end')) return { focusId: 'seminar2_end_local', step: 3 };
@@ -6111,8 +6283,9 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
           const matchesType = selectedType === 'all' || type === selectedType;
 
           if (matchesTab && matchesSearch && matchesType) {
-              card.style.display = 'block';
-        visibleCount += 1;
+              card.style.display = '';
+              card.classList.remove('hidden');
+              visibleCount += 1;
               
               // Trigger Animation Refresh
               if (card.classList.contains('event-card-animated')) {
@@ -6125,6 +6298,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
               }
           } else {
               card.style.display = 'none';
+              card.classList.add('hidden');
       }
     });
 
@@ -6192,6 +6366,72 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
   searchInput?.addEventListener('input', refreshEventVisibility);
   typeFilter?.addEventListener('change', refreshEventVisibility);
   refreshEventVisibility();
+
+  // ── Folder-Style View Options (List, Cards) ──
+  const VIEW_STORAGE_KEY = 'pulseconnect_manage_events_view';
+  const eventsListWrapper = document.getElementById('eventsListWrapper');
+  const viewModeButtons = document.querySelectorAll('.view-mode-btn');
+
+  function setManageEventsView(mode) {
+    if (!eventsListWrapper) return;
+    const validMode = (mode === 'card') ? 'card' : 'list';
+    
+    eventsListWrapper.classList.remove('events-view-list', 'events-view-card', 'space-y-3');
+    
+    if (validMode === 'card') {
+      eventsListWrapper.classList.add('events-view-card');
+    } else {
+      eventsListWrapper.classList.add('events-view-list', 'space-y-3');
+    }
+    
+    eventsListWrapper.dataset.currentView = validMode;
+    
+    const activeClasses = (role === 'admin')
+      ? ['bg-orange-50', 'text-orange-700', 'border-orange-200', 'shadow-xs', 'font-bold']
+      : ['bg-sky-50', 'text-sky-700', 'border-sky-200', 'shadow-xs', 'font-bold'];
+    const inactiveClasses = ['text-zinc-600', 'hover:text-zinc-900', 'hover:bg-zinc-100', 'border-transparent'];
+
+    viewModeButtons.forEach(btn => {
+      const isTarget = btn.dataset.view === validMode;
+      if (isTarget) {
+        btn.classList.add(...activeClasses);
+        btn.classList.remove(...inactiveClasses);
+        btn.setAttribute('aria-pressed', 'true');
+      } else {
+        btn.classList.remove(...activeClasses);
+        btn.classList.add(...inactiveClasses);
+        btn.setAttribute('aria-pressed', 'false');
+      }
+    });
+
+    // Make sure animated cards re-render correctly in view
+    document.querySelectorAll('.event-card-animated').forEach(card => {
+      if (!card.classList.contains('hidden') && card.style.display !== 'none') {
+        card.classList.add('in-view');
+      }
+    });
+
+    if (typeof window.syncEventListGradients === 'function') {
+      setTimeout(window.syncEventListGradients, 50);
+    }
+  }
+
+  viewModeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetMode = btn.dataset.view;
+      try {
+        localStorage.setItem(VIEW_STORAGE_KEY, targetMode);
+      } catch (e) {}
+      setManageEventsView(targetMode);
+    });
+  });
+
+  try {
+    const savedView = localStorage.getItem(VIEW_STORAGE_KEY) || 'list';
+    setManageEventsView(savedView);
+  } catch (e) {
+    setManageEventsView('list');
+  }
 
   // ── Reject (Page 34 Modal) ──
   const rejectModal = document.getElementById('rejectModal');

@@ -147,8 +147,13 @@ if (isset($data['event_for'])) {
     if ($ef !== '') $fields['event_for'] = $ef;
 }
 if (isset($data['grace_time'])) {
-    $gt = clean_string((string) $data['grace_time']);
-    if ($gt !== '') $fields['grace_time'] = $gt;
+    $gt = trim((string) $data['grace_time']);
+    if ($gt !== '') {
+        if (!preg_match('/\A\d{1,3}\z/', $gt) || (int) $gt > 90) {
+            json_response(['ok' => false, 'error' => 'Grace period must be between 0 and 90 minutes.'], 400);
+        }
+        $fields['grace_time'] = (string) (int) $gt;
+    }
 }
 if (isset($data['is_free_event'])) {
     $fields['is_free_event'] = normalize_registration_bool($data['is_free_event']);

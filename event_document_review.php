@@ -239,6 +239,7 @@ foreach ($reviewRows as $row) {
         $docItems[] = [
             'label' => (string) ($requirement['label'] ?? 'Requirement'),
             'file_name' => is_array($doc) ? (string) ($doc['file_name'] ?? 'View document') : '',
+            'file_path' => is_array($doc) ? (string) ($doc['file_path'] ?? '') : '',
             'file_url' => $fileUrl,
             'mime_type' => $mime,
             'uploaded' => is_array($doc),
@@ -769,15 +770,46 @@ foreach ($reviewRows as $row) {
   const fileNameEl = document.getElementById('docFilePreviewName');
   const fileOpenTab = document.getElementById('docFilePreviewOpenTab');
 
-  function openFilePreview(doc) {
-    const url = String(doc?.file_url || '').trim();
-    if (!url || !fileModal || !fileBody) return;
+  async function openFilePreview(doc) {
+    const rawUrl = String(doc?.file_url || '').trim();
+    const objectPath = String(doc?.file_path || '').trim();
+    if ((!rawUrl && !objectPath) || !fileModal || !fileBody) return;
     const mime = String(doc?.mime_type || '').toLowerCase();
-    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
-    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+    const fileHint = `${rawUrl} ${objectPath}`;
+    const isPdf = mime === 'application/pdf' || /\.pdf(\?|$)/i.test(fileHint);
+    const isImage = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(fileHint);
 
     if (fileLabel) fileLabel.textContent = doc.label || 'Document';
     if (fileNameEl) fileNameEl.textContent = doc.file_name || 'Preview';
+    if (fileOpenTab) fileOpenTab.href = '#';
+    fileBody.innerHTML = '<div class="py-10 text-sm font-medium text-zinc-500">Loading secure preview…</div>';
+    fileModal.classList.remove('hidden');
+    fileModal.classList.add('flex');
+
+    let url = '';
+    try {
+      const res = await fetch('/api/storage_signed_url.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'student-documents',
+          path: objectPath,
+          url: rawUrl,
+          expires_in: 3600,
+          csrf_token: window.CSRF_TOKEN || '',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok || !data?.signed_url) {
+        throw new Error(data?.error || 'Could not create secure document link.');
+      }
+      url = String(data.signed_url);
+    } catch (error) {
+      console.error('Document preview failed:', error);
+      fileBody.innerHTML = '<div class="p-8 text-center text-sm font-semibold text-red-600">Unable to open this document. Please check the storage setup and try again.</div>';
+      return;
+    }
+
     if (fileOpenTab) fileOpenTab.href = url;
 
     if (isImage) {
@@ -787,8 +819,6 @@ foreach ($reviewRows as $row) {
     } else {
       fileBody.innerHTML = `<div class="text-center p-8"><p class="text-sm text-zinc-600 mb-3">Preview not available for this file type.</p><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="inline-flex rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700">Open file</a></div>`;
     }
-    fileModal.classList.remove('hidden');
-    fileModal.classList.add('flex');
   }
 
   function closeFilePreview() {
@@ -796,6 +826,7 @@ foreach ($reviewRows as $row) {
     fileModal.classList.add('hidden');
     fileModal.classList.remove('flex');
     if (fileBody) fileBody.innerHTML = '';
+    if (fileOpenTab) fileOpenTab.href = '#';
   }
 
   document.getElementById('btnCloseDocFilePreview')?.addEventListener('click', closeFilePreview);
