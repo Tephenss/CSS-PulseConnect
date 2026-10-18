@@ -269,7 +269,8 @@ function submit_staff_paid_event_registration(
     float $amountPaid,
     string $staffUserId,
     array $headers,
-    string $paymentNote = ''
+    string $paymentNote = '',
+    bool $allowExistingCheckoutAfterWindowClose = false
 ): array {
     $eventId = trim($eventId);
     $studentId = trim($studentId);
@@ -322,7 +323,7 @@ function submit_staff_paid_event_registration(
         ? (bool) $sessionCapacity['is_full']
         : event_registration_is_full($eventId, $event, $headers);
 
-    if (is_event_registration_window_closed($event)) {
+    if (is_event_registration_window_closed($event) && !$allowExistingCheckoutAfterWindowClose) {
         return ['ok' => false, 'error' => 'Registration window is closed for this event.', 'status' => 403];
     }
 

@@ -19,10 +19,55 @@ $user = require_role(['admin', 'teacher']);
 $role = (string) ($user['role'] ?? '');
 $userId = (string) ($user['id'] ?? '');
 
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+
 $eventId = trim((string) ($_GET['event_id'] ?? $_GET['id'] ?? ''));
 if ($eventId === '') {
-    http_response_code(400);
-    echo 'Missing event_id';
+    // Recover when a browser or local router drops the query string from the
+    // Payments tab URL, but only trust an event-management page on this host.
+    $referer = trim((string) ($_SERVER['HTTP_REFERER'] ?? ''));
+    $refererParts = $referer !== '' ? parse_url($referer) : false;
+    $requestHost = strtolower(trim((string) ($_SERVER['HTTP_HOST'] ?? '')));
+    $refererOrigin = is_array($refererParts)
+        ? strtolower((string) ($refererParts['host'] ?? '')
+            . (isset($refererParts['port']) ? ':' . $refererParts['port'] : ''))
+        : '';
+    $refererPath = is_array($refererParts)
+        ? strtolower(pathinfo((string) ($refererParts['path'] ?? ''), PATHINFO_FILENAME))
+        : '';
+    $eventPagePaths = [
+        'event_view',
+        'participants',
+        'evaluation_admin',
+        'event_payments',
+        'event_teachers',
+        'event_assistants',
+        'event_document_review',
+    ];
+    $refererQuery = [];
+    if (is_array($refererParts) && isset($refererParts['query'])) {
+        parse_str((string) $refererParts['query'], $refererQuery);
+    }
+
+    $refererEventId = trim((string) ($refererQuery['event_id'] ?? $refererQuery['id'] ?? ''));
+    if ($requestHost !== ''
+        && $refererOrigin === $requestHost
+        && in_array($refererPath, $eventPagePaths, true)
+        && $refererEventId !== ''
+    ) {
+        $recoveredUrl = '/event_payments?event_id=' . rawurlencode($refererEventId);
+        $refererReturnTo = trim((string) ($refererQuery['return_to'] ?? ''));
+        if ($refererReturnTo !== '') {
+            $recoveredUrl .= '&return_to=' . rawurlencode($refererReturnTo);
+        }
+        header('Location: ' . $recoveredUrl, true, 302);
+        exit;
+    }
+
+    // A direct visit without an event context should return to the event list
+    // instead of showing a blank browser page.
+    header('Location: ' . event_management_return_to($role), true, 302);
     exit;
 }
 
@@ -91,6 +136,26 @@ $overviewUrl = '/event_payments.php?event_id=' . rawurlencode($eventId)
     . '&return_to=' . rawurlencode($returnTo);
 $eventFee = event_settlement_fee($event);
 $eventFeeLabel = format_event_fee_php($eventFee);
+$pendingPaymentByStudent = [];
+$pendingPaymentUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_payment_submissions'
+    . '?select=id,student_id,amount,reference_number,created_at'
+    . '&event_id=eq.' . rawurlencode($eventId)
+    . '&status=eq.pending&order=created_at.desc&limit=10000';
+$pendingPaymentRes = supabase_request('GET', $pendingPaymentUrl, $headers);
+$pendingPaymentRows = $pendingPaymentRes['ok']
+    ? json_decode((string) ($pendingPaymentRes['body'] ?? ''), true)
+    : [];
+if (is_array($pendingPaymentRows)) {
+    foreach ($pendingPaymentRows as $pendingPayment) {
+        if (!is_array($pendingPayment)) {
+            continue;
+        }
+        $pendingStudentId = trim((string) ($pendingPayment['student_id'] ?? ''));
+        if ($pendingStudentId !== '' && !isset($pendingPaymentByStudent[$pendingStudentId])) {
+            $pendingPaymentByStudent[$pendingStudentId] = $pendingPayment;
+        }
+    }
+}
 $pageTitle = $isBlockPage
     ? ((string) ($activeGroup['group_label'] ?? 'Group') . ' · ' . (string) ($activeBlock['block_label'] ?? 'Block'))
     : 'Event Payments';
@@ -439,6 +504,26 @@ if ($isBlockPage) {
               <?php endif; ?>
             </div>
 
+            <?php $pendingPayment = $pendingPaymentByStudent[$sid] ?? null; ?>
+            <?php if (is_array($pendingPayment)): ?>
+              <div class="payment-proof-panel mb-3 rounded-xl border border-sky-200 bg-sky-50 p-3"
+                   data-submission-id="<?= htmlspecialchars((string) ($pendingPayment['id'] ?? '')) ?>"
+                   data-amount="<?= htmlspecialchars((string) ($pendingPayment['amount'] ?? '0')) ?>">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0 text-xs text-sky-950">
+                    <div class="font-bold">GCash proof pending · ₱<?= htmlspecialchars(number_format((float) ($pendingPayment['amount'] ?? 0), 2)) ?></div>
+                    <div class="mt-1 break-all">Ref: <?= htmlspecialchars((string) ($pendingPayment['reference_number'] ?? '')) ?></div>
+                  </div>
+                  <a class="shrink-0 rounded-lg border border-sky-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-sky-800 hover:bg-sky-100"
+                     target="_blank" rel="noopener" href="/api/event_payment_proof.php?id=<?= rawurlencode((string) ($pendingPayment['id'] ?? '')) ?>">View receipt</a>
+                </div>
+                <div class="mt-2 flex gap-2">
+                  <button type="button" class="btn-review-payment flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700" data-action="approve">Approve &amp; secure slot</button>
+                  <button type="button" class="btn-review-payment rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-50" data-action="reject">Reject</button>
+                </div>
+              </div>
+            <?php endif; ?>
+
             <?php if ($eventFee !== null && $eventFee > 0): ?>
               <div class="mb-3">
                 <div class="flex items-center justify-between text-[11px] font-semibold text-zinc-600 mb-1">
@@ -629,6 +714,36 @@ if ($isBlockPage) {
         const registerBtn = card.querySelector('.btn-payment-register');
         const panel = card.querySelector('.payment-partial-panel');
         const amountInput = card.querySelector('.payment-amount');
+
+        card.querySelectorAll('.btn-review-payment').forEach((reviewButton) => {
+          reviewButton.addEventListener('click', async () => {
+            const panel = card.querySelector('.payment-proof-panel');
+            const submissionId = panel?.dataset.submissionId || '';
+            const action = reviewButton.dataset.action || '';
+            if (!submissionId) return;
+            if (action === 'reject' && !window.confirm('Reject this GCash payment proof?')) return;
+            setBusy(card, true);
+            try {
+              const response = await fetch('/api/event_payment_review.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ csrf_token: csrfToken, submission_id: submissionId, action }),
+              });
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok || !data.ok) throw new Error(data.error || 'Could not review payment.');
+              panel?.remove();
+              if (action === 'approve') {
+                const paid = Number(data.amount_paid || panel?.dataset.amount || 0);
+                updateProgress(card, paid, eventFee != null && paid >= Number(eventFee) ? 'full' : 'partial');
+              }
+              showFeedback(card, data.message || 'Payment reviewed.', true);
+            } catch (error) {
+              showFeedback(card, error.message || 'Could not review payment.', false);
+            } finally {
+              setBusy(card, false);
+            }
+          });
+        });
 
         if (fullBtn) {
           fullBtn.addEventListener('click', () => {

@@ -923,3 +923,66 @@ function send_multipart_email(
     return pulseconnect_deliver_email($to, $subject, $body, 'send_multipart_email');
 }
 
+function send_event_payment_receipt_email(
+    string $recipientEmail,
+    string $studentName,
+    string $eventTitle,
+    float $amountPaid,
+    string $paymentReference,
+    string $paidAt
+): bool {
+    $to = trim($recipientEmail);
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $safeName = trim($studentName) !== '' ? trim($studentName) : 'Student';
+    $safeEventTitle = trim($eventTitle) !== '' ? trim($eventTitle) : 'Event';
+    $safeReference = trim($paymentReference);
+    try {
+        $paidOn = (new DateTimeImmutable($paidAt !== '' ? $paidAt : 'now'))
+            ->setTimezone(new DateTimeZone('Asia/Manila'))
+            ->format('M j, Y g:i A') . ' PHT';
+    } catch (Throwable $e) {
+        $paidOn = (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))
+            ->format('M j, Y g:i A') . ' PHT';
+    }
+
+    $amountText = 'PHP ' . number_format(max(0, $amountPaid), 2);
+    $subject = 'Your CCS PulseConnect payment receipt';
+    $textMessage = "Hello {$safeName},\n\n"
+        . "Your payment was received and your event registration is confirmed.\n\n"
+        . "Event: {$safeEventTitle}\n"
+        . "Amount paid: {$amountText}\n"
+        . "Payment method: QR Ph via PayMongo\n"
+        . "Paid on: {$paidOn}\n"
+        . "Payment reference: {$safeReference}\n\n"
+        . "Your event ticket is available in the CCS PulseConnect app.\n\n"
+        . "Thank you,\nCCS PulseConnect";
+
+    $nameHtml = htmlspecialchars($safeName, ENT_QUOTES, 'UTF-8');
+    $eventHtml = htmlspecialchars($safeEventTitle, ENT_QUOTES, 'UTF-8');
+    $referenceHtml = htmlspecialchars($safeReference, ENT_QUOTES, 'UTF-8');
+    $paidOnHtml = htmlspecialchars($paidOn, ENT_QUOTES, 'UTF-8');
+    $amountHtml = htmlspecialchars($amountText, ENT_QUOTES, 'UTF-8');
+    $htmlMessage = '<!doctype html><html><body style="margin:0;padding:24px;background:#F4F4F5;font-family:Arial,sans-serif;color:#142A3A;">'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center">'
+        . '<table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:16px;overflow:hidden;">'
+        . '<tr><td style="background:#142A3A;padding:22px 24px;color:#FFFFFF;"><strong style="font-size:20px;">CCS PulseConnect</strong><br><span style="font-size:13px;color:#CBD5E1;">Payment receipt</span></td></tr>'
+        . '<tr><td style="padding:24px;">'
+        . '<p style="margin:0 0 12px;">Hello <strong>' . $nameHtml . '</strong>,</p>'
+        . '<p style="margin:0 0 18px;line-height:1.6;">Your payment was received and your event registration is confirmed.</p>'
+        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="8" style="border-collapse:collapse;background:#F8FAFC;">'
+        . '<tr><td style="color:#64748B;">Event</td><td align="right"><strong>' . $eventHtml . '</strong></td></tr>'
+        . '<tr><td style="color:#64748B;">Amount paid</td><td align="right"><strong>' . $amountHtml . '</strong></td></tr>'
+        . '<tr><td style="color:#64748B;">Payment method</td><td align="right">QR Ph via PayMongo</td></tr>'
+        . '<tr><td style="color:#64748B;">Paid on</td><td align="right">' . $paidOnHtml . '</td></tr>'
+        . '<tr><td style="color:#64748B;">Payment reference</td><td align="right"><code>' . $referenceHtml . '</code></td></tr>'
+        . '</table>'
+        . '<p style="margin:18px 0 0;line-height:1.6;color:#475569;">Your event ticket is available in the CCS PulseConnect app.</p>'
+        . '<p style="margin:22px 0 0;color:#64748B;font-size:12px;">This is an automated payment confirmation from CCS PulseConnect.</p>'
+        . '</td></tr></table></td></tr></table></body></html>';
+
+    return send_multipart_email($to, $subject, $textMessage, $htmlMessage);
+}
+

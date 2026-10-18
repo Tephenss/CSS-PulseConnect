@@ -539,11 +539,17 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
         . '?id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $selectWithColumn = $baseUrl
-        . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,session_attendance_rule,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registration_close_extend_days,registered_count,cover_image_url';
+        . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,session_attendance_rule,allow_registration,is_free_event,event_fee,gcash_account_name,gcash_number,registration_limit,registration_close_weeks,registration_close_extend_days,registered_count,cover_image_url';
     $res = supabase_request('GET', $selectWithColumn, $headers);
 
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        if (registration_access_missing_column_message($message, 'gcash_number')
+            || registration_access_missing_column_message($message, 'gcash_account_name')) {
+            $selectWithColumn = str_replace(',gcash_account_name,gcash_number', '', $selectWithColumn);
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
         if (registration_access_missing_column_message($message, 'session_attendance_rule')) {
             $selectWithColumn = str_replace(',session_attendance_rule', '', $selectWithColumn);
             $res = supabase_request('GET', $selectWithColumn, $headers);
