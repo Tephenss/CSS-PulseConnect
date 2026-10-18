@@ -176,7 +176,7 @@ declare(strict_types=1);
     <div class="space-y-8">
       <?php foreach ($feedbackSections as $section): ?>
         <?php
-          extract(evaluation_feedback_section_view_data($section), EXTR_SKIP);
+          extract(evaluation_feedback_section_view_data($section), EXTR_OVERWRITE);
           $feedbackExportMode = true;
           require __DIR__ . '/evaluation_feedback_section_render.php';
         ?>

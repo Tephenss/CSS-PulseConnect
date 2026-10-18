@@ -338,6 +338,14 @@ function student_matches_event_target(array $row, string $eventFor): bool
         return $studentYear === $matches[2];
     }
 
+    if (in_array($normalizedTarget, ['BSIT-SD', 'BSIT-BA'], true)) {
+        return student_course_matches_target(
+            $studentCourse,
+            $studentSpec,
+            normalize_event_target_course($normalizedTarget)
+        );
+    }
+
     // Accept the human-readable target labels used in older event rows while
     // preserving their year restriction (for example, "BSIT - 4th Year").
     if (preg_match('/^(BSIT(?:[\s_-]*(?:SD|BA))?|BSCS|IT|CS)\s*[-:]\s*(.+)$/', $normalizedTarget, $matches)) {

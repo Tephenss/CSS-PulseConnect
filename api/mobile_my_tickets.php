@@ -7,6 +7,8 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
+require_once __DIR__ . '/../includes/registration_access.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -19,7 +21,7 @@ $headers = mobile_api_supabase_headers();
 $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=' . rawurlencode(
         'id,registered_at,student_id,event_id,'
-        . 'events(id,title,start_at,end_at,location,status,event_type,cover_image_url,event_mode,event_structure,grace_time,event_span),'
+        . 'events(id,title,start_at,end_at,location,status,event_type,cover_image_url,event_mode,event_structure,session_attendance_rule,event_for,grace_time,event_span),'
         . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))'
     )
     . '&student_id=eq.' . rawurlencode($userId)
@@ -28,17 +30,31 @@ $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
 
 $res = supabase_request('GET', $url, $headers);
 if (!$res['ok']) {
-    // Retry without optional event columns (older DBs).
+    // Retry without optional event columns while retaining the split-session flag.
     $fallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
         . '?select=' . rawurlencode(
             'id,registered_at,student_id,event_id,'
-            . 'events(id,title,start_at,end_at,location,status,event_type,cover_image_url,event_mode,event_structure),'
+            . 'events(id,title,start_at,end_at,location,status,event_type,event_mode,event_structure,session_attendance_rule,event_for),'
             . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))'
         )
         . '&student_id=eq.' . rawurlencode($userId)
         . '&order=registered_at.desc'
         . '&limit=150';
     $res = supabase_request('GET', $fallbackUrl, $headers);
+}
+if (!$res['ok']) {
+    // Older deployments may not have migration 069 yet; per-session targets
+    // still let the response infer a split assignment when available.
+    $legacyFallbackUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+        . '?select=' . rawurlencode(
+            'id,registered_at,student_id,event_id,'
+            . 'events(id,title,start_at,end_at,location,status,event_type,event_mode,event_structure,event_for),'
+            . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))'
+        )
+        . '&student_id=eq.' . rawurlencode($userId)
+        . '&order=registered_at.desc'
+        . '&limit=150';
+    $res = supabase_request('GET', $legacyFallbackUrl, $headers);
 }
 if (!$res['ok']) {
     error_log(
@@ -78,6 +94,8 @@ foreach ($sessionsByEvent as $eid => $sessions) {
     $sessionCountByEvent[(string) $eid] = is_array($sessions) ? count($sessions) : 0;
 }
 
+$studentProfile = fetch_student_profile_by_id($userId, $headers);
+
 foreach ($rows as &$row) {
     if (!is_array($row)) {
         continue;
@@ -95,14 +113,27 @@ foreach ($rows as &$row) {
         if (trim((string) ($event['event_structure'] ?? '')) === '') {
             $event['event_structure'] = $count > 1 ? 'two_seminars' : 'one_seminar';
         }
-        $event['session_count'] = $count;
+        $eventWithSessions = array_merge($event, ['sessions' => $rawSessions]);
+        $splitAttendance = event_uses_split_session_attendance($eventWithSessions);
+        $eligibleSessions = is_array($studentProfile)
+            ? event_matching_sessions_for_registration(
+                $eventWithSessions,
+                $rawSessions,
+                $studentProfile,
+                $eid,
+                (string) ($row['id'] ?? ''),
+                $headers
+            )
+            : [];
+        $ticketSessions = $splitAttendance && count($eligibleSessions) !== 1
+            ? []
+            : $eligibleSessions;
         $slimSessions = [];
-        if (is_array($rawSessions)) {
-            foreach ($rawSessions as $session) {
-                if (!is_array($session)) {
-                    continue;
-                }
-                $slimSessions[] = [
+        foreach ($ticketSessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+            $slimSessions[] = [
                     'id' => (string) ($session['id'] ?? ''),
                     'title' => (string) ($session['title'] ?? ''),
                     'topic' => isset($session['topic']) ? (string) $session['topic'] : '',
@@ -110,9 +141,28 @@ foreach ($rows as &$row) {
                     'start_at' => (string) ($session['start_at'] ?? ''),
                     'end_at' => (string) ($session['end_at'] ?? ''),
                 ];
-            }
         }
         $event['sessions'] = $slimSessions;
+        $event['eligible_session_ids'] = array_values(array_filter(array_map(
+            static fn (array $session): string => trim((string) ($session['id'] ?? '')),
+            $ticketSessions
+        )));
+        $event['eligible_session_count'] = count($slimSessions);
+        $event['session_count'] = count($slimSessions);
+        // Ticket metadata is participant-scoped, never the event-wide total.
+        $event['total_session_count'] = count($slimSessions);
+        $event['session_assignment_valid'] = !$splitAttendance || count($slimSessions) === 1;
+        if ($splitAttendance || count($slimSessions) !== $count) {
+            $participantStructure = count($slimSessions) > 1 ? 'two_seminars' : 'one_seminar';
+            $event['total_event_structure'] = $participantStructure;
+            $event['event_structure'] = $participantStructure;
+        }
+        if ($splitAttendance) {
+            if (count($slimSessions) === 1) {
+                $event['assigned_session_id'] = $slimSessions[0]['id'];
+            }
+        }
+        $event['session_attendance_rule'] = normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all');
     } else {
         if (!isset($event['event_mode']) || trim((string) $event['event_mode']) === '') {
             $event['event_mode'] = 'simple';

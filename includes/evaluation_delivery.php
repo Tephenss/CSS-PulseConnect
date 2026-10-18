@@ -51,8 +51,8 @@ function evaluation_delivery_relation_rows(mixed $value): array
 
 /**
  * Find app-account attendees eligible for the evaluation notification.
- * The eligibility rule matches the notification sender: a present check-out,
- * using the final seminar for multi-session events.
+ * Split events accept checkout from each student's assigned seminar. Regular
+ * multi-session events continue to require checkout from the final seminar.
  *
  * @return array{ok:bool,student_ids:list<string>,uses_sessions:bool,error?:string}
  */
@@ -74,35 +74,60 @@ function evaluation_delivery_eligible_students(string $eventId, array $event, ar
                 'error' => 'This event expects a final seminar, but that seminar schedule is unavailable.',
             ];
         }
-        $targetSession = count($sessions) > 1
-            ? evaluation_final_seminar_for_event($eventId)
-            : $sessions[0];
-        $sessionId = trim((string) ($targetSession['id'] ?? ''));
-        if ($sessionId === '') {
-            return [
-                'ok' => false,
-                'student_ids' => [],
-                'uses_sessions' => true,
-                'error' => 'The final seminar schedule is unavailable, so eligible recipients cannot be verified.',
-            ];
-        }
-
-        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-            . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
-            . '&session_id=eq.' . rawurlencode($sessionId);
-        $rows = evaluation_delivery_fetch_all($url, $headers);
-        if ($rows === null) {
-            return ['ok' => false, 'student_ids' => [], 'uses_sessions' => true, 'error' => 'Could not load final-seminar attendance.'];
-        }
-
-        foreach ($rows as $row) {
-            if (!feedback_attendance_counts_as_present($row) || trim((string) ($row['check_out_at'] ?? '')) === '') {
-                continue;
+        $splitAttendance = event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]));
+        if ($splitAttendance) {
+            $sessionIds = array_values(array_map(
+                static fn(array $session): string => trim((string) ($session['id'] ?? '')),
+                $sessions
+            ));
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                . '?select=session_id,registration_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
+                . '&session_id=in.(' . implode(',', array_map('rawurlencode', $sessionIds)) . ')';
+            $rows = evaluation_delivery_fetch_all($url, $headers);
+            if ($rows === null) {
+                return ['ok' => false, 'student_ids' => [], 'uses_sessions' => true, 'error' => 'Could not load split-seminar attendance.'];
             }
-            foreach (evaluation_delivery_relation_rows($row['registration'] ?? null) as $registration) {
-                $studentId = trim((string) ($registration['student_id'] ?? ''));
-                if ($studentId !== '') {
-                    $studentIds[$studentId] = true;
+            $splitAssignmentByRegistration = feedback_split_session_assignment_map(
+                $eventId,
+                $rows,
+                $sessions,
+                $headers
+            );
+            $studentIds = array_fill_keys(
+                feedback_split_session_completed_students($rows, $splitAssignmentByRegistration),
+                true
+            );
+        } else {
+            $targetSession = count($sessions) > 1
+                ? evaluation_final_seminar_for_event($eventId)
+                : $sessions[0];
+            $sessionId = trim((string) ($targetSession['id'] ?? ''));
+            if ($sessionId === '') {
+                return [
+                    'ok' => false,
+                    'student_ids' => [],
+                    'uses_sessions' => true,
+                    'error' => 'The final seminar schedule is unavailable, so eligible recipients cannot be verified.',
+                ];
+            }
+
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
+                . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
+                . '&session_id=eq.' . rawurlencode($sessionId);
+            $rows = evaluation_delivery_fetch_all($url, $headers);
+            if ($rows === null) {
+                return ['ok' => false, 'student_ids' => [], 'uses_sessions' => true, 'error' => 'Could not load final-seminar attendance.'];
+            }
+
+            foreach ($rows as $row) {
+                if (!feedback_attendance_counts_as_present($row) || trim((string) ($row['check_out_at'] ?? '')) === '') {
+                    continue;
+                }
+                foreach (evaluation_delivery_relation_rows($row['registration'] ?? null) as $registration) {
+                    $studentId = trim((string) ($registration['student_id'] ?? ''));
+                    if ($studentId !== '') {
+                        $studentIds[$studentId] = true;
+                    }
                 }
             }
         }

@@ -200,6 +200,51 @@ switch ($action) {
                 }
             }
         }
+        if (!$isStaff && $table === 'event_session_attendance') {
+            require_once __DIR__ . '/../includes/event_sessions.php';
+            require_once __DIR__ . '/../includes/event_session_targeting.php';
+            $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?select=id,event_mode,event_structure,event_for,session_attendance_rule'
+                . '&id=eq.' . rawurlencode($eventId) . '&limit=1';
+            $eventRes = supabase_request('GET', $eventUrl, $readHeaders);
+            $eventRows = $eventRes['ok'] ? json_decode((string) ($eventRes['body'] ?? ''), true) : [];
+            $attendanceEvent = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
+            if (is_array($attendanceEvent) && event_uses_split_session_attendance($attendanceEvent)) {
+                $allSessions = fetch_event_sessions($eventId, $readHeaders);
+                $profile = fetch_student_profile_by_id($userId, $readHeaders);
+                $eligibleSessions = is_array($profile)
+                    ? event_matching_sessions_for_student_registration(
+                        array_merge($attendanceEvent, ['sessions' => $allSessions]),
+                        $allSessions,
+                        $profile,
+                        $eventId,
+                        $userId,
+                        $readHeaders
+                    )
+                    : [];
+                $assignedSessionId = count($eligibleSessions) === 1
+                    ? trim((string) ($eligibleSessions[0]['id'] ?? ''))
+                    : '';
+                $submittedSessionId = trim((string) ($payload['session_id'] ?? ''));
+                if ($assignedSessionId === '' || ($submittedSessionId !== '' && $submittedSessionId !== $assignedSessionId)) {
+                    json_response([
+                        'ok' => false,
+                        'error' => 'This student is not assigned to the submitted seminar session.',
+                        'status' => 'session_not_required',
+                    ], 403);
+                }
+                foreach ($verifiedRows as $verifiedRow) {
+                    $rowSessionId = trim((string) ($verifiedRow['session_id'] ?? ''));
+                    if ($rowSessionId !== $assignedSessionId) {
+                        json_response([
+                            'ok' => false,
+                            'error' => 'This student is not assigned to the submitted seminar session.',
+                            'status' => 'session_not_required',
+                        ], 403);
+                    }
+                }
+            }
+        }
         $outgoingCheckOut = trim((string) ($payload['check_out_at'] ?? ''));
         $outgoingCheckIn = trim((string) ($payload['check_in_at'] ?? ''));
         $outgoingStatus = strtolower(trim((string) ($payload['status'] ?? '')));
@@ -249,6 +294,45 @@ switch ($action) {
         if (!mobile_secure_can_write_attendance($eventId, $userId, $role, $readHeaders)) {
             json_response(['ok' => false, 'error' => 'Not allowed.'], 403);
         }
+
+        require_once __DIR__ . '/../includes/scan_context.php';
+        $eventSelectCandidates = [
+            'id,event_mode,event_structure,event_for,session_attendance_rule',
+            'id,event_mode,event_structure,event_for',
+            'id,event_mode,event_structure',
+        ];
+        $event = null;
+        foreach ($eventSelectCandidates as $select) {
+            $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?select=' . rawurlencode($select)
+                . '&id=eq.' . rawurlencode($eventId) . '&limit=1';
+            $eventRes = supabase_request('GET', $eventUrl, $readHeaders);
+            if (!($eventRes['ok'] ?? false)) {
+                continue;
+            }
+            $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+            $event = is_array($eventRows) && isset($eventRows[0]) && is_array($eventRows[0])
+                ? $eventRows[0]
+                : null;
+            if (is_array($event)) {
+                break;
+            }
+        }
+        if (!is_array($event)) {
+            json_response(['ok' => false, 'error' => 'Event not found.'], 404);
+        }
+
+        $sessions = fetch_event_sessions($eventId, $readHeaders);
+        if (event_uses_sessions(array_merge($event, ['sessions' => $sessions]))) {
+            try {
+                sync_session_event_absences($eventId, $sessions, new DateTimeImmutable('now', new DateTimeZone('UTC')), $event);
+            } catch (Throwable $e) {
+                error_log('sync_session_event_absences: ' . $e->getMessage());
+                json_response(['ok' => false, 'error' => 'Sync absences failed.'], 500);
+            }
+            json_response(['ok' => true], 200);
+        }
+
         $rpcUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/rpc/sync_closed_session_absences';
         $res = supabase_request(
             'POST',
@@ -344,6 +428,7 @@ switch ($action) {
         }
 
         require_once __DIR__ . '/../includes/event_sessions.php';
+        require_once __DIR__ . '/../includes/event_session_targeting.php';
         require_once __DIR__ . '/../includes/certificate_auto_issue.php';
         require_once __DIR__ . '/../includes/evaluation_notifications.php';
 
@@ -368,7 +453,7 @@ switch ($action) {
                 }
                 if (!isset($checkedEventIds[$eid])) {
                     $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-                        . '?select=id,event_mode,event_structure'
+                        . '?select=id,event_mode,event_structure,event_for,session_attendance_rule'
                         . '&id=eq.' . rawurlencode($eid) . '&limit=1';
                     $eventRes = supabase_request('GET', $eventUrl, $readHeaders);
                     $eventRows = $eventRes['ok'] ? json_decode((string) ($eventRes['body'] ?? ''), true) : [];
@@ -387,11 +472,44 @@ switch ($action) {
                     }
                     $usesSessions = event_uses_sessions(array_merge($eventRow, ['sessions' => $validSessions]))
                         && $validSessions !== [];
+                    $splitAttendance = $usesSessions
+                        && event_uses_split_session_attendance(array_merge($eventRow, ['sessions' => $validSessions]));
+                    $eligibleSessions = $splitAttendance
+                        ? event_matching_sessions_for_student_registration(
+                            $eventRow,
+                            $validSessions,
+                            fetch_student_profile_by_id($userId, $readHeaders),
+                            $eid,
+                            $userId,
+                            $readHeaders
+                        )
+                        : $validSessions;
                     $simpleOut = certificate_auto_student_has_checkout_simple($eid, $userId, $readHeaders);
                     // 2+ seminars: wait for the last seminar time-out.
                     // 0–1 seminar / simple ticket flow: a simple-event check_out_at is enough
                     // (nested PostgREST filters used to miss timed-out tickets).
-                    if ($usesSessions && count($validSessions) >= 2) {
+                    if ($splitAttendance) {
+                        if (count($eligibleSessions) !== 1) {
+                            json_response([
+                                'ok' => false,
+                                'error' => 'Your event must assign you to exactly one seminar session. Contact the event organizer.',
+                                'status' => 'session_assignment_ambiguous',
+                            ], 409);
+                        }
+                        $checkedOut = certificate_auto_checked_out_session_ids($eligibleSessions, $userId, $readHeaders);
+                        $ok = event_student_meets_session_attendance_rule(
+                            $eventRow,
+                            $eligibleSessions,
+                            $checkedOut
+                        );
+                        if (!$ok) {
+                            json_response([
+                                'ok' => false,
+                                'error' => 'Time out of your assigned seminar before submitting evaluation.',
+                                'status' => 'checkout_required',
+                            ], 403);
+                        }
+                    } elseif ($usesSessions && count($validSessions) >= 2) {
                         $checkedOut = certificate_auto_checked_out_session_ids($validSessions, $userId, $readHeaders);
                         $final = evaluation_final_seminar_for_event($eid);
                         $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
@@ -444,6 +562,44 @@ switch ($action) {
                         json_response(['ok' => false, 'error' => 'Seminar not found.'], 404);
                     }
                     $eventIdForSession = trim((string) ($sess['event_id'] ?? ''));
+                    $splitAttendance = false;
+                    if ($eventIdForSession !== '') {
+                        $sessionEventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                            . '?select=id,event_mode,event_structure,event_for,session_attendance_rule'
+                            . '&id=eq.' . rawurlencode($eventIdForSession) . '&limit=1';
+                        $sessionEventRes = supabase_request('GET', $sessionEventUrl, $readHeaders);
+                        $sessionEventRows = $sessionEventRes['ok']
+                            ? json_decode((string) ($sessionEventRes['body'] ?? ''), true)
+                            : [];
+                        $sessionEvent = is_array($sessionEventRows) && isset($sessionEventRows[0])
+                            ? $sessionEventRows[0]
+                            : null;
+                        if (is_array($sessionEvent)) {
+                            $sessionEventSessions = fetch_event_sessions($eventIdForSession, $readHeaders);
+                            $splitAttendance = event_uses_split_session_attendance(array_merge(
+                                $sessionEvent,
+                                ['sessions' => $sessionEventSessions]
+                            ));
+                            if ($splitAttendance) {
+                                $profile = fetch_student_profile_by_id($userId, $readHeaders);
+                                $eligible = event_matching_sessions_for_student_registration(
+                                    $sessionEvent,
+                                    $sessionEventSessions,
+                                    is_array($profile) ? $profile : null,
+                                    $eventIdForSession,
+                                    $userId,
+                                    $readHeaders
+                                );
+                                if (count($eligible) !== 1 || trim((string) ($eligible[0]['id'] ?? '')) !== $sessionId) {
+                                    json_response([
+                                        'ok' => false,
+                                        'error' => 'This seminar evaluation is not assigned to you.',
+                                        'status' => 'session_not_required',
+                                    ], 403);
+                                }
+                            }
+                        }
+                    }
                     $checkedOut = certificate_auto_checked_out_session_ids(
                         [['id' => $sessionId]],
                         $userId,
@@ -457,7 +613,7 @@ switch ($action) {
                         ], 403);
                     }
                     // Multi-seminar: all seminar sections wait for the final out.
-                    if ($eventIdForSession !== '') {
+                    if (!$splitAttendance && $eventIdForSession !== '') {
                         $final = evaluation_final_seminar_for_event($eventIdForSession);
                         $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
                         if ($finalId !== '') {
@@ -1050,6 +1206,7 @@ switch ($action) {
                     'title' => $title,
                     'start_at' => $startAt,
                     'sort_order' => $i,
+                    'session_no' => $i + 1,
                     'scan_window_minutes' => (int) ($source['scan_window_minutes']
                         ?? $source['attendance_window_minutes']
                         ?? 30),
@@ -1064,6 +1221,14 @@ switch ($action) {
                         $row[$opt] = $val;
                     }
                 }
+                $targetParticipant = trim((string) ($source['target_participant'] ?? ''));
+                if ($targetParticipant !== '') {
+                    $decodedTarget = decode_target_participant($targetParticipant);
+                    $row['target_participant'] = encode_target_participant(
+                        (string) ($decodedTarget['course'] ?? 'ALL'),
+                        $decodedTarget['years'] ?? ['ALL']
+                    );
+                }
                 $sessionRows[] = $row;
             }
             if ($sessionRows !== []) {
@@ -1075,7 +1240,11 @@ switch ($action) {
                 );
                 if (!($sessRes['ok'] ?? false)) {
                     supabase_request('DELETE', rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId), $readHeaders);
-                    json_response(['ok' => false, 'error' => 'Failed to create event sessions.'], 500);
+                    $sessionError = strtolower((string) ($sessRes['body'] ?? ''));
+                    $message = str_contains($sessionError, 'target_participant')
+                        ? 'Per-seminar participant targeting needs supabase/migrations/069_session_targeting_and_attendance_rule.sql. Apply the migration, then try again.'
+                        : 'Failed to create event sessions.';
+                    json_response(['ok' => false, 'error' => $message], 500);
                 }
             }
         }

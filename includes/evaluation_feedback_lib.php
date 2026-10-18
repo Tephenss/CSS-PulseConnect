@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/event_sessions.php';
+require_once __DIR__ . '/event_session_targeting.php';
 
 /**
  * Rating (Likert) questions first, then comment/text — stable by sort_order within type.
@@ -166,6 +167,98 @@ function feedback_ticket_student_map(string $eventId, array $headers): array
     }
 
     return $ticketToStudent;
+}
+
+/**
+ * Resolve each split-event registration to its single saved seminar assignment.
+ *
+ * @param list<array<string,mixed>> $attendanceRows
+ * @param list<array<string,mixed>> $sessions
+ * @return array<string,string> Registration ID => assigned session ID.
+ */
+function feedback_split_session_assignment_map(
+    string $eventId,
+    array $attendanceRows,
+    array $sessions,
+    array $headers
+): array {
+    $registrationIds = [];
+    foreach ($attendanceRows as $row) {
+        if (!is_array($row) || !feedback_attendance_counts_as_present($row)) {
+            continue;
+        }
+        $registrationId = trim((string) ($row['registration_id'] ?? ''));
+        if ($registrationId !== '') {
+            $registrationIds[$registrationId] = true;
+        }
+    }
+
+    if ($registrationIds === []) {
+        return [];
+    }
+
+    $assignments = event_session_assignments_for_registrations(
+        $eventId,
+        array_keys($registrationIds),
+        $sessions,
+        $headers
+    );
+    if (!is_array($assignments)) {
+        return [];
+    }
+
+    $assignmentMap = [];
+    foreach ($assignments as $registrationId => $assignedSessions) {
+        if (count($assignedSessions) !== 1) {
+            continue;
+        }
+        $sessionId = trim((string) ($assignedSessions[0]['id'] ?? ''));
+        if ($sessionId !== '') {
+            $assignmentMap[(string) $registrationId] = $sessionId;
+        }
+    }
+
+    return $assignmentMap;
+}
+
+/**
+ * Return students who completed checkout in their one assigned session.
+ * Split-session events treat either assigned seminar as completion of the
+ * whole-event attendance requirement; attendance in another seminar is ignored.
+ *
+ * @param list<array<string,mixed>> $attendanceRows
+ * @param array<string,string> $assignmentMap
+ * @return list<string>
+ */
+function feedback_split_session_completed_students(array $attendanceRows, array $assignmentMap): array
+{
+    $completedStudents = [];
+    foreach ($attendanceRows as $row) {
+        if (!is_array($row) || !feedback_attendance_counts_as_present($row)
+            || trim((string) ($row['check_out_at'] ?? '')) === '') {
+            continue;
+        }
+
+        $registrationId = trim((string) ($row['registration_id'] ?? ''));
+        $sessionId = trim((string) ($row['session_id'] ?? ''));
+        if ($registrationId === '' || $sessionId === ''
+            || ($assignmentMap[$registrationId] ?? '') !== $sessionId) {
+            continue;
+        }
+
+        $registration = $row['registration'] ?? null;
+        if (is_array($registration) && array_is_list($registration)) {
+            $registration = $registration[0] ?? [];
+        }
+        $studentId = is_array($registration)
+            ? trim((string) ($registration['student_id'] ?? ''))
+            : '';
+        if ($studentId !== '') {
+            $completedStudents[$studentId] = true;
+        }
+    }
+
+    return array_values(array_keys($completedStudents));
 }
 
 /**
@@ -807,6 +900,7 @@ function evaluation_feedback_load_sections(
     array $headers,
     array $sessions,
     bool $usesSessions,
+    bool $splitAttendance,
     array $eventQuestions,
     array $sessionQuestionGroups
 ): array {
@@ -827,7 +921,7 @@ if ($usesSessions) {
             $sessionFilter = implode(',', array_map('rawurlencode', $sessionIds));
 
             $attendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance'
-                . '?select=session_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
+                . '?select=session_id,registration_id,status,check_in_at,check_out_at,registration:event_registrations(student_id)'
                 . '&session_id=in.(' . $sessionFilter . ')';
             $attendanceRes = supabase_request('GET', $attendanceUrl, $headers);
             $attendanceRows = $attendanceRes['ok'] ? json_decode((string) $attendanceRes['body'], true) : [];
@@ -864,6 +958,9 @@ if ($usesSessions) {
         $presentBySession = [];
         $eventParticipantIds = [];
         $eventFeedbackParticipantIds = [];
+        $splitAssignmentByRegistration = $splitAttendance
+            ? feedback_split_session_assignment_map($eventId, $attendanceRows, $sessions, $headers)
+            : [];
         $feedbackSession = count($sessions) > 1
             ? event_sessions_last($sessions)
             : ($sessions[0] ?? null);
@@ -875,6 +972,12 @@ if ($usesSessions) {
 
             $sid = trim((string) ($row['session_id'] ?? ''));
             $registration = isset($row['registration']) && is_array($row['registration']) ? $row['registration'] : [];
+            if ($splitAttendance) {
+                $registrationId = trim((string) ($row['registration_id'] ?? ''));
+                if ($registrationId === '' || ($splitAssignmentByRegistration[$registrationId] ?? '') !== $sid) {
+                    continue;
+                }
+            }
             $studentId = trim((string) ($row['student_id'] ?? ''));
             if ($studentId === '') {
                 $studentId = trim((string) ($registration['student_id'] ?? ''));
@@ -888,13 +991,20 @@ if ($usesSessions) {
             }
             $presentBySession[$sid][$studentId] = true;
             $eventParticipantIds[$studentId] = true;
-            if ($sid === $feedbackSessionId && trim((string) ($row['check_out_at'] ?? '')) !== '') {
+            if (!$splitAttendance && $sid === $feedbackSessionId && trim((string) ($row['check_out_at'] ?? '')) !== '') {
                 $eventFeedbackParticipantIds[$studentId] = true;
             }
         }
 
         $eventParticipantIds = array_values(array_keys($eventParticipantIds));
-        // Whole-event feedback follows the completed-attendance rule used by evaluation delivery.
+        if ($splitAttendance) {
+            $eventFeedbackParticipantIds = array_fill_keys(
+                feedback_split_session_completed_students($attendanceRows, $splitAssignmentByRegistration),
+                true
+            );
+        }
+        // Split events accept checkout in the participant's assigned seminar;
+        // regular multi-session events still require the final seminar checkout.
         $eventFeedbackParticipantIds = array_values(array_keys($eventFeedbackParticipantIds));
         $respondentMap = feedback_respondent_map($eventParticipantIds, $headers);
 

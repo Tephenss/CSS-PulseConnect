@@ -55,6 +55,13 @@ $graceTimeRaw = isset($data['grace_time']) ? trim((string) $data['grace_time']) 
 $eventSpan = isset($data['event_span']) ? clean_string((string) $data['event_span']) : 'single_day';
 $eventMode = normalize_event_mode(isset($data['event_mode']) ? (string) $data['event_mode'] : 'simple');
 $sessions = normalize_event_sessions($data['sessions'] ?? null, $location);
+$sessionAttendanceRule = strtolower(trim((string) ($data['session_attendance_rule'] ?? 'all')));
+if (!in_array($sessionAttendanceRule, ['all', 'any'], true)) {
+    json_response(['ok' => false, 'error' => 'Choose whether students must attend all matching seminars or any one.'], 400);
+}
+if ($eventMode !== 'seminar_based' || count($sessions) < 2) {
+    $sessionAttendanceRule = 'all';
+}
 $proposalRequirements = is_array($data['proposal_requirements'] ?? null) ? $data['proposal_requirements'] : [];
 $studentRequirements = is_array($data['student_requirements'] ?? null) ? $data['student_requirements'] : [];
 
@@ -184,6 +191,11 @@ if ($role === 'teacher') {
     }
 }
 
+$capacityError = validate_event_session_capacity_allocations($sessions, $registrationLimit);
+if ($capacityError !== null) {
+    json_response(['ok' => false, 'error' => $capacityError], 400);
+}
+
 $payload = [
     'title' => $title,
     'description' => $description !== '' ? $description : null,
@@ -196,6 +208,7 @@ $payload = [
     'event_for' => $eventFor,
     'grace_time' => $graceTime,
     'event_span' => $eventSpan,
+    'session_attendance_rule' => $sessionAttendanceRule,
 ];
 
 if ($role === 'teacher') {
@@ -255,6 +268,9 @@ if (!$res['ok'] && (is_missing_column_error($res, 'is_free_event') || is_missing
 }
 
 if (!$res['ok']) {
+    if (is_missing_column_error($res, 'session_attendance_rule')) {
+        json_response(['ok' => false, 'error' => 'Run supabase/migrations/069_session_targeting_and_attendance_rule.sql before creating seminar events.'], 500);
+    }
     json_response(['ok' => false, 'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Create failed')], 500);
 }
 

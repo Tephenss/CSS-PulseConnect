@@ -1387,9 +1387,14 @@ function certificate_pool_mint_next_sequential(string $eventId, string $studentI
     }
 
     $headers = certificate_pool_headers();
+    $nextNumber = (int) $cursor['next'];
+    $globalMax = certificate_pool_global_max_serial((string) $cursor['prefix']);
+    if ($globalMax !== null) {
+        $nextNumber = max($nextNumber, $globalMax + 1);
+    }
     // Retry a few serial numbers if a global unique(code) collision occurs.
     for ($i = 0; $i < 12; $i++) {
-        $number = $cursor['next'] + $i;
+        $number = $nextNumber + $i;
         $code = certificate_pool_format_sequence($cursor['prefix'], $number, $cursor['width']);
         $payload = [
             'import_id' => $importId,

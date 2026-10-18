@@ -55,7 +55,7 @@ function build_manage_events_url(string $selectColumns, string $role, string $us
  */
 function manage_events_production_select(): string
 {
-  return 'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,early_out_enabled_at,users:created_by(first_name,last_name,suffix)';
+  return 'id,title,description,location,start_at,end_at,status,created_by,approved_by,created_at,updated_at,event_type,event_for,grace_time,event_span,event_mode,event_structure,session_attendance_rule,is_free_event,event_fee,registration_limit,registration_close_weeks,cover_image_url,proposal_stage,requirements_requested_at,requirements_submitted_at,early_out_enabled_at,users:created_by(first_name,last_name,suffix)';
 }
 
 /**
@@ -792,11 +792,11 @@ render_header('Manage Events', $user);
             </div>
 
             <div class="mt-3">
-              <label for="registration_limit" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Student Limit</label>
+              <label id="registrationLimitLabel" for="registration_limit" class="block text-xs text-zinc-600 mb-1.5 font-medium tracking-wide">Student Limit</label>
               <input type="number" id="registration_limit" name="registration_limit" min="1" max="9999" step="1" inputmode="numeric" pattern="[0-9]*"
                 class="w-full rounded-xl bg-white border border-zinc-200 py-3 px-4 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400 transition"
                 placeholder="e.g. 50 (max 9999)" />
-              <p class="mt-1 text-[11px] text-zinc-500">Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).</p>
+              <p id="registrationLimitHint" class="mt-1 text-[11px] text-zinc-500">Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).</p>
             </div>
           </div>
           
@@ -837,11 +837,23 @@ render_header('Manage Events', $user);
                     separate attendance tracking.</p>
                 </button>
               </div>
+              </div>
+            </div>
+            <div id="seminarTargetSplitToggleWrap" class="hidden mt-3 rounded-xl border border-orange-200 bg-white p-3">
+              <label class="flex items-start gap-2 text-xs font-semibold text-zinc-800 cursor-pointer">
+                <input id="seminar_target_split_enabled" type="checkbox"
+                  class="mt-0.5 rounded border-zinc-300 text-orange-600 focus:ring-orange-500" />
+                <span>Split participants between the two seminars</span>
+              </label>
+              <p class="mt-1 ml-6 text-[11px] leading-snug text-zinc-500">
+                Leave this unchecked if everyone in the event target must attend both seminars. When split is on, each student only needs to attend their assigned seminar.
+              </p>
+              <p id="seminarTargetSplitUnavailable" class="hidden mt-2 ml-6 text-[11px] leading-snug text-amber-700"></p>
+              <div id="seminarTargetSplitEditor" class="hidden mt-3 border-t border-zinc-100 pt-3"></div>
             </div>
           </div>
-        </div>
 
-        <!-- Step 2: Details -->
+          <!-- Step 2: Details -->
         <div id="step2" class="space-y-4 hidden">
           <div>
             <label
@@ -946,7 +958,7 @@ render_header('Manage Events', $user);
                 Seminar</span>
             </div>
 
-            <div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">
+<div id="seminar1Editor" class="rounded-xl border border-orange-200 bg-white p-4 space-y-3">
               <div class="text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar 1</div>
               <div>
                 <label class="block text-[11px] text-zinc-600 mb-1 font-medium field-req">Title</label>
@@ -2051,6 +2063,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
             data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
             data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
             data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
+            data-session_attendance_rule="<?= htmlspecialchars((string) ($e['session_attendance_rule'] ?? 'all')) ?>"
             data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
             data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
             data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
@@ -2285,6 +2298,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
                       data-start_at="<?= htmlspecialchars((string) ($e['start_at'] ?? '')) ?>"
                       data-end_at="<?= htmlspecialchars((string) ($e['end_at'] ?? '')) ?>"
                       data-event_mode="<?= htmlspecialchars(event_uses_sessions($e) ? 'seminar_based' : 'simple') ?>"
+                      data-session_attendance_rule="<?= htmlspecialchars((string) ($e['session_attendance_rule'] ?? 'all')) ?>"
                       data-sessions="<?= htmlspecialchars((string) (json_encode($e['sessions'] ?? [], JSON_UNESCAPED_SLASHES | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]'), ENT_QUOTES) ?>"
                       data-event_type="<?= htmlspecialchars((string) ($e['event_type'] ?? 'Event')) ?>"
                       data-event_for="<?= htmlspecialchars((string) ($e['event_for'] ?? 'All')) ?>"
@@ -3207,6 +3221,17 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
   const seminarCountInput = document.getElementById('seminar_count');
   const simpleScheduleSection = document.getElementById('simpleScheduleSection');
   const seminarScheduleSection = document.getElementById('seminarScheduleSection');
+  const seminarTargetSplitToggleWrap = document.getElementById('seminarTargetSplitToggleWrap');
+  const seminarTargetSplitToggle = document.getElementById('seminar_target_split_enabled');
+  const seminarTargetSplitUnavailable = document.getElementById('seminarTargetSplitUnavailable');
+  const seminarTargetSplitEditor = document.getElementById('seminarTargetSplitEditor');
+  let seminarSplitModelKey = '';
+  let seminarSplitSelection = {
+    dimension: '',
+    courses: { 1: '', 2: '' },
+    years: { 1: [], 2: [] },
+  };
+  let seminarSplitCapacity = { 1: '', 2: '' };
   const seminar2Editor = document.getElementById('seminar2Editor');
   const seminarSummaryBadge = document.getElementById('seminarSummaryBadge');
 
@@ -3762,6 +3787,10 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     simpleScheduleSection?.classList.toggle('hidden', isSeminar);
     seminarScheduleSection?.classList.toggle('hidden', !isSeminar);
     seminar2Editor?.classList.toggle('hidden', !(isSeminar && normalizedCount === 2));
+    if (!(isSeminar && normalizedCount === 2) && seminarTargetSplitToggle) {
+      seminarTargetSplitToggle.checked = false;
+    }
+    syncSeminarTargetSplitUI();
 
     const seminar1Title = document.getElementById('seminar1_title');
     const seminar2Title = document.getElementById('seminar2_title');
@@ -3821,6 +3850,11 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
       title,
       start_at: start.toISOString(),
       end_at: end.toISOString(),
+      target_participant: getSeminarTargetParticipant(index),
+      registration_limit: seminarTargetSplitToggle?.checked
+        && String(document.getElementById('registration_limit')?.value || '').trim() !== ''
+        ? (seminarSplitCapacity[index] ? Number(seminarSplitCapacity[index]) : null)
+        : null,
     };
   }
 
@@ -3853,7 +3887,13 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         const startAt = (session.start_at || '').toString().trim();
         const endAt = (session.end_at || '').toString().trim();
         if (!title || !startAt || !endAt) return null;
-        return { title, start_at: startAt, end_at: endAt };
+        return {
+          title,
+          start_at: startAt,
+          end_at: endAt,
+          target_participant: (session.target_participant || '').toString(),
+          registration_limit: session.registration_limit == null ? '' : String(session.registration_limit),
+        };
       })
       .filter(Boolean);
   }
@@ -4408,6 +4448,10 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     const decodedTarget = decodeTargetParticipant(ds('event_for') || 'All');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = decodedTarget.course;
     setSelectedTargetYears(decodedTarget.years || ['ALL']);
+    if (seminarTargetSplitToggle) seminarTargetSplitToggle.checked = false;
+    seminarSplitModelKey = '';
+    seminarSplitSelection = { dimension: '', courses: { 1: '', 2: '' }, years: { 1: [], 2: [] } };
+    seminarSplitCapacity = { 1: '', 2: '' };
     if (document.getElementById('grace_time')) document.getElementById('grace_time').value = ds('grace_time') || '30';
     setRegistrationType((ds('is_free_event') || '1') !== '0' ? 'free' : 'paid');
     const feeInput = document.getElementById('event_fee');
@@ -4442,23 +4486,38 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
 
       const s1 = sessions[0] || null;
       const s2 = sessions[1] || null;
+      seminarSplitCapacity = {
+        1: s1?.registration_limit == null ? '' : String(s1.registration_limit),
+        2: s2?.registration_limit == null ? '' : String(s2.registration_limit),
+      };
+      if (seminarTargetSplitToggle) {
+        seminarTargetSplitToggle.checked = seminarCount === 2
+          && [s1, s2].some((session) => String(session?.target_participant || '').trim() !== '');
+      }
+      syncSeminarTargetSplitUI();
 
       document.getElementById('seminar1_title').value = s1?.title || '';
+      setSeminarTargetParticipant(1, s1?.target_participant || '');
       setPickerValue(document.getElementById('seminar1_start_local'), s1?.start_at ? toLocalInput(s1.start_at) : '');
       setPickerValue(document.getElementById('seminar1_end_local'), s1?.end_at ? toLocalInput(s1.end_at) : '');
 
       document.getElementById('seminar2_title').value = s2?.title || '';
+      setSeminarTargetParticipant(2, s2?.target_participant || '');
       setPickerValue(document.getElementById('seminar2_start_local'), s2?.start_at ? toLocalInput(s2.start_at) : '');
       setPickerValue(document.getElementById('seminar2_end_local'), s2?.end_at ? toLocalInput(s2.end_at) : '');
     } else {
       setStructure('simple', 0);
 
       document.getElementById('seminar1_title').value = '';
+      setSeminarTargetParticipant(1, '');
       setPickerValue(document.getElementById('seminar1_start_local'), '');
       setPickerValue(document.getElementById('seminar1_end_local'), '');
       document.getElementById('seminar2_title').value = '';
+      setSeminarTargetParticipant(2, '');
       setPickerValue(document.getElementById('seminar2_start_local'), '');
       setPickerValue(document.getElementById('seminar2_end_local'), '');
+      if (seminarTargetSplitToggle) seminarTargetSplitToggle.checked = false;
+      syncSeminarTargetSplitUI();
     }
 
     setPickerMin(startAtInput, null);
@@ -4633,6 +4692,413 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
       cb.checked = normalized.includes(cb.value);
     });
   }
+
+  function getSeminarTargetSplitModel() {
+    const course = normalizeTargetCourse(document.getElementById('target_course')?.value || 'ALL');
+    const years = normalizeTargetYears(getSelectedTargetYears());
+    const shared = { years, parentCourse: course };
+    const availableYears = years.includes('ALL') ? ['1', '2', '3', '4'] : years;
+    const courseOptions = course === 'ALL'
+      ? [
+          { value: 'BSIT', label: 'BSIT' },
+          { value: 'BSCS', label: 'BSCS' },
+        ]
+      : course === 'BSIT'
+        ? [
+            { value: 'BSIT-BA', label: 'BSIT-BA' },
+            { value: 'BSIT-SD', label: 'BSIT-SD' },
+          ]
+        : null;
+
+    if (courseOptions) {
+      const canSplitByYear = availableYears.length >= 2;
+      const hints = course === 'ALL'
+        ? {
+            course: 'Each seminar inherits the event year levels. Assign BSIT to one seminar and BSCS to the other.',
+            year: 'Both seminars include all programs. Assign each selected year level to exactly one seminar.',
+          }
+        : {
+            course: 'Each seminar inherits the event year levels. Assign BSIT-BA to one seminar and BSIT-SD to the other.',
+            year: 'Both seminars include BSIT-BA and BSIT-SD. Assign each selected year level to exactly one seminar.',
+          };
+      return {
+        ...shared,
+        key: `${canSplitByYear ? 'choice' : 'course'}:${course}:${years.join(',')}`,
+        dimension: canSplitByYear ? 'choice' : 'course',
+        defaultDimension: 'course',
+        options: courseOptions,
+        yearOptions: availableYears,
+        hints,
+        hint: canSplitByYear ? 'Choose how to divide the event participants.' : hints.course,
+      };
+    }
+
+    if (availableYears.length < 2) {
+      return {
+        ...shared,
+        key: `unavailable:${course}:${availableYears.join(',')}`,
+        dimension: 'unavailable',
+        options: [],
+        hint: 'The event target is already limited to one year level. Select at least two year levels to divide participants.',
+      };
+    }
+
+    return {
+      ...shared,
+      key: `year:${course}:${availableYears.join(',')}`,
+      dimension: 'year',
+      options: availableYears,
+      hint: `Both seminars are for ${course}. Assign each selected year level to exactly one seminar.`,
+    };
+  }
+
+  function getActiveSeminarSplitDimension(model) {
+    return model?.dimension === 'choice'
+      ? (seminarSplitSelection.dimension || model.defaultDimension || 'course')
+      : model?.dimension;
+  }
+
+  function resetSeminarSplitSelections(model) {
+    seminarSplitModelKey = model?.key || '';
+    seminarSplitSelection = {
+      dimension: model?.defaultDimension || model?.dimension || '',
+      courses: { 1: '', 2: '' },
+      years: { 1: [], 2: [] },
+    };
+  }
+
+  function splitYearLabel(year) {
+    return ({ '1': '1st Year', '2': '2nd Year', '3': '3rd Year', '4': '4th Year' })[year] || year;
+  }
+
+  function updateSeminarSplitCapacityControls() {
+    if (!seminarTargetSplitEditor) return;
+    const totalRaw = String(document.getElementById('registration_limit')?.value || '').trim();
+    const total = totalRaw ? Number.parseInt(totalRaw, 10) : null;
+    if (totalRaw === '') seminarSplitCapacity = { 1: '', 2: '' };
+    const first = String(seminarSplitCapacity[1] || '').trim();
+    const second = String(seminarSplitCapacity[2] || '').trim();
+    const firstValue = first ? Number.parseInt(first, 10) : null;
+    const secondValue = second ? Number.parseInt(second, 10) : null;
+    const remaining = Number.isInteger(total) && Number.isInteger(firstValue)
+      ? total - firstValue
+      : null;
+    const totalValid = Number.isInteger(total) && total >= 2;
+    const allocationSum = (Number.isInteger(firstValue) ? firstValue : 0)
+      + (Number.isInteger(secondValue) ? secondValue : 0);
+    const overAllocated = Number.isInteger(total) && allocationSum > total;
+    const firstConsumesAll = Number.isInteger(total) && Number.isInteger(firstValue)
+      && firstValue >= total;
+    const summary = seminarTargetSplitEditor.querySelector('[data-seminar-capacity-summary]');
+    if (summary) {
+      summary.hidden = totalRaw === '';
+      const invalidAllocation = overAllocated || firstConsumesAll || (totalRaw !== '' && !totalValid);
+      summary.classList.toggle('border-red-200', invalidAllocation);
+      summary.classList.toggle('bg-red-50', invalidAllocation);
+      summary.classList.toggle('text-red-700', invalidAllocation);
+      summary.classList.toggle('border-orange-200', !invalidAllocation);
+      summary.classList.toggle('bg-orange-50', !invalidAllocation);
+      summary.classList.toggle('text-orange-800', !invalidAllocation);
+      if (totalRaw === '') {
+        summary.textContent = 'Set the total Student Limit above to allocate separate limits for each seminar.';
+      } else if (!totalValid) {
+        summary.textContent = 'The total Student Limit must be at least 2 to allocate capacity to both seminars.';
+      } else if (overAllocated) {
+        const excess = allocationSum - total;
+        summary.textContent = `The allocations exceed the total limit by ${excess} student${excess === 1 ? '' : 's'}.`;
+      } else if (firstConsumesAll) {
+        summary.textContent = `Keep at least 1 place for Seminar 2. Seminar 1 can have up to ${total - 1}.`;
+      } else if (Number.isInteger(firstValue) && Number.isInteger(secondValue)) {
+        summary.textContent = `Allocated: ${firstValue} + ${secondValue} = ${allocationSum} of ${total} students.`;
+      } else if (Number.isInteger(firstValue)) {
+        summary.textContent = `Seminar 1 has ${firstValue} allocated. Seminar 2 can use up to ${Math.max(0, remaining)} more.`;
+      } else {
+        summary.textContent = `Allocate up to ${total} students across both seminars.`;
+      }
+    }
+
+    seminarTargetSplitEditor.querySelectorAll('[data-seminar-capacity-input]').forEach((input) => {
+      const index = Number(input.dataset.seminarCapacityInput);
+      const capacityControl = input.closest('[data-seminar-capacity-control]');
+      if (capacityControl) capacityControl.hidden = totalRaw === '';
+      const isFirst = index === 1;
+      const currentValue = isFirst ? firstValue : secondValue;
+      const firstReady = Number.isInteger(firstValue) && firstValue > 0
+        && Number.isInteger(total) && firstValue < total;
+      const max = isFirst
+        ? (Number.isInteger(total) ? Math.max(0, total - 1) : '')
+        : (Number.isInteger(remaining) ? Math.max(0, remaining) : '');
+      const disabled = !totalValid || (!isFirst
+        && (!firstReady || (remaining < 1 && !second)));
+      input.disabled = disabled;
+      if (max === '') input.removeAttribute('max');
+      else input.max = String(max);
+      if (document.activeElement !== input) input.value = isFirst ? first : second;
+
+      const hint = input.closest('[data-seminar-capacity-control]')?.querySelector('[data-seminar-capacity-hint]');
+      if (hint) {
+        if (totalRaw === '') {
+          hint.textContent = 'Set the total event limit first.';
+        } else if (!totalValid) {
+          hint.textContent = 'The total limit must be at least 2.';
+        } else if (isFirst) {
+          hint.textContent = `Enter 1 to ${Math.max(0, total - 1)}. Leave at least 1 place for Seminar 2.`;
+        } else if (!firstReady) {
+          hint.textContent = 'Set the Seminar 1 limit first.';
+        } else {
+          hint.textContent = `Remaining capacity: ${Math.max(0, remaining)}.`;
+        }
+      }
+      input.classList.toggle('border-red-400', max !== '' && Number.isInteger(currentValue) && currentValue > Number(max));
+    });
+  }
+
+  function validateSeminarSplitCapacity() {
+    if (!seminarTargetSplitToggle?.checked) return null;
+    const totalRaw = String(document.getElementById('registration_limit')?.value || '').trim();
+    if (totalRaw === '') return null;
+
+    const total = Number.parseInt(totalRaw, 10);
+    if (!Number.isInteger(total) || total < 2) {
+      return { message: 'The total Student Limit must be at least 2 to split capacity between both seminars.', focusId: 'registration_limit' };
+    }
+    const first = Number.parseInt(String(seminarSplitCapacity[1] || ''), 10);
+    const second = Number.parseInt(String(seminarSplitCapacity[2] || ''), 10);
+    if (!Number.isInteger(first) || first < 1 || first >= total) {
+      return { message: 'Set a Seminar 1 student limit and leave at least 1 place for Seminar 2.', focusId: 'seminar1_registration_limit' };
+    }
+    if (!Number.isInteger(second) || second < 1) {
+      return { message: 'Set a student limit for Seminar 2.', focusId: 'seminar2_registration_limit' };
+    }
+    if (first + second > total) {
+      return { message: 'The two seminar limits cannot exceed the total Student Limit.', focusId: 'seminar2_registration_limit' };
+    }
+    return null;
+  }
+
+  function renderSeminarTargetSplitEditor(model) {
+    if (!seminarTargetSplitEditor || !model || model.dimension === 'unavailable') return;
+    const dimension = getActiveSeminarSplitDimension(model);
+    const yearOptions = model.dimension === 'choice' ? model.yearOptions : model.options;
+    const groupCard = (index) => `<div class="rounded-lg border border-zinc-200 bg-white p-3">
+      <div class="mb-2 text-[11px] font-bold uppercase tracking-wide text-zinc-600">Seminar ${index} participants</div>
+      ${dimension === 'course'
+        ? `<select data-seminar-split-course="${index}" ${index === 2 && !seminarSplitSelection.courses[1] && !seminarSplitSelection.courses[2] ? 'disabled' : ''} class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400">
+            <option value="">Choose a group</option>
+            ${model.options.map((option) => {
+              const selected = seminarSplitSelection.courses[index] === option.value;
+              const selectedByOther = seminarSplitSelection.courses[index === 1 ? 2 : 1] === option.value;
+              const unassignedOptions = model.options.filter((candidate) =>
+                ![seminarSplitSelection.courses[1], seminarSplitSelection.courses[2]].includes(candidate.value)
+              );
+              const otherSeminarUnassigned = !seminarSplitSelection.courses[index === 1 ? 2 : 1]
+                && unassignedOptions.length === 1
+                && unassignedOptions[0].value === option.value;
+              const disabled = !selected && (selectedByOther || otherSeminarUnassigned);
+              return `<option value="${option.value}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${option.label}</option>`;
+            }).join('')}
+          </select>`
+        : `<div class="flex flex-wrap gap-2">
+            ${yearOptions.map((year) => {
+              const selected = seminarSplitSelection.years[index].includes(year);
+              const selectedByOther = seminarSplitSelection.years[index === 1 ? 2 : 1].includes(year);
+              const unassignedYears = yearOptions.filter((candidate) =>
+                !seminarSplitSelection.years[1].includes(candidate)
+                && !seminarSplitSelection.years[2].includes(candidate)
+              );
+              const otherSeminarUnassigned = seminarSplitSelection.years[index === 1 ? 2 : 1].length === 0
+                && unassignedYears.length === 1
+                && unassignedYears[0] === year;
+              const seminar2Locked = index === 2
+                && seminarSplitSelection.years[1].length === 0
+                && seminarSplitSelection.years[2].length === 0;
+              const disabled = (selectedByOther && !selected) || seminar2Locked || (!selected && otherSeminarUnassigned);
+              return `<label class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-2 py-1 text-[11px] ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}">
+                <input type="checkbox" data-seminar-split-year-session="${index}" data-seminar-split-year="${year}" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''} class="rounded border-zinc-300 text-orange-600 focus:ring-orange-500" />
+                <span>${splitYearLabel(year)}</span>
+              </label>`;
+            }).join('')}
+          </div>`}
+      <div data-seminar-capacity-control class="mt-3">
+        <label for="seminar${index}_registration_limit" class="mb-1 block text-[11px] font-semibold text-zinc-700">Student limit for Seminar ${index}</label>
+        <input id="seminar${index}_registration_limit" data-seminar-capacity-input="${index}" type="number" min="1" step="1" inputmode="numeric" pattern="[0-9]*" value="${seminarSplitCapacity[index] || ''}" placeholder="e.g. 250" class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400" />
+        <p data-seminar-capacity-hint class="mt-1 text-[10px] leading-snug text-zinc-500"></p>
+      </div>
+    </div>`;
+
+    const modePicker = model.dimension === 'choice'
+      ? `<label class="mb-3 block text-[11px] font-semibold text-zinc-700">Split participants by
+          <select data-seminar-split-dimension class="ml-2 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-xs">
+            <option value="course" ${dimension === 'course' ? 'selected' : ''}>Program</option>
+            <option value="year" ${dimension === 'year' ? 'selected' : ''}>Year level (include both programs)</option>
+          </select>
+        </label>`
+      : '';
+    const hint = model.dimension === 'choice' ? model.hints[dimension] : model.hint;
+    seminarTargetSplitEditor.innerHTML = `${modePicker}<p class="mb-3 text-[11px] leading-snug text-zinc-600">${hint} Each student is assigned to one seminar and must attend that seminar. The last unassigned group is reserved for the other seminar.</p>
+      <p data-seminar-capacity-summary class="mb-3 rounded-lg border px-3 py-2 text-[11px] leading-snug"></p>
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">${groupCard(1)}${groupCard(2)}</div>`;
+
+    updateSeminarSplitCapacityControls();
+
+    seminarTargetSplitEditor.querySelectorAll('[data-seminar-capacity-input]').forEach((input) => {
+      input.addEventListener('input', () => {
+        const index = Number(input.dataset.seminarCapacityInput);
+        seminarSplitCapacity[index] = String(input.value || '').replace(/\D+/g, '').slice(0, 4);
+        input.value = seminarSplitCapacity[index];
+        updateSeminarSplitCapacityControls();
+      });
+    });
+
+    seminarTargetSplitEditor.querySelector('[data-seminar-split-dimension]')?.addEventListener('change', (event) => {
+      seminarSplitSelection.dimension = event.target.value;
+      seminarSplitSelection.courses = { 1: '', 2: '' };
+      seminarSplitSelection.years = { 1: [], 2: [] };
+      renderSeminarTargetSplitEditor(model);
+    });
+    seminarTargetSplitEditor.querySelectorAll('[data-seminar-split-course]').forEach((select) => {
+      select.addEventListener('change', () => {
+        const index = Number(select.dataset.seminarSplitCourse);
+        seminarSplitSelection.courses[index] = select.value;
+        renderSeminarTargetSplitEditor(model);
+      });
+    });
+    seminarTargetSplitEditor.querySelectorAll('[data-seminar-split-year-session]').forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        const index = Number(checkbox.dataset.seminarSplitYearSession);
+        const year = checkbox.dataset.seminarSplitYear;
+        const values = new Set(seminarSplitSelection.years[index]);
+        if (checkbox.checked) values.add(year);
+        else values.delete(year);
+        seminarSplitSelection.years[index] = [...values];
+        renderSeminarTargetSplitEditor(model);
+      });
+    });
+  }
+
+  function syncSeminarTargetSplitUI() {
+    const sessionLimit = (eventModeInput?.value || 'simple') === 'seminar_based';
+    const limitLabel = document.getElementById('registrationLimitLabel');
+    const limitHint = document.getElementById('registrationLimitHint');
+    const isTwoSeminarEvent = sessionLimit
+      && (Number.parseInt(seminarCountInput?.value || '0', 10) || 0) === 2;
+    const splitEnabled = isTwoSeminarEvent && !!seminarTargetSplitToggle?.checked;
+    if (limitLabel) limitLabel.textContent = splitEnabled ? 'Total Student Limit' : 'Student Limit';
+    if (limitHint) {
+      limitHint.textContent = splitEnabled
+        ? 'Maximum registrations across both seminars. Allocate this total between Seminar 1 and Seminar 2 below; their combined limits cannot exceed it.'
+        : 'Registration closes automatically once this number of students have registered. Maximum 4 digits (9999).';
+    }
+
+    seminarTargetSplitToggleWrap?.classList.toggle('hidden', !isTwoSeminarEvent);
+    if (!isTwoSeminarEvent) {
+      seminarSplitModelKey = '';
+      seminarSplitSelection = { dimension: '', courses: { 1: '', 2: '' }, years: { 1: [], 2: [] } };
+      seminarSplitCapacity = { 1: '', 2: '' };
+      if (seminarTargetSplitEditor) seminarTargetSplitEditor.innerHTML = '';
+      seminarTargetSplitEditor?.classList.add('hidden');
+      return;
+    }
+
+    const model = getSeminarTargetSplitModel();
+    const canSplit = model.dimension !== 'unavailable';
+    if (seminarTargetSplitUnavailable) {
+      seminarTargetSplitUnavailable.textContent = canSplit ? '' : model.hint;
+      seminarTargetSplitUnavailable.classList.toggle('hidden', canSplit);
+    }
+    if (seminarTargetSplitToggle) {
+      seminarTargetSplitToggle.disabled = !canSplit;
+      if (!canSplit) seminarTargetSplitToggle.checked = false;
+    }
+    if (seminarSplitModelKey !== model.key) resetSeminarSplitSelections(model);
+
+    const showEditor = canSplit && !!seminarTargetSplitToggle?.checked;
+    seminarTargetSplitEditor?.classList.toggle('hidden', !showEditor);
+    if (showEditor) renderSeminarTargetSplitEditor(model);
+  }
+
+  function getSeminarTargetParticipant(index) {
+    if (!seminarTargetSplitToggle?.checked) return '';
+    const model = getSeminarTargetSplitModel();
+    const dimension = getActiveSeminarSplitDimension(model);
+    if (dimension === 'course') {
+      const course = seminarSplitSelection.courses[index];
+      return model.options.some((option) => option.value === course)
+        ? encodeTargetParticipant(course, model.years)
+        : '';
+    }
+    if (dimension === 'year') {
+      const years = seminarSplitSelection.years[index];
+      return years.length > 0 ? encodeTargetParticipant(model.parentCourse, years) : '';
+    }
+    return '';
+  }
+
+  function setSeminarTargetParticipant(index, target) {
+    const raw = (target || '').toString().trim();
+    const model = getSeminarTargetSplitModel();
+    const yearOptions = model.dimension === 'choice' ? model.yearOptions : model.options;
+    if (!raw) {
+      const dimension = getActiveSeminarSplitDimension(model);
+      if (dimension === 'course') seminarSplitSelection.courses[index] = '';
+      if (dimension === 'year') seminarSplitSelection.years[index] = [];
+      if (seminarTargetSplitToggle?.checked) renderSeminarTargetSplitEditor(model);
+      return;
+    }
+    const decoded = decodeTargetParticipant(raw);
+    if (model.dimension === 'choice' && model.options.some((option) => option.value === decoded.course)) {
+      seminarSplitSelection.dimension = 'course';
+      seminarSplitSelection.courses[index] = decoded.course;
+    } else if (model.dimension === 'choice' && decoded.course === model.parentCourse) {
+      seminarSplitSelection.dimension = 'year';
+      seminarSplitSelection.years[index] = decoded.years.includes('ALL')
+        ? [...yearOptions]
+        : decoded.years.filter((year) => yearOptions.includes(year));
+    } else if (getActiveSeminarSplitDimension(model) === 'course' && model.options.some((option) => option.value === decoded.course)) {
+      seminarSplitSelection.courses[index] = decoded.course;
+    } else if (getActiveSeminarSplitDimension(model) === 'year' && decoded.course === model.parentCourse) {
+      seminarSplitSelection.years[index] = decoded.years.includes('ALL')
+        ? [...yearOptions]
+        : decoded.years.filter((year) => yearOptions.includes(year));
+    }
+    if (seminarTargetSplitToggle?.checked) renderSeminarTargetSplitEditor(model);
+  }
+
+  function validateSeminarTargetSplit() {
+    if (!seminarTargetSplitToggle?.checked) return null;
+    const model = getSeminarTargetSplitModel();
+    if (model.dimension === 'unavailable') return model.hint;
+    const dimension = getActiveSeminarSplitDimension(model);
+    if (dimension === 'course') {
+      const selected = [seminarSplitSelection.courses[1], seminarSplitSelection.courses[2]];
+      if (selected.some((value) => !model.options.some((option) => option.value === value))) {
+        return 'Choose a participant group for both seminars.';
+      }
+      if (new Set(selected).size !== model.options.length) {
+        return 'Assign each available participant group to a different seminar.';
+      }
+      return null;
+    }
+
+    const first = seminarSplitSelection.years[1];
+    const second = seminarSplitSelection.years[2];
+    const allSelected = [...first, ...second];
+    if (first.length === 0 || second.length === 0) {
+      return 'Assign year levels to both seminars.';
+    }
+    if (new Set(allSelected).size !== allSelected.length) {
+      return 'A year level can only be assigned to one seminar.';
+    }
+    const yearOptions = model.dimension === 'choice' ? model.yearOptions : model.options;
+    if (yearOptions.some((year) => !allSelected.includes(year))) {
+      return 'Assign every year level selected for the event to one of the seminars.';
+    }
+    return null;
+  }
+
+  seminarTargetSplitToggle?.addEventListener('change', syncSeminarTargetSplitUI);
+  document.getElementById('target_course')?.addEventListener('change', syncSeminarTargetSplitUI);
+  document.getElementById('target_year_group')?.addEventListener('change', syncSeminarTargetSplitUI);
 
   function normalizeTargetCourse(value) {
     const raw = (value || '').toString().trim().toUpperCase();
@@ -5134,6 +5600,15 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         return fail('Select at least one target year level.', 'target_year_group');
       }
 
+      if (seminarTargetSplitToggle?.checked) {
+        const splitError = validateSeminarTargetSplit();
+        if (splitError) {
+          return fail(splitError, 'seminar_target_split_enabled');
+        }
+        const capacityError = validateSeminarSplitCapacity();
+        if (capacityError) return fail(capacityError.message, capacityError.focusId);
+      }
+
       if (teacherProposalMode || document.getElementById('registration_type_paid')) {
         if (getRegistrationType() === 'paid') {
           const feeRaw = String(document.getElementById('event_fee')?.value || '').trim();
@@ -5200,6 +5675,8 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
             if (!s2Title) return fail('Seminar 2 title is required.', 'seminar2_title');
             if (!s2Start) return fail('Seminar 2 start schedule is required.', 'seminar2_start_local');
             if (!s2End) return fail('Seminar 2 end schedule is required.', 'seminar2_end_local');
+            const splitError = validateSeminarTargetSplit();
+            if (splitError) return fail(splitError, 'seminar_target_split_enabled');
             const s1EndDate = parseLocalDate(s1End);
             const s2StartDate = parseLocalDate(s2Start);
             if (s1EndDate && s2StartDate && s2StartDate < s1EndDate) {
@@ -5469,6 +5946,7 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
   registrationLimitInput?.addEventListener('input', () => {
     const digitsOnly = String(registrationLimitInput.value || '').replace(/\D+/g, '').slice(0, 4);
     registrationLimitInput.value = digitsOnly;
+    updateSeminarSplitCapacityControls();
   });
 
   const eventFeeInput = document.getElementById('event_fee');
@@ -5496,11 +5974,17 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
     setPickerValue(endAtInput, '');
 
     document.getElementById('seminar1_title').value = '';
+    setSeminarTargetParticipant(1, '');
     setPickerValue(document.getElementById('seminar1_start_local'), '');
     setPickerValue(document.getElementById('seminar1_end_local'), '');
     document.getElementById('seminar2_title').value = '';
+    setSeminarTargetParticipant(2, '');
     setPickerValue(document.getElementById('seminar2_start_local'), '');
     setPickerValue(document.getElementById('seminar2_end_local'), '');
+    if (seminarTargetSplitToggle) seminarTargetSplitToggle.checked = false;
+    seminarSplitModelKey = '';
+    seminarSplitSelection = { dimension: '', courses: { 1: '', 2: '' }, years: { 1: [], 2: [] } };
+    seminarSplitCapacity = { 1: '', 2: '' };
 
     setEventTypeValue('Event');
     if (document.getElementById('target_course')) document.getElementById('target_course').value = 'ALL';
@@ -5730,6 +6214,9 @@ $eventListCount = count(array_filter($events, static function ($event) use ($use
         event_for: eventFor,
         grace_time: graceTime,
         event_mode: eventMode,
+        session_attendance_rule: eventMode === 'seminar_based' && !!seminarTargetSplitToggle?.checked
+          ? 'any'
+          : 'all',
         event_span: eventSpan,
         start_at: startDate.toISOString(),
         end_at: endDate.toISOString(),

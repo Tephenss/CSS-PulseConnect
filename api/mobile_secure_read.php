@@ -11,6 +11,9 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/mobile_secure_access.php';
+require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
@@ -58,6 +61,138 @@ if (!is_array($filters)) {
 
 $readHeaders = mobile_api_supabase_headers();
 $isAdmin = mobile_secure_is_admin_role($role) || $role === 'admin';
+
+/**
+ * Limit a student's per-session attendance reads to sessions they are actually
+ * assigned to, including unscoped reads spanning several of their events.
+ * Non-split events retain all of their seminar rows.
+ *
+ * @return list<string>
+ */
+function mobile_secure_allowed_session_ids_for_registrations(
+    array $registrationIds,
+    string $studentId,
+    array $headers,
+    ?string $eventId = null
+): array {
+    $registrationIds = array_values(array_unique(array_filter(array_map(
+        static fn(mixed $id): string => trim((string) $id),
+        $registrationIds
+    ), 'mobile_secure_is_uuid')));
+    if ($registrationIds === []) {
+        return [];
+    }
+
+    $registrationsByEvent = [];
+    foreach (array_chunk($registrationIds, 80) as $chunk) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
+            . '?select=id,event_id&id=in.' . mobile_secure_postgrest_in_list($chunk)
+            . '&limit=1000';
+        if ($eventId !== null && $eventId !== '') {
+            $url .= '&event_id=eq.' . rawurlencode($eventId);
+        }
+        $res = supabase_request('GET', $url, $headers);
+        if (!($res['ok'] ?? false)) {
+            continue;
+        }
+        $rows = json_decode((string) ($res['body'] ?? ''), true);
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $registrationId = trim((string) ($row['id'] ?? ''));
+            $rowEventId = trim((string) ($row['event_id'] ?? ''));
+            if ($registrationId !== '' && $rowEventId !== '') {
+                $registrationsByEvent[$rowEventId][$registrationId] = true;
+            }
+        }
+    }
+    if ($registrationsByEvent === []) {
+        return [];
+    }
+
+    $eventIds = array_keys($registrationsByEvent);
+    $eventsById = [];
+    $eventSelectCandidates = [
+        'id,event_for,session_attendance_rule,event_mode,event_structure',
+        'id,event_for,event_mode,event_structure',
+        'id,event_for',
+    ];
+    foreach (array_chunk($eventIds, 80) as $chunk) {
+        foreach ($eventSelectCandidates as $select) {
+            $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?select=' . rawurlencode($select)
+                . '&id=in.' . mobile_secure_postgrest_in_list($chunk)
+                . '&limit=1000';
+            $res = supabase_request('GET', $url, $headers);
+            if (!($res['ok'] ?? false)) {
+                continue;
+            }
+            $rows = json_decode((string) ($res['body'] ?? ''), true);
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
+                    if (is_array($row) && trim((string) ($row['id'] ?? '')) !== '') {
+                        $eventsById[(string) $row['id']] = $row;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    $sessionsByEvent = fetch_event_sessions_map($eventIds, $headers);
+    $profile = null;
+    $allowedSessionIds = [];
+    foreach ($registrationsByEvent as $rowEventId => $registrations) {
+        $sessions = $sessionsByEvent[$rowEventId] ?? [];
+        if (!is_array($sessions) || $sessions === []) {
+            continue;
+        }
+        $event = array_merge($eventsById[$rowEventId] ?? ['id' => $rowEventId], ['sessions' => $sessions]);
+        if (!event_uses_split_session_attendance($event)) {
+            foreach ($sessions as $session) {
+                $sessionId = is_array($session) ? trim((string) ($session['id'] ?? '')) : '';
+                if ($sessionId !== '') {
+                    $allowedSessionIds[$sessionId] = true;
+                }
+            }
+            continue;
+        }
+
+        $registrationIdsForEvent = array_keys($registrations);
+        $assignments = event_session_assignments_for_registrations(
+            $rowEventId,
+            $registrationIdsForEvent,
+            $sessions,
+            $headers
+        );
+        if (!is_array($assignments)) {
+            continue;
+        }
+        foreach ($registrationIdsForEvent as $registrationId) {
+            $assigned = $assignments[$registrationId] ?? [];
+            if ($assigned === []) {
+                if ($profile === null) {
+                    $profile = fetch_student_profile_by_id($studentId, $headers);
+                }
+                $assigned = is_array($profile)
+                    ? event_matching_sessions_for_student($event, $sessions, $profile)
+                    : [];
+            }
+            if (count($assigned) === 1) {
+                $sessionId = trim((string) ($assigned[0]['id'] ?? ''));
+                if ($sessionId !== '') {
+                    $allowedSessionIds[$sessionId] = true;
+                }
+            }
+        }
+    }
+
+    return array_keys($allowedSessionIds);
+}
 
 // Force ownership scoping for student role on user-bound tables.
 $studentScoped = [
@@ -108,9 +243,54 @@ if (in_array($table, $eventScopedTables, true)) {
                 if ($ticketIds === []) {
                     json_response(['ok' => true, 'rows' => []], 200);
                 }
+                if ($eventId !== '' && mobile_secure_is_uuid($eventId)) {
+                    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                        . '?select=id,event_for,session_attendance_rule'
+                        . '&id=eq.' . rawurlencode($eventId) . '&limit=1';
+                    $eventRes = supabase_request('GET', $eventUrl, $readHeaders);
+                    if (!($eventRes['ok'] ?? false)) {
+                        $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                            . '?select=id,event_for'
+                            . '&id=eq.' . rawurlencode($eventId) . '&limit=1';
+                        $eventRes = supabase_request('GET', $eventUrl, $readHeaders);
+                    }
+                    $eventRows = $eventRes['ok'] ? json_decode((string) ($eventRes['body'] ?? ''), true) : [];
+                    $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
+                    if (is_array($event)) {
+                        $sessions = fetch_event_sessions($eventId, $readHeaders);
+                        if (event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]))) {
+                            // Split events use per-session records; a legacy event-level row may belong to another seminar.
+                            json_response(['ok' => true, 'rows' => []], 200);
+                        }
+                    }
+                }
                 $filters['ticket_id'] = $ticketIds;
             } elseif ($table === 'event_session_attendance') {
                 $filters['registration_id'] = $ownedRegs;
+                $allowedSessionIds = mobile_secure_allowed_session_ids_for_registrations(
+                    $ownedRegs,
+                    $userId,
+                    $readHeaders,
+                    $eventId !== '' && mobile_secure_is_uuid($eventId) ? $eventId : null
+                );
+                if ($allowedSessionIds === []) {
+                    json_response(['ok' => true, 'rows' => []], 200);
+                }
+                $requestedSessionIds = $filters['session_id'] ?? null;
+                if ($requestedSessionIds !== null) {
+                    $requestedSessionIds = is_array($requestedSessionIds)
+                        ? $requestedSessionIds
+                        : [$requestedSessionIds];
+                    $requestedSessionIds = array_values(array_filter(array_map(
+                        static fn(mixed $id): string => trim((string) $id),
+                        $requestedSessionIds
+                    ), 'mobile_secure_is_uuid'));
+                    $allowedSessionIds = array_values(array_intersect($allowedSessionIds, $requestedSessionIds));
+                    if ($allowedSessionIds === []) {
+                        json_response(['ok' => true, 'rows' => []], 200);
+                    }
+                }
+                $filters['session_id'] = $allowedSessionIds;
             }
         }
     } elseif ($role === 'teacher' || $isAdmin) {

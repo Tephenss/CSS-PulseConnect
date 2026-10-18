@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/event_sessions.php';
+require_once __DIR__ . '/event_session_targeting.php';
 
 $attendanceWindowsPath = __DIR__ . '/event_attendance_windows.php';
 if (is_file($attendanceWindowsPath)) {
@@ -49,6 +50,9 @@ function scan_context_session_summary(array $session): array
         'display_name' => build_session_display_name($session),
         'start_at' => (string) ($session['start_at'] ?? ''),
         'end_at' => (string) ($session['end_at'] ?? ''),
+        'registration_limit' => isset($session['registration_limit'])
+            ? max(1, (int) $session['registration_limit'])
+            : null,
         'scan_window_minutes' => max(1, (int) ($session['scan_window_minutes'] ?? 30)),
         'early_out_enabled_at' => isset($session['early_out_enabled_at'])
             ? (string) $session['early_out_enabled_at']
@@ -265,7 +269,7 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
     // Prefer waiting for the next seminar time-in when no timeout is open yet.
     if (!empty($upcoming)) {
         try {
-            sync_session_event_absences($eventId, $sessions, $nowUtc);
+            sync_session_event_absences($eventId, $sessions, $nowUtc, $event);
         } catch (Throwable $e) {
             // Keep scanner status available even if absence sync fails.
         }
@@ -310,7 +314,7 @@ function resolve_session_scan_context(array $event, DateTimeImmutable $nowUtc, a
     }
 
     try {
-        sync_session_event_absences($eventId, $sessions, $nowUtc);
+        sync_session_event_absences($eventId, $sessions, $nowUtc, $event);
     } catch (Throwable $e) {
         // Keep scanner status available even if absence sync fails.
     }
@@ -610,7 +614,12 @@ function sync_simple_event_absences(array $event, DateTimeImmutable $nowUtc): vo
     }
 }
 
-function sync_session_event_absences(string $eventId, array $sessions, DateTimeImmutable $nowUtc): void
+function sync_session_event_absences(
+    string $eventId,
+    array $sessions,
+    DateTimeImmutable $nowUtc,
+    array $event = []
+): void
 {
     if (trim($eventId) === '' || empty($sessions)) {
         return;
@@ -661,7 +670,7 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
     ];
 
     $registrationsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-        . '?select=id,tickets(id)'
+        . '?select=id,student_id,tickets(id)'
         . '&event_id=eq.' . rawurlencode($eventId)
         . '&limit=1000';
     $registrationsRes = supabase_request('GET', $registrationsUrl, $headers);
@@ -671,6 +680,27 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
     $registrations = json_decode((string) $registrationsRes['body'], true);
     if (!is_array($registrations) || empty($registrations)) {
         return;
+    }
+
+    $splitAttendance = event_uses_split_session_attendance(array_merge(
+        $event,
+        ['sessions' => $sessions]
+    ));
+    $savedAssignments = [];
+    if ($splitAttendance) {
+        $registrationIds = array_values(array_filter(array_map(
+            static fn(array $registration): string => trim((string) ($registration['id'] ?? '')),
+            array_filter($registrations, 'is_array')
+        )));
+        $savedAssignments = event_session_assignments_for_registrations(
+            $eventId,
+            $registrationIds,
+            $sessions,
+            $headers
+        );
+        if (!is_array($savedAssignments)) {
+            return;
+        }
     }
 
     $sessionFilter = implode(',', $sessionIds);
@@ -730,7 +760,37 @@ function sync_session_event_absences(string $eventId, array $sessions, DateTimeI
             continue;
         }
 
+        $eligibleSessionIds = array_keys($sessionMeta);
+        if ($splitAttendance) {
+            $assignedSessions = $savedAssignments[$registrationId] ?? [];
+            if ($assignedSessions === []) {
+                $studentId = trim((string) ($registration['student_id'] ?? ''));
+                $student = null;
+                if ($studentId !== '') {
+                    if (!function_exists('fetch_student_profile_by_id')) {
+                        require_once __DIR__ . '/registration_access.php';
+                    }
+                    if (function_exists('fetch_student_profile_by_id')) {
+                        $student = fetch_student_profile_by_id($studentId, $headers);
+                    }
+                }
+                $assignedSessions = is_array($student)
+                    ? event_matching_sessions_for_student($event, $sessions, $student)
+                    : [];
+            }
+            if (count($assignedSessions) !== 1) {
+                continue;
+            }
+            $eligibleSessionIds = array_values(array_filter(array_map(
+                static fn(array $session): string => trim((string) ($session['id'] ?? '')),
+                $assignedSessions
+            )));
+        }
+
         foreach ($closedSessionIds as $sessionId) {
+            if (!in_array($sessionId, $eligibleSessionIds, true)) {
+                continue;
+            }
             $row = $byRegistrationSession[$registrationId][$sessionId]
                 ?? $byTicketSession[$ticketId][$sessionId]
                 ?? null;

@@ -69,13 +69,13 @@ $readHeaders = [
 ];
 
 $checkUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-    . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_close_weeks,registration_close_extend_days,allow_registration'
+    . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_limit,registration_close_weeks,registration_close_extend_days,allow_registration'
     . '&limit=1';
 $checkRes = supabase_request('GET', $checkUrl, $readHeaders);
 if (!$checkRes['ok']) {
     // Older DBs without extend column — still need weeks for extend math.
     $checkUrlFb = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?id=eq.' . rawurlencode($eventId)
-        . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_close_weeks,allow_registration'
+        . '&select=id,status,created_by,title,description,event_for,start_at,end_at,registration_limit,registration_close_weeks,allow_registration'
         . '&limit=1';
     $checkRes = supabase_request('GET', $checkUrlFb, $readHeaders);
 }
@@ -146,6 +146,15 @@ if (isset($data['event_for'])) {
     $ef = clean_string((string) $data['event_for']);
     if ($ef !== '') $fields['event_for'] = $ef;
 }
+if (array_key_exists('session_attendance_rule', $data)) {
+    $rule = strtolower(trim((string) $data['session_attendance_rule']));
+    if (!in_array($rule, ['all', 'any'], true)) {
+        json_response(['ok' => false, 'error' => 'Choose whether students must attend all matching seminars or any one.'], 400);
+    }
+    $fields['session_attendance_rule'] = ($eventMode === 'seminar_based' && count($sessionsProvided ? $sessions : $currentSessions) > 1)
+        ? $rule
+        : 'all';
+}
 if (isset($data['grace_time'])) {
     $gt = trim((string) $data['grace_time']);
     if ($gt !== '') {
@@ -184,6 +193,15 @@ if (array_key_exists('registration_limit', $data)) {
         json_response(['ok' => false, 'error' => 'Student limit must be between 1 and 9999.'], 400);
     }
     $fields['registration_limit'] = $registrationLimit;
+}
+if ($sessionsProvided && $eventMode === 'seminar_based') {
+    $effectiveRegistrationLimit = array_key_exists('registration_limit', $fields)
+        ? $fields['registration_limit']
+        : normalize_registration_limit($currentEvent['registration_limit'] ?? null);
+    $capacityError = validate_event_session_capacity_allocations($sessions, $effectiveRegistrationLimit);
+    if ($capacityError !== null) {
+        json_response(['ok' => false, 'error' => $capacityError], 400);
+    }
 }
 if (array_key_exists('registration_close_weeks', $data)) {
     $registrationCloseWeeks = normalize_registration_close_weeks($data['registration_close_weeks']);
@@ -439,6 +457,9 @@ if (!$res['ok'] && is_missing_column_error($res, 'event_mode')) {
 }
 
 if (!$res['ok']) {
+    if (is_missing_column_error($res, 'session_attendance_rule')) {
+        json_response(['ok' => false, 'error' => 'Run supabase/migrations/069_session_targeting_and_attendance_rule.sql before updating seminar events.'], 500);
+    }
     json_response(['ok' => false, 'error' => build_error($res['body'] ?? null, (int) ($res['status'] ?? 0), $res['error'] ?? null, 'Update failed')], 500);
 }
 

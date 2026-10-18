@@ -13,6 +13,10 @@ require_once __DIR__ . '/../includes/api_rate_limit.php';
 
 require_once __DIR__ . '/../includes/mobile_session.php';
 
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 $data = mobile_api_require_post_json();
 mobile_api_validate_key($data);
 
@@ -34,6 +38,25 @@ if (!api_request_dedupe_first('mobile_register:' . $userId . ':' . $eventId, 4))
 
 $headers = mobile_api_supabase_headers();
 $result = submit_student_event_registration($eventId, $userId, $headers);
+if (($result['ok'] ?? false) === true) {
+    // The successful insert (or existing registration) is authoritative even if a count header is stale.
+    if (is_array($result['session_capacity'] ?? null)) {
+        $result['session_capacity'] = event_session_capacity_include_registered_student(
+            $result['session_capacity'],
+            is_array($result['eligible_sessions'] ?? null) ? $result['eligible_sessions'] : []
+        );
+        $result['registration_count'] = (int) $result['session_capacity']['registration_count'];
+    }
+    $result['registration_count'] = max(1, (int) ($result['registration_count'] ?? 0));
+    $result['is_registered'] = true;
+    $limit = $result['registration_limit'] ?? null;
+    if ($limit === null && is_array($result['session_capacity'] ?? null)) {
+        $limit = $result['session_capacity']['registration_limit'] ?? null;
+    }
+    $result['participant_total'] = $limit !== null
+        ? $result['registration_count'] . '/' . (int) $limit
+        : (string) $result['registration_count'];
+}
 $status = (int) ($result['status'] ?? 200);
 unset($result['status']);
 

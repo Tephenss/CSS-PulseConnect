@@ -27,7 +27,7 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by&id=eq.' . rawurlencode($eventId) . '&limit=1';
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,session_attendance_rule&id=eq.' . rawurlencode($eventId) . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
 $eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : [];
 $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
@@ -46,6 +46,7 @@ if ($role === 'teacher' && !$isEventCreator) {
 
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = count($sessions) > 0;
+$splitAttendance = $usesSessions && event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]));
 
 $eventQuestionsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/evaluation_questions'
     . '?select=id,event_id,question_text,field_type,required,sort_order'
@@ -95,6 +96,7 @@ $feedbackSections = evaluation_feedback_load_sections(
     $headers,
     $sessions,
     $usesSessions,
+    $splitAttendance,
     $eventQuestions,
     $sessionQuestionGroups
 );

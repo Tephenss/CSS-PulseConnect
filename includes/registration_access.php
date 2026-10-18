@@ -5,6 +5,7 @@ require_once __DIR__ . '/event_targeting.php';
 require_once __DIR__ . '/supabase.php';
 require_once __DIR__ . '/student_requirements.php';
 require_once __DIR__ . '/student_roster.php';
+require_once __DIR__ . '/event_sessions.php';
 
 function registration_access_missing_table_message(string $message): bool
 {
@@ -430,6 +431,11 @@ function event_registration_is_full(string $eventId, array $event, array $header
     return fetch_event_registration_count($eventId, $headers, $event) >= $limit;
 }
 
+function event_registration_uses_session_capacity(array $event): bool
+{
+    return event_uses_sessions($event);
+}
+
 function close_event_registration(string $eventId, array $headers): void
 {
     $eventId = trim($eventId);
@@ -512,6 +518,9 @@ function pulse_auto_close_registration_windows(array $headers, int $ttlSeconds =
 
 function maybe_close_event_registration_at_capacity(string $eventId, array $event, array $headers): void
 {
+    if (event_registration_uses_session_capacity($event)) {
+        return;
+    }
     if (!event_registration_is_full($eventId, $event, $headers)) {
         return;
     }
@@ -530,26 +539,36 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
         . '?id=eq.' . rawurlencode($eventId)
         . '&limit=1';
     $selectWithColumn = $baseUrl
-        . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registration_close_extend_days,registered_count,cover_image_url';
+        . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,session_attendance_rule,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registration_close_extend_days,registered_count,cover_image_url';
     $res = supabase_request('GET', $selectWithColumn, $headers);
 
     if (!$res['ok']) {
         $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        if (registration_access_missing_column_message($message, 'session_attendance_rule')) {
+            $selectWithColumn = str_replace(',session_attendance_rule', '', $selectWithColumn);
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
+        if (!$res['ok'] && registration_access_missing_column_message($message, 'event_mode')) {
+            $selectWithColumn = str_replace(',event_mode', '', $selectWithColumn);
+            $res = supabase_request('GET', $selectWithColumn, $headers);
+            $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
+        }
         if (registration_access_missing_column_message($message, 'registration_close_extend_days')) {
             $selectWithColumn = $baseUrl
-                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registered_count,cover_image_url';
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,event_fee,registration_limit,registration_close_weeks,registered_count,cover_image_url';
             $res = supabase_request('GET', $selectWithColumn, $headers);
             $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
         }
         if (!$res['ok'] && registration_access_missing_column_message($message, 'event_fee')) {
             $selectWithColumn = $baseUrl
-                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count,cover_image_url';
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count,cover_image_url';
             $res = supabase_request('GET', $selectWithColumn, $headers);
             $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
         }
         if (!$res['ok'] && registration_access_missing_column_message($message, 'cover_image_url')) {
             $selectWithColumn = $baseUrl
-                . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count';
+                . '&select=id,title,status,created_by,description,location,event_for,event_type,event_mode,start_at,end_at,grace_time,event_span,allow_registration,is_free_event,registration_limit,registration_close_weeks,registered_count';
             $res = supabase_request('GET', $selectWithColumn, $headers);
             $message = strtolower((string) ($res['body'] ?? '') . ' ' . (string) ($res['error'] ?? ''));
         }
@@ -557,7 +576,8 @@ function fetch_event_with_registration_settings(string $eventId, array $headers)
             || registration_access_missing_column_message($message, 'is_free_event')
             || registration_access_missing_column_message($message, 'registration_limit')
             || registration_access_missing_column_message($message, 'registration_close_weeks')
-            || registration_access_missing_column_message($message, 'registered_count'))) {
+            || registration_access_missing_column_message($message, 'registered_count')
+            || registration_access_missing_column_message($message, 'event_mode'))) {
             $fallbackUrl = $baseUrl
                 . '&select=id,title,status,created_by,description,location,event_for,event_type,start_at,end_at,grace_time,event_span,allow_registration';
             $res = supabase_request('GET', $fallbackUrl, $headers);
@@ -836,7 +856,9 @@ function resolve_student_registration_access(array $event, array $studentRow, ar
         maybe_close_event_registration_by_window($eventId, $event, $headers);
     }
 
-    if ($eventId !== '' && event_registration_is_full($eventId, $event, $headers)) {
+    if ($eventId !== ''
+        && !event_registration_uses_session_capacity($event)
+        && event_registration_is_full($eventId, $event, $headers)) {
         return [
             'allowed' => false,
             'target_allowed' => true,

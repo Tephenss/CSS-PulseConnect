@@ -271,7 +271,7 @@ if ($isEventCreatorTeacherEarly) {
     if (count($sessionIds) > 0) {
         $sessionTemplateRows = null;
         $sessionSelects = [
-            ['query' => '?select=id,title,thumbnail_url,session_id,created_at', 'order' => '&order=created_at.desc'],
+            ['query' => '?select=id,title,thumbnail_url,canvas_state,session_id,created_at', 'order' => '&order=created_at.desc'],
             ['query' => '?select=id,title,session_id,created_at', 'order' => '&order=created_at.desc'],
             ['query' => '?select=id,title,session_id', 'order' => '&order=id.desc'],
         ];
@@ -1085,6 +1085,9 @@ render_header('Event Details', $user);
       }
   }
   $importIsMulti = count($sessions) > 0;
+  $importCanShareTemplate = count($sessions) > 1
+      && strtolower(trim((string) ($event['event_mode'] ?? ''))) === 'seminar_based'
+      && strtolower(trim((string) ($event['session_attendance_rule'] ?? 'all'))) === 'any';
   $importSlots = [];
   if ($importIsMulti) {
       foreach ($sessions as $idx => $srow) {
@@ -1111,6 +1114,7 @@ render_header('Event Details', $user);
 
   // Per-seminar linked designs (from event_session_certificate_templates).
   $linkedSeminarCerts = [];
+  $linkedSeminarDesigns = [];
   if ($importIsMulti) {
       foreach ($importSlots as $slot) {
           $sid = (string) ($slot['session_id'] ?? '');
@@ -1142,7 +1146,58 @@ render_header('Event Details', $user);
               'title' => (string) ($found['title'] ?? 'Certificate'),
               'thumb' => (string) ($found['thumbnail_url'] ?? ''),
           ];
+          $linkedSeminarDesigns[] = [
+              'title' => (string) ($found['title'] ?? 'Certificate'),
+              'thumb' => (string) ($found['thumbnail_url'] ?? ''),
+              'canvas_state' => $found['canvas_state'] ?? null,
+          ];
       }
+  }
+
+  // Shared links are stored as one session-scoped copy per seminar. Detect identical
+  // designs so the linked preview can present them as one certificate after reload.
+  $isSharedLinkedCert = false;
+  if (
+      $importCanShareTemplate
+      && count($linkedSeminarCerts) > 1
+      && count($linkedSeminarCerts) === count($importSlots)
+      && count($linkedSeminarDesigns) === count($linkedSeminarCerts)
+  ) {
+      $normalizeCertificateCanvas = static function ($value) use (&$normalizeCertificateCanvas) {
+          if (!is_array($value)) {
+              return $value;
+          }
+          if (array_is_list($value)) {
+              return array_map($normalizeCertificateCanvas, $value);
+          }
+          $objectId = strtolower(trim((string) ($value['id'] ?? '')));
+          $objectName = strtolower(trim((string) ($value['name'] ?? '')));
+          if ($objectId === 'certificate_code' || $objectName === 'certificate code') {
+              $value['text'] = '__CERTIFICATE_CODE__';
+          }
+          foreach ($value as $key => $child) {
+              $value[$key] = $normalizeCertificateCanvas($child);
+          }
+          ksort($value);
+          return $value;
+      };
+      $designSignatures = [];
+      foreach ($linkedSeminarDesigns as $design) {
+          $canvas = $design['canvas_state'] ?? null;
+          if (is_string($canvas)) {
+              $canvas = json_decode($canvas, true);
+          }
+          if (is_array($canvas) && $canvas !== []) {
+              $normalized = json_encode($normalizeCertificateCanvas($canvas), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+              $designSignatures[] = is_string($normalized) ? hash('sha256', $normalized) : null;
+              continue;
+          }
+          $thumb = trim((string) ($design['thumb'] ?? ''));
+          $title = trim((string) ($design['title'] ?? ''));
+          $designSignatures[] = $thumb !== '' ? hash('sha256', $title . "\0" . $thumb) : null;
+      }
+      $isSharedLinkedCert = !in_array(null, $designSignatures, true)
+          && count(array_unique($designSignatures)) === 1;
   }
 
   $hasLinkedCerts = $importIsMulti
@@ -1151,6 +1206,7 @@ render_header('Event Details', $user);
 
   $linkedImportJson = [
       'multi' => $importIsMulti,
+      'shared_template' => $isSharedLinkedCert,
       'id' => (string) ($linkedImportTemplate['id'] ?? ''),
       'title' => (string) ($linkedImportTemplate['title'] ?? 'Certificate'),
       'thumb' => (string) ($linkedImportTemplate['thumbnail_url'] ?? ''),
@@ -1319,6 +1375,24 @@ render_header('Event Details', $user);
           View linked cert<?= $importIsMulti ? 's' : '' ?>
         </button>
       </div>
+      <?php if ($importCanShareTemplate): ?>
+        <div class="shrink-0 px-4 py-3 border-b border-zinc-200 bg-white flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-bold text-zinc-800">Certificate setup</div>
+            <p class="mt-0.5 text-xs text-zinc-500">One certificate uses a single upload for both seminars. Two certificates lets you set each seminar separately.</p>
+          </div>
+          <div class="import-certificate-mode-control inline-flex rounded-xl border border-zinc-300 bg-zinc-100 p-1" role="group" aria-label="Certificate setup">
+            <label class="import-certificate-mode-option cursor-pointer">
+              <input type="radio" name="importCertificateMode" id="importCertificateModeOne" class="peer sr-only" value="one">
+              <span class="block rounded-lg px-3.5 py-2.5 text-xs font-extrabold text-zinc-700 transition">1 certificate</span>
+            </label>
+            <label class="import-certificate-mode-option cursor-pointer">
+              <input type="radio" name="importCertificateMode" id="importCertificateModeTwo" class="peer sr-only" value="two" checked>
+              <span class="block rounded-lg px-3.5 py-2.5 text-xs font-extrabold text-zinc-700 transition">2 certificates</span>
+            </label>
+          </div>
+        </div>
+      <?php endif; ?>
     <!-- 3 columns: templates | preview | codes -->
     <div class="import-cert-layout flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)_270px] divide-y lg:divide-y-0 lg:divide-x divide-zinc-200">
 
@@ -1379,7 +1453,7 @@ render_header('Event Details', $user);
             <div class="px-4 py-3 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2">
               <div class="min-w-0">
                 <?php if ($importIsMulti): ?>
-                  <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500"><?= htmlspecialchars((string) $slot['label']) ?></div>
+                  <div class="import-slot-seminar-label text-[10px] font-black uppercase tracking-widest text-zinc-500"><?= htmlspecialchars((string) $slot['label']) ?></div>
                   <div class="import-slot-title text-sm font-bold text-zinc-900 truncate"><?= htmlspecialchars((string) $slot['title']) ?></div>
                   <div class="import-slot-template-label text-[11px] text-orange-600 font-semibold truncate mt-0.5 hidden"></div>
                 <?php else: ?>
@@ -1422,9 +1496,9 @@ render_header('Event Details', $user);
       <!-- 3) Scanned / linked registrar codes (read-only) -->
       <aside class="import-codes-pane bg-zinc-50/50 p-4 gap-3">
         <div class="shrink-0">
-          <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500"><?= $importIsMulti ? 'Linked codes' : 'Scanned codes' ?></div>
+              <div id="importCodePaneHeading" data-default-label="<?= $importIsMulti ? 'Linked codes' : 'Scanned codes' ?>" class="text-[10px] font-black uppercase tracking-widest text-zinc-500"><?= $importIsMulti ? 'Linked codes' : 'Scanned codes' ?></div>
           <?php if ($importIsMulti): ?>
-            <p id="importLinkedCodesSummary" class="mt-1 text-[11px] font-mono font-semibold text-zinc-600 break-all"></p>
+              <p id="importLinkedCodesSummary" class="mt-1 text-[11px] font-mono font-semibold text-zinc-600 break-all"></p>
           <?php endif; ?>
         </div>
 
@@ -1435,9 +1509,9 @@ render_header('Event Details', $user);
               $slotKey = $slot['session_id'] !== '' ? $slot['session_id'] : '__event__';
               $slotKeyAttr = htmlspecialchars($slotKey);
             ?>
-            <div class="import-code-slot space-y-1.5" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>">
+            <div class="import-code-slot space-y-1.5" data-session-id="<?= $slotId ?>" data-slot-key="<?= $slotKeyAttr ?>" data-slot-label="<?= htmlspecialchars((string) $slot['label']) ?>" data-session-title="<?= htmlspecialchars((string) $slot['title']) ?>">
               <?php if ($importIsMulti): ?>
-                <div class="text-[11px] font-bold text-zinc-700"><?= htmlspecialchars((string) $slot['label']) ?> — <?= htmlspecialchars((string) $slot['title']) ?></div>
+                <div class="import-code-slot-label text-[11px] font-bold text-zinc-700"><?= htmlspecialchars((string) $slot['label']) ?> — <?= htmlspecialchars((string) $slot['title']) ?></div>
               <?php endif; ?>
               <div class="import-slot-list-wrap rounded-xl border border-zinc-200 bg-white p-3">
                 <ul class="import-slot-list space-y-1.5 text-xs font-mono text-zinc-700">
@@ -1799,6 +1873,24 @@ window.IMPORT_LINKED_CERT = <?= json_encode($linkedImportJson, JSON_UNESCAPED_SL
   min-height: 96px;
   max-height: min(28vh, 220px);
   overflow-y: auto;
+}
+#importCertModal .import-certificate-mode-option > span {
+  min-width: 7.5rem;
+  text-align: center;
+  border: 1px solid transparent;
+}
+#importCertModal .import-certificate-mode-option:hover > span {
+  color: #c2410c;
+}
+#importCertModal .import-certificate-mode-option input:checked + span {
+  color: #fff;
+  background: linear-gradient(110deg, #f97316, #ef4444);
+  border-color: #ea580c;
+  box-shadow: 0 2px 8px rgb(234 88 12 / 24%);
+}
+#importCertModal .import-certificate-mode-option input:focus-visible + span {
+  outline: 3px solid rgb(249 115 22 / 30%);
+  outline-offset: 2px;
 }
 
 /* Locked saved-template card (clear a seminar with ✕ first). Own class because the
@@ -3039,6 +3131,9 @@ certAutoStatusModal?.addEventListener('click', (e) => {
 
 let importSelectedTemplateId = '';
 let importActiveSlotKey = '';
+let importShareTemplateAcrossSessions = false;
+let importSharedSourceKey = '';
+let importSharedMirrorPromise = Promise.resolve();
 /** @type {Record<string, string>} template id per seminar slot */
 const importSlotTemplates = {};
 /** @type {Record<string, number>} async request generation per slot (ignore stale) */
@@ -3073,7 +3168,7 @@ function updateImportCertButtonLabel() {
   const n = Array.isArray(importLinkedCert?.items) ? importLinkedCert.items.length : 0;
   const has = !!(importLinkedCert?.id || n > 0);
   btnImportCert.textContent = has
-    ? (n > 1 ? 'View Linked Certs' : 'View Linked Cert')
+    ? (!importLinkedCert?.shared_template && n > 1 ? 'View Linked Certs' : 'View Linked Cert')
     : 'Import / Link Cert';
 }
 
@@ -3099,16 +3194,20 @@ function setImportModalMode(mode, opts = {}) {
     importCertModalTitle.textContent = linked ? 'Linked Certificate' : 'Import / Link Certificate';
   }
   if (importCertModalSubtitle) {
-    const multi = !!(importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
+    const shared = !!importLinkedCert?.shared_template;
+    const multi = !shared && !!(importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
     importCertModalSubtitle.textContent = linked
-      ? (multi ? 'Each seminar has its own linked certificate.' : 'This template is ready for this event.')
+      ? (shared
+          ? 'One certificate design is linked to both seminars. Each seminar keeps its own code pool.'
+          : (multi ? 'Each seminar has its own linked certificate.' : 'This template is ready for this event.'))
       : 'Upload a registrar PPTX to scan codes and link a template.';
   }
   if (importCertModalPanel) {
-    const multiLinked = linked && (importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
+    const sharedLinked = linked && !!importLinkedCert?.shared_template;
+    const multiLinked = linked && !sharedLinked && (importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
     importCertModalPanel.classList.remove('max-w-6xl', 'max-w-5xl', 'max-w-3xl', 'h-[min(88vh,720px)]');
     importCertModalPanel.classList.add(
-      !linked ? 'max-w-6xl' : (multiLinked ? 'max-w-5xl' : 'max-w-3xl'),
+      !linked ? 'max-w-6xl' : ((multiLinked || sharedLinked) ? 'max-w-5xl' : 'max-w-3xl'),
       'h-[min(92vh,820px)]'
     );
   }
@@ -3182,17 +3281,22 @@ function renderLinkedCertsList(items) {
   const subtitleEl = document.getElementById('importLinkedSubtitle');
   if (!list) return;
   const rows = Array.isArray(items) ? items.filter((x) => x && (x.id || x.title || x.thumb)) : [];
-  const multi = rows.length > 1 || !!(importLinkedCert?.multi);
+  const shared = !!importLinkedCert?.shared_template;
+  const multi = !shared && (rows.length > 1 || !!(importLinkedCert?.multi));
 
   if (titleEl) {
-    titleEl.textContent = multi
-      ? `Linked seminar certificates (${rows.length})`
-      : (rows[0]?.title || importLinkedCert?.title || 'Certificate');
+    titleEl.textContent = shared
+      ? 'One certificate for both seminars'
+      : (multi
+          ? `Linked seminar certificates (${rows.length})`
+          : (rows[0]?.title || importLinkedCert?.title || 'Certificate'));
   }
   if (subtitleEl) {
-    subtitleEl.textContent = multi
-      ? 'Each seminar uses its own certificate design and code pool.'
-      : 'This template is ready for this event.';
+    subtitleEl.textContent = shared
+      ? 'Both seminars use this design, while their certificate code pools remain separate.'
+      : (multi
+          ? 'Each seminar uses its own certificate design and code pool.'
+          : 'This template is ready for this event.');
   }
 
   list.className = multi ? 'grid grid-cols-1 md:grid-cols-2 gap-3' : 'space-y-3';
@@ -3215,6 +3319,21 @@ function renderLinkedCertsList(items) {
       `</div>`
     );
   };
+
+  if (shared && rows.length > 0) {
+    const item = rows[0];
+    const seminarNames = rows.map((row) => row.label || row.session_title || 'Seminar').filter(Boolean);
+    list.innerHTML =
+      `<div class="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-hidden">` +
+      `<div class="px-4 py-3 border-b border-zinc-100 bg-zinc-50 flex items-center justify-between gap-3">` +
+      `<div class="min-w-0"><div class="text-[10px] font-black uppercase tracking-widest text-zinc-500">Both seminars</div>` +
+      `<div class="text-sm font-bold text-zinc-900 truncate">${escapeLinkedHtml(seminarNames.join(' + '))}</div>` +
+      `<div class="text-xs text-orange-600 font-semibold truncate mt-0.5">${escapeLinkedHtml(item.title || 'Certificate')}</div></div>` +
+      `<span class="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-sky-700 shrink-0">Shared design</span>` +
+      `</div><div class="bg-zinc-50 p-3">${cardHtml(item, true)}</div></div>`;
+    void refreshLinkedPreviewsFromCanvas([item]);
+    return;
+  }
 
   if (!multi && rows.length === 1) {
     const item = rows[0];
@@ -3345,7 +3464,8 @@ function updateLinkedCertView(cert) {
   );
   importLinkedCert = items.length
     ? {
-        multi: !!(cert?.multi || items.length > 1),
+        shared_template: !!cert?.shared_template,
+        multi: !cert?.shared_template && !!(cert?.multi || items.length > 1),
         id: items[0]?.id || cert?.id || '',
         title: items[0]?.title || cert?.title || 'Certificate',
         thumb: items[0]?.thumb || cert?.thumb || '',
@@ -3365,9 +3485,12 @@ function updateImportLinkedBanner() {
   const has = !!(importLinkedCert?.id || (Array.isArray(importLinkedCert?.items) && importLinkedCert.items.length > 0));
   if (banner) banner.classList.toggle('hidden', !has);
   if (!has) return;
-  const multi = !!(importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
+  const shared = !!importLinkedCert?.shared_template;
+  const multi = !shared && !!(importLinkedCert?.multi || (importLinkedCert?.items?.length > 1));
   if (label) {
-    if (multi) {
+    if (shared) {
+      label.innerHTML = 'Linked: <span class="font-bold">one certificate for both seminars</span>';
+    } else if (multi) {
       const n = importLinkedCert.items.length;
       label.innerHTML = `Linked: <span class="font-bold">${n} seminar certificate(s)</span>`;
     } else {
@@ -3659,11 +3782,17 @@ function setSlotPreview(slotEl, { title, scope, thumb, templateName }) {
   const empty = slotEl.querySelector('.import-slot-preview-empty');
   const clearBtn = slotEl.querySelector('.import-slot-clear');
 
-  // Multi-seminar: keep seminar name; show template under it.
+  // Multi-seminar: keep the seminar name unless this is the shared source slot.
   // Single event: show the template name as the preview title.
   if (isMulti && titleEl) {
+    const isSharedSource = importShareTemplateAcrossSessions
+      && (slotEl.getAttribute('data-slot-key') || '') === importSharedSourceKey;
     const original = slotEl.getAttribute('data-original-title') || '';
-    if (original) titleEl.textContent = original;
+    if (isSharedSource) {
+      titleEl.textContent = 'Used for both seminars';
+    } else if (original) {
+      titleEl.textContent = original;
+    }
   } else if (titleEl && (templateName || title)) {
     titleEl.textContent = templateName || title;
   }
@@ -3796,6 +3925,7 @@ function clearImportSlot(slotEl) {
     importCertStatus.textContent = '';
     importCertStatus.className = 'text-xs text-zinc-500 font-semibold text-center min-h-[1rem]';
   }
+  updateImportSlotLocks();
 }
 
 function renderScannedCodes(slotKey, codes) {
@@ -3867,10 +3997,86 @@ function importSlotIsFilled(slotEl) {
 function getAutoTargetImportSlot() {
   const slots = Array.from(document.querySelectorAll('.import-cert-slot'));
   if (!slots.length) return null;
+  if (importShareTemplateAcrossSessions && importSharedSourceKey) {
+    const sharedSource = slots.find((slot) => (slot.getAttribute('data-slot-key') || '') === importSharedSourceKey);
+    if (sharedSource) return sharedSource;
+  }
   const empty = slots.find((s) => !importSlotIsFilled(s));
   if (empty) return empty;
   return getActivePreviewSlot() || slots[0];
 }
+
+function setImportShareTemplate(enabled) {
+  importShareTemplateAcrossSessions = !!enabled;
+  const slots = Array.from(document.querySelectorAll('.import-cert-slot'));
+  let source = null;
+  if (enabled) {
+    const active = getActivePreviewSlot();
+    source = (active && importSlotIsFilled(active))
+      ? active
+      : (slots.find(importSlotIsFilled) || active || slots[0]);
+    importSharedSourceKey = source?.getAttribute('data-slot-key') || slots[0]?.getAttribute('data-slot-key') || '';
+    importActiveSlotKey = importSharedSourceKey;
+    highlightActiveSlot(importSharedSourceKey);
+  } else {
+    importSharedSourceKey = '';
+  }
+
+  slots.forEach((slot) => {
+    const isSource = enabled && slot === source;
+    slot.classList.toggle('hidden', enabled && !isSource);
+    const seminarLabel = slot.querySelector('.import-slot-seminar-label');
+    const title = slot.querySelector('.import-slot-title');
+    if (seminarLabel) seminarLabel.textContent = isSource ? 'Shared certificate' : (slot.getAttribute('data-slot-label') || 'Seminar');
+    if (title) title.textContent = isSource ? 'Used for both seminars' : (slot.getAttribute('data-original-title') || 'Certificate');
+  });
+
+  const codeSlots = Array.from(document.querySelectorAll('.import-code-slot'));
+  codeSlots.forEach((slot) => {
+    const key = slot.getAttribute('data-slot-key') || '';
+    const isSource = enabled && key === importSharedSourceKey;
+    slot.classList.toggle('hidden', enabled && !isSource);
+    const label = slot.querySelector('.import-code-slot-label');
+    if (label) {
+      label.textContent = enabled
+        ? 'Single scan — used for both seminars'
+        : `${slot.getAttribute('data-slot-label') || 'Seminar'} — ${slot.getAttribute('data-session-title') || ''}`;
+    }
+  });
+  const codeHeading = document.getElementById('importCodePaneHeading');
+  if (codeHeading) {
+    codeHeading.textContent = enabled ? 'Single shared scan' : (codeHeading.getAttribute('data-default-label') || 'Linked codes');
+  }
+  document.getElementById('importLinkedCodesSummary')?.classList.toggle('hidden', enabled);
+
+  if (!enabled) {
+    importSharedMirrorPromise = Promise.resolve();
+    if (importCertStatus) {
+      importCertStatus.textContent = 'Set a certificate template and upload separately for each seminar.';
+      importCertStatus.className = 'text-xs text-zinc-600 font-semibold text-center min-h-[1rem]';
+    }
+    updateImportSlotLocks();
+    return;
+  }
+
+  importSharedMirrorPromise = Promise.resolve();
+  if (importCertStatus) {
+    const hasSourceTemplate = !!importSlotTemplates[importSharedSourceKey];
+    const hasSourceUpload = !!importPendingFiles[importSharedSourceKey];
+    importCertStatus.textContent = hasSourceTemplate || hasSourceUpload
+      ? 'This design and upload will be used for both seminars when you save; their code pools stay separate.'
+      : 'Choose a saved template or upload a PPTX on this card. It will be used for both seminars when you save.';
+    importCertStatus.className = 'text-xs text-orange-700 font-semibold text-center min-h-[1rem]';
+  }
+  updateImportSlotLocks();
+}
+
+document.getElementById('importCertificateModeOne')?.addEventListener('change', (event) => {
+  if (event.target.checked) setImportShareTemplate(true);
+});
+document.getElementById('importCertificateModeTwo')?.addEventListener('change', (event) => {
+  if (event.target.checked) setImportShareTemplate(false);
+});
 
 async function loadFabricLib() {
   if (window.fabric) return window.fabric;
@@ -4926,14 +5132,14 @@ async function fetchEventPoolCodes(sessionId) {
   return codes;
 }
 
-async function selectImportTemplate(btn) {
+async function selectImportTemplate(btn, targetSlot = null) {
   if (!btn) {
     importSelectedTemplateId = '';
     highlightImportTemplateById('');
     return;
   }
   // Auto-fill: empty Seminar 1 first, then Seminar 2, etc. No manual select needed.
-  const slot = getAutoTargetImportSlot();
+  const slot = targetSlot || getAutoTargetImportSlot();
   if (!slot) return;
   const title = btn.getAttribute('data-template-title') || 'Saved template';
   const templateId = btn.getAttribute('data-template-id') || '';
@@ -4941,6 +5147,9 @@ async function selectImportTemplate(btn) {
   const slotLabel = slot.getAttribute('data-slot-label') || slot.querySelector('.import-slot-title')?.textContent || 'seminar';
 
   importActiveSlotKey = key;
+  if (importShareTemplateAcrossSessions) {
+    importSharedSourceKey = key;
+  }
   importSlotTemplates[key] = templateId;
   importSelectedTemplateId = templateId;
   highlightActiveSlot(key);
@@ -5042,6 +5251,14 @@ async function selectImportTemplate(btn) {
     // Only stamp import seed when PPT is bridged to this template.
     sampleCode: layoutApplies ? shownSeed : '',
   });
+  if (importShareTemplateAcrossSessions) {
+    importSharedMirrorPromise = Promise.resolve();
+    if (importCertStatus) {
+      importCertStatus.textContent = 'This certificate will be used for both seminars when you save. Their code pools stay separate.';
+      importCertStatus.className = 'text-xs text-emerald-700 font-semibold text-center min-h-[1rem]';
+    }
+  }
+  updateImportSlotLocks();
 }
 
 document.querySelectorAll('.import-cert-template').forEach((btn) => {
@@ -5052,7 +5269,17 @@ document.querySelectorAll('.import-cert-slot').forEach((slot) => {
   slot.addEventListener('click', (e) => {
     if (e.target.closest('label') || e.target.closest('input') || e.target.closest('.import-slot-clear')) return;
     importActiveSlotKey = slot.getAttribute('data-slot-key') || '__event__';
+    if (importShareTemplateAcrossSessions) importSharedSourceKey = importActiveSlotKey;
     highlightActiveSlot(importActiveSlotKey);
+    if (importShareTemplateAcrossSessions) {
+      if (importCertStatus) {
+        importCertStatus.textContent = importSlotIsFilled(slot)
+          ? 'Shared certificate selected. Tap ✕ to change its template or upload a PPTX.'
+          : 'Shared certificate selected. Now click a saved template.';
+        importCertStatus.className = 'text-xs text-orange-700 font-semibold text-center min-h-[1rem]';
+      }
+      return;
+    }
     const label = slot.getAttribute('data-slot-label') || 'seminar';
     const title = slot.getAttribute('data-original-title') || '';
     if (importCertStatus) {
@@ -5073,6 +5300,7 @@ document.querySelectorAll('.import-cert-slot').forEach((slot) => {
     if (!file) return;
     const key = slot.getAttribute('data-slot-key') || '__event__';
     importActiveSlotKey = key;
+    if (importShareTemplateAcrossSessions) importSharedSourceKey = key;
     highlightActiveSlot(key);
 
     importPendingFiles[key] = file;
@@ -5168,7 +5396,7 @@ document.querySelectorAll('.import-cert-slot').forEach((slot) => {
   });
 });
 
-async function postImportPayload({ sessionId, file, codesText, templateId, layout }) {
+async function postImportPayload({ sessionId, file, codesText, templateId, layout, sharedTemplate = false }) {
   // Prefer JSON: scanned codes + layout (no second PPTX parse when possible).
   if (!file || (codesText && layout)) {
     return fetch('/api/event_certificate_import.php', {
@@ -5178,6 +5406,7 @@ async function postImportPayload({ sessionId, file, codesText, templateId, layou
         event_id: <?= json_encode($id) ?>,
         session_id: sessionId || undefined,
         template_id: templateId || undefined,
+        shared_template: sharedTemplate || undefined,
         codes_text: codesText || undefined,
         layout: layout || undefined,
         csrf_token: window.CSRF_TOKEN || '',
@@ -5187,6 +5416,7 @@ async function postImportPayload({ sessionId, file, codesText, templateId, layou
   const fd = new FormData();
   fd.append('event_id', <?= json_encode($id) ?>);
   if (sessionId) fd.append('session_id', sessionId);
+  if (sharedTemplate) fd.append('shared_template', '1');
   fd.append('csrf_token', window.CSRF_TOKEN || '');
   fd.append('file', file);
   if (templateId) fd.append('template_id', templateId);
@@ -5195,6 +5425,7 @@ async function postImportPayload({ sessionId, file, codesText, templateId, layou
 }
 
 async function submitImportCert() {
+  if (importShareTemplateAcrossSessions) await importSharedMirrorPromise;
   const statusEl = importCertStatus;
   const codeSlots = Array.from(document.querySelectorAll('.import-code-slot'));
   const jobs = [];
@@ -5220,6 +5451,51 @@ async function submitImportCert() {
       templateId,
       listEl: codeSlot.querySelector('.import-slot-list'),
     });
+  }
+
+  if (importShareTemplateAcrossSessions) {
+    const sourceKey = importSharedSourceKey || jobs.find((job) => job.templateId)?.key || jobs[0]?.key || '';
+    const sourceJob = jobs.find((job) => job.key === sourceKey && job.templateId)
+      || jobs.find((job) => job.templateId);
+    if (!sourceJob) {
+      if (statusEl) {
+        statusEl.textContent = 'Choose one saved certificate template to use for both seminars.';
+        statusEl.className = 'text-xs text-red-600 font-semibold text-center min-h-[1rem]';
+      }
+      return;
+    }
+    const reusableTemplate = document.querySelector(
+      `#importCertTemplateList .import-cert-template[data-template-id="${CSS.escape(sourceJob.templateId)}"]`
+    );
+    if (!reusableTemplate) {
+      if (statusEl) {
+        statusEl.textContent = 'For one shared design, clear a seminar with ✕ and choose a saved template from the left.';
+        statusEl.className = 'text-xs text-red-600 font-semibold text-center min-h-[1rem]';
+      }
+      return;
+    }
+    importSharedSourceKey = sourceJob.key;
+    const sharedLayout = sourceJob.layout || null;
+    const allSlots = Array.from(document.querySelectorAll('.import-code-slot'));
+    const sharedJobs = allSlots.map((codeSlot) => {
+      const key = codeSlot.getAttribute('data-slot-key') || '__event__';
+      const sessionId = codeSlot.getAttribute('data-session-id') || '';
+      if (key === sourceJob.key) return sourceJob;
+      return {
+        key,
+        sessionId,
+        codesText: '',
+        file: null,
+        layout: sharedLayout,
+        previewState: importSlotPreviewStates[sourceJob.key] || null,
+        templateId: sourceJob.templateId,
+        sharedTemplate: true,
+        listEl: codeSlot.querySelector('.import-slot-list'),
+      };
+    });
+    // Seed the chosen source first so the shared copy cannot claim the global seed code first.
+    sharedJobs.sort((a, b) => Number(b.key === sourceJob.key) - Number(a.key === sourceJob.key));
+    jobs.splice(0, jobs.length, ...sharedJobs);
   }
 
   if (jobs.length === 0) {
@@ -5257,6 +5533,7 @@ async function submitImportCert() {
         codesText: job.codesText,
         templateId: job.templateId || '',
         layout: job.layout || null,
+        sharedTemplate: !!job.sharedTemplate,
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Save failed');
@@ -5281,7 +5558,7 @@ async function submitImportCert() {
       if (linkedId) {
         // WYSIWYG: write the exact canvas the teacher previewed onto the linked copy.
         // (PHP PPT sync / stale JPEG thumbs previously drifted from Import preview positions.)
-        const previewState = importSlotPreviewStates[job.key] || null;
+        const previewState = job.previewState || importSlotPreviewStates[job.key] || null;
         if (previewState && typeof previewState === 'object') {
           try {
             thumb = await renderCanvasStatePreview(previewState, 1.35);
@@ -5347,6 +5624,7 @@ async function submitImportCert() {
   const items = linkedFromApi.length ? linkedFromApi : buildLinkedItemsFromSlots();
   updateLinkedCertView({
     multi: items.length > 1 || document.querySelectorAll('.import-cert-slot').length > 1,
+    shared_template: importShareTemplateAcrossSessions && linkedFromApi.length > 1 && errors.length === 0,
     id: items[0]?.id || importSelectedTemplateId || '',
     title: items[0]?.title || 'Certificate',
     thumb: items[0]?.thumb || '',

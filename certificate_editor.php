@@ -545,6 +545,15 @@ if ($templateId !== '' && $initialEditingScope !== '') {
                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9m0 0l5-5M4 9h9a7 7 0 110 14h-1"/></svg> Undo
              </button>
 
+             <div class="flex items-center gap-1" role="group" aria-label="Layer order">
+                 <button id="btnSendToBack" type="button" disabled class="flex items-center justify-center w-8 h-8 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition disabled:opacity-30 disabled:pointer-events-none" title="Send to back" aria-label="Send selected object to back">
+                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 9l5 5 5-5M7 15l5 5 5-5M4 4h16"/></svg>
+                 </button>
+                 <button id="btnBringToFront" type="button" disabled class="flex items-center justify-center w-8 h-8 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition disabled:opacity-30 disabled:pointer-events-none" title="Bring to front" aria-label="Bring selected object to front">
+                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 15l5-5 5 5M7 9l5-5 5 5M4 20h16"/></svg>
+                 </button>
+             </div>
+
              <button id="btnDuplicate" class="flex items-center gap-1.5 text-zinc-300 hover:text-orange-400 bg-zinc-800 hover:bg-orange-500/10 border border-zinc-700 hover:border-orange-500/30 px-3 py-1.5 rounded-md text-xs font-semibold transition">
                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 15L12 18.75 15.75 15M12 18.75V8.25"/></svg> Copy
              </button>
@@ -2031,12 +2040,25 @@ document.getElementById('btnRemoveBackground')?.addEventListener('click', () => 
 const objToolbar  = document.getElementById('objectToolbar');
 const textToolbar = document.getElementById('textFormattingBar');
 
+function syncLayerOrderButtons() {
+    const sendBackButton = document.getElementById('btnSendToBack');
+    const bringFrontButton = document.getElementById('btnBringToFront');
+    const obj = canvas.getActiveObject();
+    const objects = canvas.getObjects();
+    const index = objects.indexOf(obj);
+    const canReorder = !!obj && obj.type !== 'activeSelection' && index !== -1;
+
+    sendBackButton.disabled = !canReorder || index <= 0;
+    bringFrontButton.disabled = !canReorder || index >= objects.length - 1;
+}
+
 canvas.on('selection:created', syncToolbars);
 canvas.on('selection:updated', syncToolbars);
 canvas.on('selection:cleared', () => {
     objToolbar.classList.add('opacity-0', 'pointer-events-none');
     textToolbar.classList.add('opacity-30', 'pointer-events-none');
     textToolbar.classList.remove('cert-line-color-mode');
+    syncLayerOrderButtons();
 });
 
 function isFabricText(obj) {
@@ -2058,6 +2080,7 @@ function colorPickerValueFromFabric(obj) {
 }
 
 function syncToolbars() {
+    syncLayerOrderButtons();
     const obj = canvas.getActiveObject(); if (!obj) return;
     objToolbar.classList.remove('opacity-0', 'pointer-events-none');
     document.getElementById('objOpacity').value             = Math.round((obj.opacity ?? 1) * 100);
@@ -2128,6 +2151,8 @@ function executeActiveObj(fn) {
 
 // --- Object Toolbar Actions ---
 document.getElementById('objOpacity').addEventListener('input', e => executeActiveObj(o => o.set('opacity', e.target.value / 100)));
+document.getElementById('btnSendToBack').addEventListener('click', () => executeActiveObj(obj => canvas.sendToBack(obj)));
+document.getElementById('btnBringToFront').addEventListener('click', () => executeActiveObj(obj => canvas.bringToFront(obj)));
 
 document.getElementById('btnLock').addEventListener('click', () => {
     executeActiveObj(o => {

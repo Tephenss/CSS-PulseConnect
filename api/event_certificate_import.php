@@ -28,6 +28,7 @@ $eventId = '';
 $sessionId = '';
 $csrf = null;
 $templateId = '';
+$sharedTemplate = false;
 $manualCodes = [];
 $layout = null;
 $hasFile = isset($_FILES['file']) && is_array($_FILES['file'])
@@ -39,6 +40,7 @@ if ($isJson) {
     $sessionId = trim((string) ($input['session_id'] ?? ''));
     $csrf = $input['csrf_token'] ?? null;
     $templateId = trim((string) ($input['template_id'] ?? ''));
+    $sharedTemplate = filter_var($input['shared_template'] ?? false, FILTER_VALIDATE_BOOLEAN);
     if (isset($input['layout']) && is_array($input['layout'])) {
         $layout = $input['layout'];
     }
@@ -52,6 +54,7 @@ if ($isJson) {
     $sessionId = trim((string) ($_POST['session_id'] ?? ''));
     $csrf = $_POST['csrf_token'] ?? null;
     $templateId = trim((string) ($_POST['template_id'] ?? ''));
+    $sharedTemplate = filter_var($_POST['shared_template'] ?? false, FILTER_VALIDATE_BOOLEAN);
     if (isset($_POST['codes_text']) && trim((string) $_POST['codes_text']) !== '') {
         $manualCodes = (string) $_POST['codes_text'];
     }
@@ -71,6 +74,34 @@ if ($eventId === '') {
 if (!certificate_pool_teacher_may_manage($eventId, $userId)) {
     json_response(['ok' => false, 'error' => 'You do not have permission to import codes for this event.'], 403);
 }
+
+if ($sharedTemplate) {
+    if ($sessionId === '') {
+        json_response(['ok' => false, 'error' => 'A seminar is required for a shared certificate link.'], 400);
+    }
+    $eventHeaders = [
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+    ];
+    $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+        . '?select=event_mode,session_attendance_rule&id=eq.' . rawurlencode($eventId) . '&limit=1';
+    $eventRes = supabase_request('GET', $eventUrl, $eventHeaders);
+    $eventRows = json_decode((string) ($eventRes['body'] ?? ''), true);
+    $attendanceRule = is_array($eventRows) && isset($eventRows[0]) && is_array($eventRows[0])
+        ? strtolower(trim((string) ($eventRows[0]['session_attendance_rule'] ?? 'all')))
+        : 'all';
+    $eventMode = is_array($eventRows) && isset($eventRows[0]) && is_array($eventRows[0])
+        ? strtolower(trim((string) ($eventRows[0]['event_mode'] ?? '')))
+        : '';
+    if ($attendanceRule !== 'any' || $eventMode !== 'seminar_based') {
+        json_response(['ok' => false, 'error' => 'A shared seminar template is only available for split-attendance events.'], 400);
+    }
+}
+
+$sharedTemplateOnly = $sharedTemplate
+    && !$hasFile
+    && ($manualCodes === [] || $manualCodes === '');
 
 $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
 if (!api_rate_limit_allow('cert_import:' . $userId . ':' . $clientIp, 20, 3600)) {
@@ -191,7 +222,9 @@ if ($hasFile) {
     }
 } elseif ($templateId !== '') {
     // Template-only link (no codes this round).
-    certificate_import_guard_template_seed($templateId, $eventId, $sessionId);
+    if (!$sharedTemplateOnly) {
+        certificate_import_guard_template_seed($templateId, $eventId, $sessionId);
+    }
     $sessionLinked = null;
     $eventScopedTemplateId = $templateId;
     if ($sessionId !== '') {
@@ -200,6 +233,25 @@ if ($hasFile) {
             json_response(['ok' => false, 'error' => 'Unable to link template to this seminar.'], 400);
         }
         $linkedTemplate = true;
+        if (
+            $sharedTemplateOnly
+            && is_array($layout)
+            && !empty($layout['items'])
+            && is_array($layout['items'])
+        ) {
+            $syncResult = certificate_pptx_sync_session_template(
+                (string) ($sessionLinked['id'] ?? ''),
+                $userId,
+                $layout,
+                null
+            );
+            if (!($syncResult['ok'] ?? false)) {
+                json_response([
+                    'ok' => false,
+                    'error' => (string) ($syncResult['error'] ?? 'Failed to sync shared certificate design into seminar template'),
+                ], 400);
+            }
+        }
     } else {
         $copiedId = certificate_pool_link_template($templateId, $eventId, $userId);
         if ($copiedId === null || $copiedId === '') {
@@ -246,6 +298,7 @@ if ($hasFile) {
         'skipped' => [],
         'codes' => [],
         'pool' => $pool,
+        'layout_synced' => is_array($syncResult) && !empty($syncResult['ok']),
         'message' => $seeded
             ? ($sessionId !== ''
                 ? 'Template linked — seed taken from design for auto-count.'

@@ -13,6 +13,8 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/mobile_scan_write.php';
 require_once __DIR__ . '/../includes/evaluation_notifications.php';
@@ -381,6 +383,8 @@ if (!mobile_scan_can_scan_event($userId, $role, $eventId, $headers)) {
 }
 
 $eventSelectCandidates = [
+    'id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,session_attendance_rule,grace_time,early_out_enabled_at',
+    'id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,grace_time,early_out_enabled_at',
     'id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time,early_out_enabled_at',
     'id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time',
     'id,title,status,start_at,end_at,location,event_mode,grace_time',
@@ -441,6 +445,37 @@ if (function_exists('attendance_early_out_is_active')) {
     }
 }
 
+$participant = mobile_scan_participant_from_ticket($ticket, $headers);
+$splitAttendance = event_uses_split_session_attendance($event);
+$splitEligibleSessions = [];
+if ($splitAttendance) {
+    $ticketStudentId = trim((string) ($participant['participant_user_id'] ?? ''));
+    $ticketStudent = $ticketStudentId !== ''
+        ? fetch_student_profile_by_id($ticketStudentId, $headers)
+        : null;
+    $eventSessionsForScan = fetch_event_sessions($eventId, $headers);
+    $splitEligibleSessions = event_matching_sessions_for_registration(
+        $event,
+        $eventSessionsForScan,
+        is_array($ticketStudent) ? $ticketStudent : null,
+        $eventId,
+        $registrationId,
+        $headers
+    );
+    if (count($splitEligibleSessions) !== 1) {
+        json_response([
+            'ok' => false,
+            'error' => $splitEligibleSessions === []
+                ? 'This student is not assigned to a seminar in this event.'
+                : 'This student is assigned to multiple seminars. Correct the event session assignment before scanning.',
+            'status' => $splitEligibleSessions === [] ? 'session_not_required' : 'session_assignment_ambiguous',
+            'participant_user_id' => $ticketStudentId,
+        ], $splitEligibleSessions === [] ? 403 : 409);
+    }
+    // Resolve the scan window against the ticket owner's seminar, not the event-wide active seminar.
+    $event['sessions'] = [$splitEligibleSessions[0]];
+}
+
 try {
     $scanContext = resolve_event_scan_context($event, $scanAt, $headers);
 } catch (Throwable $e) {
@@ -478,7 +513,36 @@ if ($sessionName === '') {
     $sessionName = 'Seminar';
 }
 
-$participant = mobile_scan_participant_from_ticket($ticket, $headers);
+if ($source === 'session' && $sessionId !== '') {
+    $ticketStudentId = trim((string) ($participant['participant_user_id'] ?? ''));
+    if ($splitAttendance) {
+        $eligibleSessions = $splitEligibleSessions;
+    } else {
+        $ticketStudent = $ticketStudentId !== ''
+            ? fetch_student_profile_by_id($ticketStudentId, $headers)
+            : null;
+        $eventSessions = fetch_event_sessions($eventId, $headers);
+        $eligibleSessions = is_array($ticketStudent)
+            ? event_matching_sessions_for_student($event, $eventSessions, $ticketStudent)
+            : [];
+    }
+    $sessionEligible = false;
+    foreach ($eligibleSessions as $eligibleSession) {
+        if ((string) ($eligibleSession['id'] ?? '') === $sessionId) {
+            $sessionEligible = true;
+            break;
+        }
+    }
+    if (!$sessionEligible) {
+        json_response([
+            'ok' => false,
+            'error' => 'This student is not assigned to ' . $sessionName . '.',
+            'status' => 'session_not_required',
+            'session_id' => $sessionId,
+            'participant_user_id' => $ticketStudentId,
+        ], 403);
+    }
+}
 
 $success = static function (
     string $responseStatus,
@@ -656,7 +720,8 @@ if ($source === 'session') {
             (string) ($participant['participant_user_id'] ?? ''),
             $eventId,
             (string) ($event['title'] ?? ''),
-            $sessionId
+            $sessionId,
+            $splitAttendance
         );
         $payload = $success(
             'checked_out',

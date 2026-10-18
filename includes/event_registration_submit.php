@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/registration_access.php';
 require_once __DIR__ . '/student_requirements.php';
+require_once __DIR__ . '/event_sessions.php';
+require_once __DIR__ . '/event_session_targeting.php';
 
 function event_registration_service_headers(): array
 {
@@ -89,26 +91,56 @@ function submit_student_event_registration(string $eventId, string $studentId, a
         ];
     }
 
+    $sessions = fetch_event_sessions($eventId, event_registration_read_headers());
+    $isSessionEvent = $sessions !== [] || event_uses_sessions($event);
+    $eligibleSessions = $isSessionEvent
+        ? event_matching_sessions_for_student($event, $sessions, $studentRow)
+        : [];
+    if ($isSessionEvent && $eligibleSessions === []) {
+        return [
+            'ok' => false,
+            'error' => 'You are not assigned to any seminar session in this event.',
+            'status' => 403,
+        ];
+    }
+    $sessionCapacity = $isSessionEvent
+        ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+        : null;
+    $registrationCount = is_array($sessionCapacity)
+        ? (int) $sessionCapacity['registration_count']
+        : fetch_event_registration_count($eventId, $headers);
+    $isFull = is_array($sessionCapacity)
+        ? (bool) $sessionCapacity['is_full']
+        : event_registration_is_full($eventId, $event, $headers);
+
     $existing = fetch_existing_event_registration($eventId, $studentId, $headers);
     if (is_array($existing)) {
         return [
             'ok' => true,
             'already_registered' => true,
             'ticket' => event_registration_extract_ticket($existing['tickets'] ?? null),
-            'registration_count' => fetch_event_registration_count($eventId, $headers),
+            'eligible_sessions' => $eligibleSessions,
+            'session_attendance_rule' => normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all'),
+            'registration_count' => $registrationCount,
             'registration_limit' => event_registration_limit($event),
-            'is_full' => event_registration_is_full($eventId, $event, $headers),
+            'is_full' => $isFull,
+            'session_scoped' => $isSessionEvent,
+            'session_capacity' => $sessionCapacity,
         ];
     }
 
-    if (event_registration_is_full($eventId, $event, $headers)) {
+    if ($isFull) {
         return [
             'ok' => false,
-            'error' => 'Registration is full for this event.',
+            'error' => $isSessionEvent
+                ? 'Registration is full for your assigned seminar.'
+                : 'Registration is full for this event.',
             'status' => 403,
-            'registration_count' => fetch_event_registration_count($eventId, $headers),
+            'registration_count' => $registrationCount,
             'registration_limit' => event_registration_limit($event),
             'is_full' => true,
+            'session_scoped' => $isSessionEvent,
+            'session_capacity' => $sessionCapacity,
         ];
     }
 
@@ -129,13 +161,22 @@ function submit_student_event_registration(string $eventId, string $studentId, a
     if (!$regRes['ok']) {
         $errorBody = strtolower((string) ($regRes['body'] ?? ''));
         if (str_contains($errorBody, 'registration is full')) {
+            $capacity = $isSessionEvent
+                ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+                : null;
             return [
                 'ok' => false,
-                'error' => 'Registration is full for this event.',
+                'error' => $isSessionEvent
+                    ? 'Registration is full for your assigned seminar.'
+                    : 'Registration is full for this event.',
                 'status' => 403,
-                'registration_count' => fetch_event_registration_count($eventId, $headers),
+                'registration_count' => is_array($capacity)
+                    ? (int) $capacity['registration_count']
+                    : fetch_event_registration_count($eventId, $headers),
                 'registration_limit' => event_registration_limit($event),
                 'is_full' => true,
+                'session_scoped' => $isSessionEvent,
+                'session_capacity' => $capacity,
             ];
         }
 
@@ -195,15 +236,26 @@ function submit_student_event_registration(string $eventId, string $studentId, a
 
     maybe_close_event_registration_at_capacity($eventId, $event, $headers);
 
-    $registrationCount = fetch_event_registration_count($eventId, $headers);
+    $sessionCapacity = $isSessionEvent
+        ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+        : null;
+    $registrationCount = is_array($sessionCapacity)
+        ? (int) $sessionCapacity['registration_count']
+        : fetch_event_registration_count($eventId, $headers);
     $registrationLimit = event_registration_limit($event);
 
     return [
         'ok' => true,
         'ticket' => $ticket,
+        'eligible_sessions' => $eligibleSessions,
+        'session_attendance_rule' => normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all'),
         'registration_count' => $registrationCount,
         'registration_limit' => $registrationLimit,
-        'is_full' => $registrationLimit !== null && $registrationCount >= $registrationLimit,
+        'is_full' => is_array($sessionCapacity)
+            ? (bool) $sessionCapacity['is_full']
+            : ($registrationLimit !== null && $registrationCount >= $registrationLimit),
+        'session_scoped' => $isSessionEvent,
+        'session_capacity' => $sessionCapacity,
     ];
 }
 
@@ -252,6 +304,24 @@ function submit_staff_paid_event_registration(
         return ['ok' => false, 'error' => 'Student is not in this event\'s target participants.', 'status' => 403];
     }
 
+    $sessions = fetch_event_sessions($eventId, event_registration_read_headers());
+    $isSessionEvent = $sessions !== [] || event_uses_sessions($event);
+    $eligibleSessions = $isSessionEvent
+        ? event_matching_sessions_for_student($event, $sessions, $studentRow)
+        : [];
+    if ($isSessionEvent && $eligibleSessions === []) {
+        return ['ok' => false, 'error' => 'Student is not assigned to a seminar session in this event.', 'status' => 403];
+    }
+    $sessionCapacity = $isSessionEvent
+        ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+        : null;
+    $registrationCount = is_array($sessionCapacity)
+        ? (int) $sessionCapacity['registration_count']
+        : fetch_event_registration_count($eventId, $headers);
+    $isFull = is_array($sessionCapacity)
+        ? (bool) $sessionCapacity['is_full']
+        : event_registration_is_full($eventId, $event, $headers);
+
     if (is_event_registration_window_closed($event)) {
         return ['ok' => false, 'error' => 'Registration window is closed for this event.', 'status' => 403];
     }
@@ -259,14 +329,18 @@ function submit_staff_paid_event_registration(
     $existing = fetch_existing_event_registration($eventId, $studentId, $headers);
     $alreadyRegistered = is_array($existing);
 
-    if (!$alreadyRegistered && event_registration_is_full($eventId, $event, $headers)) {
+    if (!$alreadyRegistered && $isFull) {
         return [
             'ok' => false,
-            'error' => 'Registration is full for this event.',
+            'error' => $isSessionEvent
+                ? 'Registration is full for the student\'s assigned seminar.'
+                : 'Registration is full for this event.',
             'status' => 403,
-            'registration_count' => fetch_event_registration_count($eventId, $headers),
+            'registration_count' => $registrationCount,
             'registration_limit' => event_registration_limit($event),
             'is_full' => true,
+            'session_scoped' => $isSessionEvent,
+            'session_capacity' => $sessionCapacity,
         ];
     }
 
@@ -329,9 +403,11 @@ function submit_staff_paid_event_registration(
             'already_registered' => true,
             'amount_paid' => round($amountPaid, 2),
             'ticket' => event_registration_extract_ticket($existing['tickets'] ?? null),
-            'registration_count' => fetch_event_registration_count($eventId, $headers),
+            'registration_count' => $registrationCount,
             'registration_limit' => event_registration_limit($event),
-            'is_full' => event_registration_is_full($eventId, $event, $headers),
+            'is_full' => $isFull,
+            'session_scoped' => $isSessionEvent,
+            'session_capacity' => $sessionCapacity,
             'message' => 'Payment updated. Student already has a secured slot.',
         ];
     }
@@ -348,11 +424,22 @@ function submit_staff_paid_event_registration(
     if (!$regRes['ok']) {
         $errorBody = strtolower((string) ($regRes['body'] ?? ''));
         if (str_contains($errorBody, 'registration is full')) {
+            $capacity = $isSessionEvent
+                ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+                : null;
             return [
                 'ok' => false,
-                'error' => 'Registration is full for this event.',
+                'error' => $isSessionEvent
+                    ? 'Registration is full for the student\'s assigned seminar.'
+                    : 'Registration is full for this event.',
                 'status' => 403,
                 'is_full' => true,
+                'registration_count' => is_array($capacity)
+                    ? (int) $capacity['registration_count']
+                    : fetch_event_registration_count($eventId, $headers),
+                'registration_limit' => event_registration_limit($event),
+                'session_scoped' => $isSessionEvent,
+                'session_capacity' => $capacity,
             ];
         }
         return [
@@ -409,7 +496,12 @@ function submit_staff_paid_event_registration(
         // Non-fatal.
     }
 
-    $registrationCount = fetch_event_registration_count($eventId, $headers);
+    $sessionCapacity = $isSessionEvent
+        ? event_session_registration_capacity($eligibleSessions, event_registration_limit($event), event_registration_read_headers())
+        : null;
+    $registrationCount = is_array($sessionCapacity)
+        ? (int) $sessionCapacity['registration_count']
+        : fetch_event_registration_count($eventId, $headers);
     $registrationLimit = event_registration_limit($event);
 
     return [
@@ -419,7 +511,11 @@ function submit_staff_paid_event_registration(
         'ticket' => $ticket,
         'registration_count' => $registrationCount,
         'registration_limit' => $registrationLimit,
-        'is_full' => $registrationLimit !== null && $registrationCount >= $registrationLimit,
+        'is_full' => is_array($sessionCapacity)
+            ? (bool) $sessionCapacity['is_full']
+            : ($registrationLimit !== null && $registrationCount >= $registrationLimit),
+        'session_scoped' => $isSessionEvent,
+        'session_capacity' => $sessionCapacity,
         'message' => 'Payment saved and student registered.',
     ];
 }
@@ -537,6 +633,52 @@ function build_paid_event_payment_roster(array $event, array $headers): array
     return $orderedGroups;
 }
 
+function event_session_capacity_include_registered_student(array $capacity, array $eligibleSessions): array
+{
+    $eligibleIds = [];
+    foreach ($eligibleSessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $sessionId = trim((string) ($session['id'] ?? ''));
+        if ($sessionId !== '') {
+            $eligibleIds[$sessionId] = true;
+        }
+    }
+
+    $sessionCounts = is_array($capacity['session_counts'] ?? null)
+        ? $capacity['session_counts']
+        : [];
+    $registeredCount = 0;
+    $isFull = false;
+    foreach ($sessionCounts as &$sessionCount) {
+        if (!is_array($sessionCount)) {
+            continue;
+        }
+        $sessionId = trim((string) ($sessionCount['session_id'] ?? ''));
+        if (!isset($eligibleIds[$sessionId])) {
+            continue;
+        }
+
+        // A confirmed event registration must never appear as zero in its assigned session.
+        $sessionCount['registration_count'] = max(1, (int) ($sessionCount['registration_count'] ?? 0));
+        $limit = $sessionCount['registration_limit'] ?? null;
+        $sessionCount['is_full'] = $limit !== null
+            && $sessionCount['registration_count'] >= (int) $limit;
+        $registeredCount = max($registeredCount, $sessionCount['registration_count']);
+        $isFull = $isFull || (bool) $sessionCount['is_full'];
+    }
+    unset($sessionCount);
+
+    $capacity['session_counts'] = $sessionCounts;
+    $capacity['registration_count'] = max(
+        (int) ($capacity['registration_count'] ?? 0),
+        $registeredCount
+    );
+    $capacity['is_full'] = $isFull;
+    return $capacity;
+}
+
 function build_event_registration_info(string $eventId, array $headers, ?string $studentId = null): array
 {
     $eventId = trim($eventId);
@@ -549,7 +691,13 @@ function build_event_registration_info(string $eventId, array $headers, ?string 
         return ['ok' => false, 'error' => 'Event not found.', 'status' => 404];
     }
 
+    $studentId = trim((string) $studentId);
+    $studentRegistered = $studentId !== ''
+        && is_array(fetch_existing_event_registration($eventId, $studentId, event_registration_read_headers()));
     $registrationCount = fetch_event_registration_count($eventId, $headers);
+    if ($studentRegistered) {
+        $registrationCount = max(1, $registrationCount);
+    }
     $registrationLimit = event_registration_limit($event);
     $isFull = $registrationLimit !== null && $registrationCount >= $registrationLimit;
 
@@ -563,23 +711,67 @@ function build_event_registration_info(string $eventId, array $headers, ?string 
         'registration_open_to_all' => event_registration_open_to_all($event),
     ];
 
-    $studentId = trim((string) $studentId);
     if ($studentId !== '') {
         $studentRow = fetch_student_profile_by_id($studentId, $headers);
         if (is_array($studentRow)) {
             $access = resolve_student_registration_access($event, $studentRow, $headers);
+            $sessions = fetch_event_sessions($eventId, event_registration_read_headers());
+            $isSessionEvent = $sessions !== [] || event_uses_sessions($event);
+            $eligibleSessions = $isSessionEvent
+                ? event_matching_sessions_for_student($event, $sessions, $studentRow)
+                : [];
+            $sessionCapacity = $isSessionEvent
+                ? event_session_registration_capacity($eligibleSessions, $registrationLimit, event_registration_read_headers())
+                : null;
+            if ($studentRegistered && is_array($sessionCapacity)) {
+                $sessionCapacity = event_session_capacity_include_registered_student(
+                    $sessionCapacity,
+                    $eligibleSessions
+                );
+            }
+            $sessionTargetAllowed = !$isSessionEvent || $eligibleSessions !== [];
+            $sessionIsFull = is_array($sessionCapacity) && (bool) $sessionCapacity['is_full'];
+            $accessMessage = (string) ($access['message'] ?? '');
+            if (!$sessionTargetAllowed) {
+                $accessMessage = 'This event has no seminar session assigned to your course/year level.';
+            } elseif ($sessionIsFull) {
+                $accessMessage = 'Registration is full for your assigned seminar.';
+            }
             $docAccess = resolve_student_document_access($eventId, $studentId, $headers);
             $payload['availability'] = [
-                'allowed' => (bool) ($access['allowed'] ?? false),
-                'target_allowed' => (bool) ($access['target_allowed'] ?? false),
+                'allowed' => (bool) ($access['allowed'] ?? false) && $sessionTargetAllowed && !$sessionIsFull,
+                'target_allowed' => (bool) ($access['target_allowed'] ?? false) && $sessionTargetAllowed,
                 'approval_required' => (bool) ($access['approval_required'] ?? false),
+                'eligible_sessions' => $eligibleSessions,
+                'session_attendance_rule' => normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all'),
+                'session_scoped' => $isSessionEvent,
+                'session_registration_count' => is_array($sessionCapacity)
+                    ? (int) $sessionCapacity['registration_count']
+                    : null,
+                'session_registration_limit' => $isSessionEvent && is_array($sessionCapacity)
+                    ? $sessionCapacity['registration_limit']
+                    : null,
+                'session_is_full' => is_array($sessionCapacity)
+                    ? (bool) $sessionCapacity['is_full']
+                    : false,
+                'session_capacity' => $sessionCapacity,
                 'requirements_required' => (bool) ($docAccess['required'] ?? false),
                 'requirements_complete' => (bool) ($docAccess['complete'] ?? false),
                 'requirements_approved' => (bool) ($docAccess['approved'] ?? false),
                 'requirements_status' => (string) ($docAccess['status'] ?? ''),
                 'requirements_decline_reason' => (string) ($docAccess['decline_reason'] ?? ''),
-                'message' => (string) ($access['message'] ?? ''),
+                'message' => $accessMessage,
             ];
+            $payload['is_registered'] = $studentRegistered;
+            if (is_array($sessionCapacity)) {
+                $payload['registration_count'] = (int) $sessionCapacity['registration_count'];
+                $payload['registration_limit'] = $sessionCapacity['registration_limit'];
+                $payload['participant_total'] = format_event_registration_total(
+                    (int) $sessionCapacity['registration_count'],
+                    array_merge($event, ['registered_count' => (int) $sessionCapacity['registration_count']])
+                );
+                $payload['is_full'] = (bool) $sessionCapacity['is_full'];
+            }
             if (($docAccess['required'] ?? false) && !($docAccess['approved'] ?? false) && ($access['message'] ?? '') === '') {
                 $payload['availability']['message'] = (string) ($docAccess['message'] ?? '');
             }

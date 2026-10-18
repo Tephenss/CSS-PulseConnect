@@ -42,6 +42,8 @@ function event_sessions_supported_columns(array $headers): array
         'topic',
         'description',
         'location',
+        'target_participant',
+        'registration_limit',
         'updated_at',
     ];
 
@@ -151,6 +153,15 @@ function normalize_event_sessions(mixed $rawSessions, string $fallbackLocation =
         $topic = clean_string((string) ($rawSession['topic'] ?? ''));
         $description = clean_text((string) ($rawSession['description'] ?? ''));
         $location = clean_string((string) ($rawSession['location'] ?? $fallbackLocation));
+        $targetParticipantRaw = clean_string((string) ($rawSession['target_participant'] ?? ''));
+        $targetParticipant = '';
+        if ($targetParticipantRaw !== '') {
+            $decodedTarget = decode_target_participant($targetParticipantRaw);
+            $targetParticipant = encode_target_participant(
+                (string) ($decodedTarget['course'] ?? 'ALL'),
+                $decodedTarget['years'] ?? ['ALL']
+            );
+        }
         $startAtRaw = trim((string) ($rawSession['start_at'] ?? ''));
         $endAtRaw = trim((string) ($rawSession['end_at'] ?? ''));
 
@@ -179,15 +190,26 @@ function normalize_event_sessions(mixed $rawSessions, string $fallbackLocation =
         if ($scanWindowMinutes <= 0) {
             $scanWindowMinutes = 30;
         }
+        $sessionLimitRaw = $rawSession['registration_limit'] ?? null;
+        if ($sessionLimitRaw !== null && $sessionLimitRaw !== ''
+            && !preg_match('/\A\d+\z/', trim((string) $sessionLimitRaw))) {
+            throw new RuntimeException('Seminar student limits must be whole numbers.');
+        }
+        $sessionLimit = normalize_registration_limit($sessionLimitRaw);
+        if ($sessionLimitRaw !== null && $sessionLimitRaw !== '' && $sessionLimit === null) {
+            throw new RuntimeException('Seminar student limits must be between 1 and 9999.');
+        }
 
         $sessions[] = [
             'title' => $title,
             'topic' => $topic !== '' ? $topic : null,
             'description' => $description !== '' ? $description : null,
             'location' => $location !== '' ? $location : null,
+            'target_participant' => $targetParticipant,
             'start_at' => $startAt->format('c'),
             'end_at' => $endAt->format('c'),
             'scan_window_minutes' => $scanWindowMinutes,
+            'registration_limit' => $sessionLimit,
             'sort_order' => isset($rawSession['sort_order']) ? max(0, (int) $rawSession['sort_order']) : $index,
         ];
     }
@@ -202,6 +224,40 @@ function normalize_event_sessions(mixed $rawSessions, string $fallbackLocation =
     });
 
     return array_values($sessions);
+}
+
+function validate_event_session_capacity_allocations(array $sessions, ?int $eventLimit): ?string
+{
+    if (count($sessions) !== 2) {
+        return null;
+    }
+
+    $hasSplitTargets = count(array_filter($sessions, static function (array $session): bool {
+        return trim((string) ($session['target_participant'] ?? '')) !== '';
+    })) === 2;
+    $limits = array_map(static fn (array $session): ?int => isset($session['registration_limit'])
+        ? (int) $session['registration_limit']
+        : null, $sessions);
+    $hasSessionLimit = count(array_filter($limits, static fn (?int $limit): bool => $limit !== null)) > 0;
+
+    if (!$hasSplitTargets) {
+        return $hasSessionLimit
+            ? 'Per-seminar student limits can only be set when participants are split between both seminars.'
+            : null;
+    }
+    if ($eventLimit === null) {
+        return $hasSessionLimit
+            ? 'Set the total Student Limit before assigning separate seminar limits.'
+            : null;
+    }
+    if ($limits[0] === null || $limits[1] === null) {
+        return 'Set a student limit for both seminars before saving the split allocation.';
+    }
+    if ($limits[0] < 1 || $limits[1] < 1 || $limits[0] + $limits[1] > $eventLimit) {
+        return 'The two seminar limits cannot exceed the total Student Limit.';
+    }
+
+    return null;
 }
 
 function derive_event_window_from_sessions(array $sessions): array
@@ -272,11 +328,18 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
     $hasTopic = in_array('topic', $supportedColumns, true);
     $hasDescription = in_array('description', $supportedColumns, true);
     $hasLocation = in_array('location', $supportedColumns, true);
+    $hasTargetParticipant = in_array('target_participant', $supportedColumns, true);
+    $hasRegistrationLimit = in_array('registration_limit', $supportedColumns, true);
     $hasUpdatedAt = in_array('updated_at', $supportedColumns, true);
 
     if (!$hasEndAt) {
         throw new RuntimeException(
             "Seminar sessions need an 'end_at' column. Run supabase/migrations/046_event_sessions_end_at.sql in the Supabase SQL Editor, then try again."
+        );
+    }
+    if (!$hasRegistrationLimit && array_filter($sessions, static fn (array $session): bool => $session['registration_limit'] !== null)) {
+        throw new RuntimeException(
+            'Per-seminar student limits need supabase/migrations/071_seminar_split_capacity.sql. Apply the migration, then try again.'
         );
     }
 
@@ -312,6 +375,12 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
         if ($hasLocation) {
             $row['location'] = $session['location'];
         }
+        if ($hasTargetParticipant) {
+            $row['target_participant'] = (string) ($session['target_participant'] ?? '');
+        }
+        if ($hasRegistrationLimit) {
+            $row['registration_limit'] = $session['registration_limit'];
+        }
         if ($hasUpdatedAt) {
             $row['updated_at'] = gmdate('c');
         }
@@ -326,6 +395,18 @@ function replace_event_sessions(string $eventId, array $sessions, array $headers
     $createRes = supabase_request('POST', $createUrl, $createHeaders, json_encode($payload, JSON_UNESCAPED_SLASHES));
     if (!$createRes['ok']) {
         $body = strtolower((string) ($createRes['body'] ?? ''));
+        if (str_contains($body, 'registration_limit') && (str_contains($body, 'schema cache') || str_contains($body, 'does not exist') || str_contains($body, 'column'))) {
+            clear_event_sessions_supported_columns_cache();
+            throw new RuntimeException(
+                'Per-seminar student limits need supabase/migrations/071_seminar_split_capacity.sql. Apply the migration, then try again.'
+            );
+        }
+        if (str_contains($body, 'target_participant') && (str_contains($body, 'schema cache') || str_contains($body, 'does not exist') || str_contains($body, 'column'))) {
+            clear_event_sessions_supported_columns_cache();
+            throw new RuntimeException(
+                'Per-seminar participant targeting needs supabase/migrations/069_session_targeting_and_attendance_rule.sql. Apply the migration, then try again.'
+            );
+        }
         if (str_contains($body, 'end_at') && str_contains($body, 'schema cache')) {
             clear_event_sessions_supported_columns_cache();
             throw new RuntimeException(
@@ -373,6 +454,8 @@ function normalize_event_session_rows(array $rows, string $fallbackEventId = '')
             'topic' => isset($row['topic']) ? (string) $row['topic'] : null,
             'description' => isset($row['description']) ? (string) $row['description'] : null,
             'location' => isset($row['location']) ? (string) $row['location'] : null,
+            'target_participant' => isset($row['target_participant']) ? (string) $row['target_participant'] : '',
+            'registration_limit' => isset($row['registration_limit']) ? max(1, (int) $row['registration_limit']) : null,
             'start_at' => $startAt,
             'end_at' => $endAt,
             'scan_window_minutes' => $scanWindow,
@@ -389,7 +472,7 @@ function normalize_event_session_rows(array $rows, string $fallbackEventId = '')
 function build_event_sessions_select_columns(array $supportedColumns): array
 {
     $selectColumns = ['id', 'event_id', 'title', 'start_at'];
-    foreach (['topic', 'description', 'location', 'end_at', 'scan_window_minutes', 'sort_order', 'session_no'] as $column) {
+    foreach (['topic', 'description', 'location', 'target_participant', 'registration_limit', 'end_at', 'scan_window_minutes', 'sort_order', 'session_no'] as $column) {
         if (in_array($column, $supportedColumns, true)) {
             $selectColumns[] = $column;
         }

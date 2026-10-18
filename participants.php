@@ -14,6 +14,7 @@ require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/event_session_targeting.php';
 require_once __DIR__ . '/includes/event_tabs.php';
 require_once __DIR__ . '/includes/student_requirements.php';
 require_once __DIR__ . '/includes/registration_access.php';
@@ -49,8 +50,19 @@ $eventLookup = fetch_event_row_by_id(
     'apikey: ' . SUPABASE_KEY,
     'Authorization: Bearer ' . SUPABASE_KEY,
     ],
-    'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration,early_out_enabled_at'
+    'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration,early_out_enabled_at,event_for,session_attendance_rule'
 );
+if (!$eventLookup['ok']) {
+    $eventLookup = fetch_event_row_by_id(
+        $eventId,
+        [
+            'Accept: application/json',
+            'apikey: ' . SUPABASE_KEY,
+            'Authorization: Bearer ' . SUPABASE_KEY,
+        ],
+        'id,title,start_at,end_at,created_by,status,grace_time,is_free_event,event_fee,allow_registration,event_for,session_attendance_rule'
+    );
+}
 if (!$eventLookup['ok']) {
     $eventLookup = fetch_event_row_by_id(
         $eventId,
@@ -86,6 +98,9 @@ if ($role === 'teacher') {
 }
 
 $sessions = fetch_event_sessions($eventId, $headers);
+if (!array_key_exists('session_attendance_rule', $event)) {
+    $event['sessions'] = $sessions;
+}
 $eventUsesSessions = count($sessions) > 0;
 $usesSessions = count($sessions) > 0;
 $walkInStorageWarning = '';
@@ -226,6 +241,46 @@ if ($usesSessions) {
     $pRes = supabase_request('GET', $pUrl, $headers);
     $participants = $pRes['ok'] ? json_decode((string) $pRes['body'], true) : [];
     $participants = is_array($participants) ? $participants : [];
+
+    $splitSessionAttendance = event_uses_split_session_attendance($event);
+    $eligibleSessionIdsByRegistration = [];
+    if ($splitSessionAttendance) {
+        $registrationIds = array_map(
+            static fn(array $participant): string => trim((string) ($participant['id'] ?? '')),
+            array_values(array_filter($participants, 'is_array'))
+        );
+        $savedAssignments = event_session_assignments_for_registrations(
+            $eventId,
+            $registrationIds,
+            $sessions,
+            $headers
+        );
+        foreach ($participants as $participant) {
+            if (!is_array($participant)) {
+                continue;
+            }
+            $registrationId = trim((string) ($participant['id'] ?? ''));
+            if ($registrationId === '') {
+                continue;
+            }
+            $profile = isset($participant['users']) && is_array($participant['users'])
+                ? $participant['users']
+                : null;
+            $eligibleSessions = is_array($savedAssignments)
+                ? ($savedAssignments[$registrationId] ?? [])
+                : [];
+            if ($eligibleSessions === [] && is_array($savedAssignments) && is_array($profile)) {
+                $eligibleSessions = event_matching_sessions_for_student($event, $sessions, $profile);
+            }
+            if (count($eligibleSessions) !== 1) {
+                $eligibleSessions = [];
+            }
+            $eligibleSessionIdsByRegistration[$registrationId] = array_fill_keys(array_map(
+                static fn(array $session): string => trim((string) ($session['id'] ?? '')),
+                $eligibleSessions
+            ), true);
+        }
+    }
 
     $sessionUserIds = [];
     $sessionStudentNos = [];
@@ -446,6 +501,10 @@ if ($usesSessions) {
         foreach ($sessions as $session) {
             $sessionId = (string) ($session['id'] ?? '');
             if ($sessionId === '') {
+                continue;
+            }
+            if ($splitSessionAttendance
+                && empty($eligibleSessionIdsByRegistration[$registrationId][$sessionId])) {
                 continue;
             }
             $meta = $sessionWindowMeta[$sessionId] ?? null;
@@ -681,6 +740,10 @@ if ($usesSessions) {
             if ($sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
                 continue;
             }
+            if ($splitSessionAttendance
+                && empty($eligibleSessionIdsByRegistration[$registrationId][$sessionId])) {
+                continue;
+            }
             $meta = $sessionWindowMeta[$sessionId];
             $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
             if ($attendanceCountsAsPresent(is_array($attendance) ? $attendance : null)) {
@@ -760,6 +823,10 @@ if ($usesSessions) {
         foreach ($sessions as $session) {
             $sessionId = (string) ($session['id'] ?? '');
             if ($sessionId === '' || !isset($sessionWindowMeta[$sessionId])) {
+                continue;
+            }
+            if ($splitSessionAttendance
+                && empty($eligibleSessionIdsByRegistration[$registrationId][$sessionId])) {
                 continue;
             }
             $meta = $sessionWindowMeta[$sessionId];
@@ -1353,6 +1420,8 @@ if ($usesSessions) {
                     <?php
                       $sessionId = (string) ($session['id'] ?? '');
                       $attendance = $attendanceMap[$registrationId][$sessionId] ?? null;
+                      $sessionAssigned = !$splitSessionAttendance
+                          || !empty($eligibleSessionIdsByRegistration[$registrationId][$sessionId]);
                       $checkInAt = is_array($attendance) ? trim((string) ($attendance['check_in_at'] ?? '')) : '';
                       $checkOutAt = is_array($attendance) ? trim((string) ($attendance['check_out_at'] ?? '')) : '';
                       $sessionMeta = $sessionWindowMeta[$sessionId] ?? null;
@@ -1361,7 +1430,9 @@ if ($usesSessions) {
                       $hasTimeOut = $checkOutAt !== '';
                     ?>
                     <td class="px-4 py-3.5 text-xs whitespace-nowrap">
-                      <?php if ($hasTimeIn): ?>
+                      <?php if (!$sessionAssigned): ?>
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-50 text-zinc-400 border border-zinc-200/50">Not assigned</span>
+                      <?php elseif ($hasTimeIn): ?>
                         <div class="space-y-1">
                           <div>
                             <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
@@ -2149,7 +2220,7 @@ $eventWindowClose = $eventWindowStart
     : null;
 $eventWindowClosed = $eventWindowClose ? ($nowUtc > $eventWindowClose->setTimezone(new DateTimeZone('UTC'))) : false;
 
-if ($eventWindowClosed) {
+if (!$usesSessions && $eventWindowClosed) {
     $syncNowIso = $nowUtc->format('c');
     foreach ($participants as $participantIndex => $participant) {
         if (!is_array($participant)) {

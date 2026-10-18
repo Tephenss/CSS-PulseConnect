@@ -42,7 +42,7 @@ $headers = [
 $lookup = fetch_event_row_by_id(
     $eventId,
     $headers,
-    'id,title,start_at,end_at,created_by,status,grace_time'
+    'id,title,start_at,end_at,created_by,status,grace_time,event_for,session_attendance_rule'
 );
 if (!$lookup['ok'] || !is_array($lookup['event'] ?? null)) {
     json_response(['ok' => false, 'error' => 'Event not found'], 404);

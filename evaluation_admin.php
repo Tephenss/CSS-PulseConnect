@@ -34,7 +34,7 @@ $headers = [
     'Authorization: Bearer ' . SUPABASE_KEY,
 ];
 
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,is_free_event,event_mode,event_structure&id=eq.' . rawurlencode($eventId) . '&limit=1';
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,created_by,is_free_event,event_mode,event_structure,session_attendance_rule&id=eq.' . rawurlencode($eventId) . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
 $eventRows = $eventRes['ok'] ? json_decode((string) $eventRes['body'], true) : [];
 $event = is_array($eventRows) && isset($eventRows[0]) ? $eventRows[0] : null;
@@ -229,11 +229,13 @@ $questionPresetSetsJson = json_encode(
 ) ?: '{"event_questions":[],"seminars":[]}';
 
 if ($tab === 'feedback') {
+    $splitAttendance = $usesSessions && event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]));
     $feedbackSections = evaluation_feedback_load_sections(
         $eventId,
         $headers,
         $sessions,
         $usesSessions,
+        $splitAttendance,
         $eventQuestions,
         $sessionQuestionGroups
     );
@@ -588,7 +590,7 @@ render_header('Evaluation Management', $user);
     <div class="max-w-4xl mx-auto space-y-8">
       <?php foreach ($feedbackSections as $sectionIndex => $section): ?>
         <?php
-          extract(evaluation_feedback_section_view_data($section), EXTR_SKIP);
+          extract(evaluation_feedback_section_view_data($section), EXTR_OVERWRITE);
           require __DIR__ . '/includes/evaluation_feedback_section_render.php';
         ?>
       <?php endforeach; ?>

@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/registration_access.php';
+require_once __DIR__ . '/event_sessions.php';
+require_once __DIR__ . '/event_session_targeting.php';
+
 function attendance_backfill_to_utc(?string $raw): ?DateTimeImmutable
 {
     if ($raw === null || trim($raw) === '') {
@@ -109,6 +113,93 @@ function attendance_backfill_insert_absent_row(
 
     $rows = json_decode((string) $res['body'], true);
     return is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+}
+
+/** @return array<string,array<string,mixed>> student user id => targeting profile */
+function attendance_backfill_student_profiles(array $participants, array $headers): array
+{
+    $studentIds = [];
+    foreach ($participants as $participant) {
+        if (!is_array($participant)) {
+            continue;
+        }
+        $studentId = trim((string) ($participant['student_id'] ?? ''));
+        if ($studentId !== '') {
+            $studentIds[$studentId] = true;
+        }
+    }
+    if ($studentIds === []) {
+        return [];
+    }
+
+    $profiles = [];
+    foreach (array_chunk(array_keys($studentIds), 80) as $chunk) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/users'
+            . '?select=id,student_id,course,sections(name),role'
+            . '&id=in.(' . implode(',', array_map('rawurlencode', $chunk)) . ')'
+            . '&role=eq.student&limit=500';
+        $res = supabase_request('GET', $url, $headers);
+        $rows = $res['ok'] ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $userId = trim((string) ($row['id'] ?? ''));
+            if ($userId !== '') {
+                $profiles[$userId] = $row;
+            }
+        }
+    }
+
+    if ($profiles === []) {
+        return [];
+    }
+
+    $rosters = student_roster_fetch_map_by_user_ids(array_keys($profiles));
+    $studentNos = [];
+    foreach ($profiles as $userId => $profile) {
+        if (isset($rosters[$userId])) {
+            continue;
+        }
+        $studentNo = student_roster_normalize_no((string) ($profile['student_id'] ?? ''));
+        if ($studentNo !== '') {
+            $studentNos[$studentNo] = true;
+        }
+    }
+    $rostersByNo = [];
+    foreach (array_chunk(array_keys($studentNos), 80) as $chunk) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/student_roster'
+            . '?select=student_no,course_code,program_label,year_level,is_irregular'
+            . '&student_no=in.(' . implode(',', array_map('rawurlencode', $chunk)) . ')'
+            . '&archived_at=is.null&limit=500';
+        $res = supabase_request('GET', $url, student_roster_supabase_headers());
+        $rows = $res['ok'] ? json_decode((string) ($res['body'] ?? ''), true) : [];
+        if (!is_array($rows)) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $studentNo = student_roster_normalize_no((string) ($row['student_no'] ?? ''));
+            if ($studentNo !== '') {
+                $rostersByNo[$studentNo] = $row;
+            }
+        }
+    }
+    foreach ($profiles as $userId => &$profile) {
+        $studentNo = student_roster_normalize_no((string) ($profile['student_id'] ?? ''));
+        $roster = $rosters[$userId] ?? $rostersByNo[$studentNo] ?? null;
+        $profile = event_targeting_apply_roster($profile, $roster);
+        $profile['section_name'] = extract_section_name($profile['sections'] ?? null);
+        $profile['year_level'] = extract_student_year_level($profile);
+    }
+    unset($profile);
+
+    return $profiles;
 }
 
 function attendance_backfill_for_simple_event(array $event, array $headers): void
@@ -238,10 +329,6 @@ function attendance_backfill_for_sessions(array $event, array $headers, array $s
         }
 
         $closesAt = $startAt->modify('+' . attendance_backfill_session_window_minutes($session) . ' minutes');
-        $endAt = attendance_backfill_to_utc((string) ($session['end_at'] ?? ''));
-        if ($endAt instanceof DateTimeImmutable && $endAt < $closesAt) {
-            $closesAt = $endAt;
-        }
 
         if ($nowUtc > $closesAt) {
             $closedSessions[$sessionId] = true;
@@ -253,11 +340,26 @@ function attendance_backfill_for_sessions(array $event, array $headers, array $s
     }
 
     $participantUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
-        . '?select=id,tickets(id)'
+        . '?select=id,student_id,tickets(id)'
         . '&event_id=eq.' . rawurlencode($eventId);
     $participantRes = supabase_request('GET', $participantUrl, $headers);
     $participants = $participantRes['ok'] ? json_decode((string) $participantRes['body'], true) : [];
     if (!is_array($participants)) {
+        return;
+    }
+
+    $studentProfiles = attendance_backfill_student_profiles($participants, $headers);
+    $registrationIds = array_map(
+        static fn(array $participant): string => trim((string) ($participant['id'] ?? '')),
+        array_values(array_filter($participants, 'is_array'))
+    );
+    $savedAssignments = event_session_assignments_for_registrations(
+        $eventId,
+        $registrationIds,
+        $sessions,
+        $headers
+    );
+    if (!is_array($savedAssignments)) {
         return;
     }
 
@@ -268,9 +370,27 @@ function attendance_backfill_for_sessions(array $event, array $headers, array $s
         }
 
         $registrationId = trim((string) ($participant['id'] ?? ''));
-        if ($registrationId === '') {
+        $studentId = trim((string) ($participant['student_id'] ?? ''));
+        if ($registrationId === '' || $studentId === '') {
             continue;
         }
+
+        $student = $studentProfiles[$studentId] ?? null;
+        if (!is_array($student)) {
+            continue;
+        }
+        $eligibleSessions = $savedAssignments[$registrationId] ?? [];
+        if ($eligibleSessions === []) {
+            $eligibleSessions = event_matching_sessions_for_student($event, $sessions, $student);
+        }
+        $splitAttendance = event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]));
+        if ($splitAttendance && count($eligibleSessions) !== 1) {
+            continue;
+        }
+        $eligibleSessionIds = array_fill_keys(array_map(
+            static fn(array $row): string => trim((string) ($row['id'] ?? '')),
+            $eligibleSessions
+        ), true);
 
         $tickets = isset($participant['tickets']) && is_array($participant['tickets']) ? $participant['tickets'] : [];
         foreach ($tickets as $ticket) {
@@ -284,6 +404,7 @@ function attendance_backfill_for_sessions(array $event, array $headers, array $s
             $pairs[] = [
                 'registration_id' => $registrationId,
                 'ticket_id' => $ticketId,
+                'eligible_session_ids' => $eligibleSessionIds,
             ];
         }
     }
@@ -336,6 +457,9 @@ function attendance_backfill_for_sessions(array $event, array $headers, array $s
         $registrationId = $pair['registration_id'];
         $ticketId = $pair['ticket_id'];
         foreach (array_keys($closedSessions) as $sessionId) {
+            if (!isset($pair['eligible_session_ids'][$sessionId])) {
+                continue;
+            }
             $existing = $existingByKey[$registrationId . '|' . $sessionId]
                 ?? $existingByKey[$ticketId . '|' . $sessionId]
                 ?? null;

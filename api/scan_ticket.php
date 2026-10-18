@@ -10,7 +10,11 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 require_once __DIR__ . '/../includes/scan_context.php';
+require_once __DIR__ . '/../includes/event_attendance_windows.php';
+require_once __DIR__ . '/../includes/evaluation_notifications.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/scan_write_queue.php';
 
@@ -43,7 +47,7 @@ $headers = [
 
 // Resolve ticket
 $ticketUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/tickets'
-    . '?select=id,token,registration_id,event_registrations(event_id),event_registrations(events(start_at,end_at))'
+    . '?select=id,token,registration_id,event_registrations(event_id,student_id),event_registrations(events(start_at,end_at))'
     . '&token=eq.' . rawurlencode($token)
     . '&limit=1';
 
@@ -61,8 +65,13 @@ if (!is_array($ticket) || empty($ticket['id'])) {
 $ticketId = (string) $ticket['id'];
 $registrationId = (string) ($ticket['registration_id'] ?? '');
 $eventId = '';
-if (isset($ticket['event_registrations']) && is_array($ticket['event_registrations'])) {
-    $eventId = (string) ($ticket['event_registrations']['event_id'] ?? '');
+$ticketRegistration = $ticket['event_registrations'] ?? null;
+if (is_array($ticketRegistration) && isset($ticketRegistration[0]) && is_array($ticketRegistration[0])) {
+    $ticketRegistration = $ticketRegistration[0];
+}
+if (is_array($ticketRegistration)) {
+    $ticket['event_registrations'] = $ticketRegistration;
+    $eventId = (string) ($ticketRegistration['event_id'] ?? '');
 }
 if ($registrationId === '' || $eventId === '') {
     json_response(['ok' => false, 'error' => 'Invalid Ticket'], 409);
@@ -72,7 +81,7 @@ $nowIso = gmdate('c');
 $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
 // Load event and validate scanner access.
-$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at,location,event_mode,event_structure'
+$eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events?select=id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,session_attendance_rule'
     . '&id=eq.' . rawurlencode($eventId)
     . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
@@ -89,6 +98,33 @@ if (strtolower((string) ($event['status'] ?? 'draft')) !== 'published') {
 $role = (string) ($user['role'] ?? 'teacher');
 if ($role === 'teacher' && !teacher_can_scan_event((string) ($user['id'] ?? ''), $eventId, $headers)) {
     json_response(['ok' => false, 'error' => 'You are not assigned to scan this event'], 403);
+}
+
+    $registration = $ticket['event_registrations'] ?? [];
+$studentId = is_array($registration) ? trim((string) ($registration['student_id'] ?? '')) : '';
+$splitAttendance = event_uses_split_session_attendance($event);
+$splitEligibleSessions = [];
+if ($splitAttendance) {
+    $studentProfile = $studentId !== '' ? fetch_student_profile_by_id($studentId, $headers) : null;
+    $eventSessions = fetch_event_sessions($eventId, $headers);
+    $splitEligibleSessions = event_matching_sessions_for_registration(
+        $event,
+        $eventSessions,
+        is_array($studentProfile) ? $studentProfile : null,
+        $eventId,
+        $registrationId,
+        $headers
+    );
+    if (count($splitEligibleSessions) !== 1) {
+        json_response([
+            'ok' => false,
+            'error' => $splitEligibleSessions === []
+                ? 'This student is not assigned to a seminar in this event.'
+                : 'This student is assigned to multiple seminars. Correct the event session assignment before scanning.',
+            'status' => $splitEligibleSessions === [] ? 'session_not_required' : 'session_assignment_ambiguous',
+        ], $splitEligibleSessions === [] ? 403 : 409);
+    }
+    $event['sessions'] = [$splitEligibleSessions[0]];
 }
 
 $scanContext = resolve_event_scan_context($event, $now, $headers);
@@ -112,7 +148,36 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
         json_response(['ok' => false, 'error' => 'Seminar lookup failed'], 500);
     }
 
-    $sessionAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,last_scanned_at'
+    if ($splitAttendance) {
+        $eligibleSessions = $splitEligibleSessions;
+    } else {
+        $studentProfile = $studentId !== ''
+            ? fetch_student_profile_by_id($studentId, $headers)
+            : null;
+        $eligibleSessions = is_array($studentProfile)
+            ? event_matching_sessions_for_student(
+                $event,
+                fetch_event_sessions($eventId, $headers),
+                $studentProfile
+            )
+            : [];
+    }
+    $sessionEligible = false;
+    foreach ($eligibleSessions as $eligibleSession) {
+        if ((string) ($eligibleSession['id'] ?? '') === $sessionId) {
+            $sessionEligible = true;
+            break;
+        }
+    }
+    if (!$sessionEligible) {
+        json_response([
+            'ok' => false,
+            'error' => 'This student is not assigned to this seminar.',
+            'status' => 'session_not_required',
+        ], 403);
+    }
+
+    $sessionAttendanceUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,check_out_at,last_scanned_at'
         . '&session_id=eq.' . rawurlencode($sessionId)
         . '&ticket_id=eq.' . rawurlencode($ticketId)
         . '&limit=1';
@@ -125,10 +190,121 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
     $sessionHasTimeIn = function_exists('attendance_has_valid_time_in')
         ? attendance_has_valid_time_in(is_array($existingSessionAttendance) ? $existingSessionAttendance : null)
         : (is_array($existingSessionAttendance) && trim((string) ($existingSessionAttendance['check_in_at'] ?? '')) !== '');
+    $writeHeaders = [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'apikey: ' . SUPABASE_KEY,
+        'Authorization: Bearer ' . SUPABASE_KEY,
+        'Prefer: return=representation',
+    ];
+
+    if ($splitAttendance && $scanMode === 'check_out') {
+        if (!$sessionHasTimeIn) {
+            json_response(['ok' => false, 'error' => 'Cannot time out - this student has no time-in for this seminar.'], 409);
+        }
+        if (trim((string) ($existingSessionAttendance['check_out_at'] ?? '')) !== '') {
+            json_response(['ok' => false, 'error' => 'This student already timed out for this seminar.', 'status' => 'already_checked_out'], 409);
+        }
+        $startAt = parse_iso_datetime((string) ($sessionContext['start_at'] ?? ''));
+        $endAt = parse_iso_datetime((string) ($sessionContext['end_at'] ?? ''));
+        $graceMinutes = max(1, (int) ($sessionContext['scan_window_minutes'] ?? 30));
+        $outWindow = attendance_check_out_window(
+            $endAt,
+            isset($sessionContext['early_out_enabled_at']) ? (string) $sessionContext['early_out_enabled_at'] : null,
+            $now,
+            $startAt,
+            $graceMinutes
+        );
+        if (($outWindow['open'] ?? false) !== true) {
+            json_response([
+                'ok' => false,
+                'error' => (string) ($outWindow['message'] ?? 'Time-out is not available for this seminar.'),
+                'status' => (string) ($outWindow['status'] ?? 'too_early_checkout'),
+            ], 409);
+        }
+        $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?id=eq.'
+            . rawurlencode((string) $existingSessionAttendance['id'])
+            . '&select=id,status,check_in_at,check_out_at,last_scanned_at';
+        $patchBody = [
+            'check_out_at' => $nowIso,
+            'last_scanned_by' => (string) ($user['id'] ?? ''),
+            'last_scanned_at' => $nowIso,
+            'updated_at' => $nowIso,
+        ];
+        $patchOutcome = scan_write_attempt_or_queue([
+            'type' => 'session_attendance_patch',
+            'method' => 'PATCH',
+            'url' => $patchUrl,
+            'headers' => $writeHeaders,
+            'body' => json_encode($patchBody, JSON_UNESCAPED_SLASHES),
+            'meta' => [
+                'ticket_id' => $ticketId,
+                'session_id' => $sessionId,
+                'event_id' => $eventId,
+            ],
+        ]);
+        if (($patchOutcome['ok'] ?? false) !== true) {
+            json_response(['ok' => false, 'error' => (string) ($patchOutcome['error'] ?? 'Seminar time-out failed')], 500);
+        }
+        notify_student_evaluation_open_after_timeout(
+            $studentId,
+            $eventId,
+            (string) ($event['title'] ?? ''),
+            $sessionId,
+            true
+        );
+        $sessionName = trim((string) ($sessionContext['display_name'] ?? $sessionContext['title'] ?? 'Seminar'));
+        json_response([
+            'ok' => true,
+            'message' => 'Timed out for ' . ($sessionName !== '' ? $sessionName : 'Seminar')
+                . ((($patchOutcome['queued'] ?? false) === true) ? ' (queued for sync)' : ''),
+            'attendance' => is_array($patchOutcome['body'] ?? null) && isset($patchOutcome['body'][0])
+                ? $patchOutcome['body'][0]
+                : array_merge($existingSessionAttendance, $patchBody),
+            'queued' => (bool) ($patchOutcome['queued'] ?? false),
+            'session_id' => $sessionId,
+            'action' => 'check_out',
+        ], 200);
+    }
+
     if ($scanMode === 'check_out' && !$sessionHasTimeIn) {
         json_response(['ok' => false, 'error' => 'Cannot time out — this student has no time-in (marked absent).'], 409);
     }
     if (is_array($existingSessionAttendance) && !empty($existingSessionAttendance['id'])) {
+        if ($splitAttendance && !$sessionHasTimeIn) {
+            $patchUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?id=eq.'
+                . rawurlencode((string) $existingSessionAttendance['id'])
+                . '&select=id,status,check_in_at,check_out_at,last_scanned_at';
+            $patchBody = [
+                'status' => 'present',
+                'check_in_at' => $nowIso,
+                'last_scanned_by' => (string) ($user['id'] ?? ''),
+                'last_scanned_at' => $nowIso,
+                'updated_at' => $nowIso,
+            ];
+            $patchOutcome = scan_write_attempt_or_queue([
+                'type' => 'session_attendance_patch',
+                'method' => 'PATCH',
+                'url' => $patchUrl,
+                'headers' => $writeHeaders,
+                'body' => json_encode($patchBody, JSON_UNESCAPED_SLASHES),
+                'meta' => ['ticket_id' => $ticketId, 'session_id' => $sessionId, 'event_id' => $eventId],
+            ]);
+            if (($patchOutcome['ok'] ?? false) !== true) {
+                json_response(['ok' => false, 'error' => (string) ($patchOutcome['error'] ?? 'Seminar scan update failed')], 500);
+            }
+            json_response([
+                'ok' => true,
+                'message' => 'Checked in for ' . trim((string) ($sessionContext['display_name'] ?? $sessionContext['title'] ?? 'Seminar'))
+                    . ((($patchOutcome['queued'] ?? false) === true) ? ' (queued for sync)' : ''),
+                'attendance' => is_array($patchOutcome['body'] ?? null) && isset($patchOutcome['body'][0])
+                    ? $patchOutcome['body'][0]
+                    : array_merge($existingSessionAttendance, $patchBody),
+                'queued' => (bool) ($patchOutcome['queued'] ?? false),
+                'session_id' => $sessionId,
+                'action' => 'check_in',
+            ], 200);
+        }
         json_response(['ok' => false, 'error' => 'This ticket is already recorded for the active seminar'], 409);
     }
 
@@ -142,13 +318,6 @@ if ((string) ($scanContext['source'] ?? '') === 'session') {
         'last_scanned_at' => $nowIso,
         'updated_at' => $nowIso,
     ]];
-    $writeHeaders = [
-        'Content-Type: application/json',
-        'Accept: application/json',
-        'apikey: ' . SUPABASE_KEY,
-        'Authorization: Bearer ' . SUPABASE_KEY,
-        'Prefer: return=representation',
-    ];
     $writeUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_session_attendance?select=id,status,check_in_at,last_scanned_at';
     $writeOutcome = scan_write_attempt_or_queue([
         'type' => 'session_attendance_insert',

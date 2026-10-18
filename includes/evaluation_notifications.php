@@ -188,7 +188,8 @@ function evaluation_final_seminar_for_event(string $eventId): ?array
  */
 function evaluation_timeout_is_final_for_eval(
     string $eventId,
-    ?string $sessionId
+    ?string $sessionId,
+    bool $allowAssignedSession = false
 ): bool {
     if (!function_exists('fetch_event_sessions')) {
         require_once __DIR__ . '/event_sessions.php';
@@ -206,6 +207,16 @@ function evaluation_timeout_is_final_for_eval(
             }
             $valid[] = $session;
         }
+    }
+
+    if ($allowAssignedSession) {
+        $sessionId = trim((string) $sessionId);
+        foreach ($valid as $session) {
+            if ($sessionId !== '' && $sessionId === trim((string) ($session['id'] ?? ''))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     if (count($valid) <= 1) {
@@ -262,7 +273,8 @@ function notify_student_evaluation_open_after_timeout(
     string $studentId,
     string $eventId,
     string $eventTitle = '',
-    ?string $sessionId = null
+    ?string $sessionId = null,
+    bool $allowAssignedSession = false
 ): void {
     try {
         $studentId = evaluation_notify_resolve_user_id($studentId);
@@ -272,7 +284,7 @@ function notify_student_evaluation_open_after_timeout(
         }
 
         // Multi-seminar: wait for final out (last seminar / event end), not the first out.
-        if (!evaluation_timeout_is_final_for_eval($eventId, $sessionId)) {
+        if (!evaluation_timeout_is_final_for_eval($eventId, $sessionId, $allowAssignedSession)) {
             return;
         }
 
@@ -285,11 +297,13 @@ function notify_student_evaluation_open_after_timeout(
             $title = 'this event';
         }
 
-        $isMultiFinal = evaluation_final_seminar_for_event($eventId) !== null;
+        $isMultiFinal = !$allowAssignedSession && evaluation_final_seminar_for_event($eventId) !== null;
         $notifTitle = 'Evaluation Open';
-        $notifBody = $isMultiFinal
+        $notifBody = $allowAssignedSession
+            ? 'You completed your assigned seminar for "' . $title . '". You can now answer the evaluation form.'
+            : ($isMultiFinal
             ? 'You completed your final time-out for "' . $title . '". You can now answer the evaluation form.'
-            : 'You timed out of "' . $title . '". You can now answer the evaluation form.';
+            : 'You timed out of "' . $title . '". You can now answer the evaluation form.');
         $data = [
             'type' => 'eval_open',
             'event_id' => $eventId,

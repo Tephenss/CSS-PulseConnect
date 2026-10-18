@@ -9,6 +9,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/supabase.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/event_sessions.php';
+require_once __DIR__ . '/includes/registration_access.php';
+require_once __DIR__ . '/includes/event_session_targeting.php';
 require_once __DIR__ . '/includes/evaluation_notifications.php';
 require_once __DIR__ . '/includes/evaluation_feedback_lib.php';
 
@@ -228,7 +230,7 @@ if (count($eventIds) === 0) {
 
 $eventFilter = implode(',', array_map(static fn (string $id): string => '"' . $id . '"', $eventIds));
 $eventsUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?select=id,title,start_at,end_at,event_mode,event_structure&order=created_at.desc&id=in.(' . $eventFilter . ')';
+        . '?select=id,title,start_at,end_at,event_mode,event_structure,event_for,session_attendance_rule&order=created_at.desc&id=in.(' . $eventFilter . ')';
 $eventsRes = supabase_request('GET', $eventsUrl, $headers);
 $eventsRows = $eventsRes['ok'] ? json_decode((string) $eventsRes['body'], true) : null;
 $events = is_array($eventsRows) ? $eventsRows : [];
@@ -266,17 +268,17 @@ if ($usesSessions) {
         $emptyMessage = 'No seminar sessions are configured for this event yet.';
         $sidebarHint = 'Seminar-based events will show one event feedback section plus the seminars you actually attended.';
     } else {
-        $attendedSessionIds = evaluation_page_attended_session_ids($sessions, $studentId, $headers);
-        // Multi-seminar: form unlocks only after Seminar 2 (last) time-out.
-        $final = evaluation_final_seminar_for_event($activeEventId);
-        $finalId = $final !== null ? trim((string) ($final['id'] ?? '')) : '';
-        if ($finalId !== '') {
-            $hasAttendance = in_array($finalId, $attendedSessionIds, true);
-        } elseif (evaluation_event_expects_two_seminars($activeEventId)) {
-            $hasAttendance = false;
-        } else {
-            $hasAttendance = count($attendedSessionIds) > 0;
-        }
+        $studentProfile = fetch_student_profile_by_id($studentId, $headers);
+        $eligibleSessions = is_array($studentProfile)
+            ? event_matching_sessions_for_student($activeEvent, $sessions, $studentProfile)
+            : [];
+        $sessions = $eligibleSessions;
+        $attendedSessionIds = evaluation_page_attended_session_ids($eligibleSessions, $studentId, $headers);
+        $hasAttendance = event_student_meets_session_attendance_rule(
+            $activeEvent,
+            $eligibleSessions,
+            $attendedSessionIds
+        );
 
         if ($hasAttendance) {
             $eventQuestions = evaluation_page_fetch_event_questions($activeEventId, $headers);
@@ -347,12 +349,15 @@ if ($usesSessions) {
             $sidebarHint = 'Answer the whole-event feedback plus the seminar sections you actually attended.';
             $emptyMessage = 'No evaluation questions are available for your attended seminar sections yet.';
         } else {
-            $sidebarHint = $finalId !== ''
-                ? 'Evaluation opens only after you time out of the final seminar.'
-                : 'You only receive evaluation forms for seminars where your time-out was recorded.';
-            $emptyMessage = $finalId !== ''
-                ? 'Time out of the final seminar before answering evaluation.'
-                : 'Only timed-out seminars can be evaluated for this event.';
+            $allRequired = normalize_session_attendance_rule($activeEvent['session_attendance_rule'] ?? 'all') === 'all';
+            $sidebarHint = $allRequired
+                ? 'Time out of every seminar assigned to you before answering evaluation.'
+                : 'Time out of at least one seminar assigned to you before answering evaluation.';
+            $emptyMessage = count($eligibleSessions) === 0
+                ? 'This event has no seminar session assigned to your course/year level.'
+                : ($allRequired
+                    ? 'Time out of every seminar assigned to you before answering evaluation.'
+                    : 'Time out of at least one seminar assigned to you before answering evaluation.');
         }
     }
 } else {

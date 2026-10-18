@@ -11,6 +11,8 @@ require_once __DIR__ . '/../includes/supabase.php';
 require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 require_once __DIR__ . '/../includes/certificate_auto_issue.php';
 require_once __DIR__ . '/../includes/evaluation_notifications.php';
 
@@ -277,7 +279,7 @@ function evaluation_group_submissions(array $rawAnswers, string $legacySessionId
 }
 
 $eventUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
-    . '?select=id,event_mode,event_structure'
+    . '?select=id,event_mode,event_structure,event_for,session_attendance_rule'
     . '&id=eq.' . rawurlencode($eventId)
     . '&limit=1';
 $eventRes = supabase_request('GET', $eventUrl, $headers);
@@ -297,6 +299,18 @@ if (!is_array($event)) {
 $studentId = (string) ($user['id'] ?? '');
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+$studentProfile = fetch_student_profile_by_id($studentId, $headers);
+$eligibleSessions = $usesSessions
+    ? event_matching_sessions_for_student_registration(
+        $event,
+        $sessions,
+        is_array($studentProfile) ? $studentProfile : null,
+        $eventId,
+        $studentId,
+        $headers
+    )
+    : [];
+$splitAttendance = $usesSessions && event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]));
 $submittedSections = evaluation_group_submissions($rawAnswers, $legacySessionId);
 
 if (count($submittedSections) === 0) {
@@ -307,41 +321,39 @@ try {
     $eventEligible = false;
     $attendedSessionIds = [];
 
-    $validSessionCount = 0;
-    if (is_array($sessions)) {
-        foreach ($sessions as $session) {
-            if (is_array($session) && trim((string) ($session['id'] ?? '')) !== '') {
-                $validSessionCount++;
-            }
-        }
+    if ($usesSessions && $eligibleSessions === []) {
+        json_response([
+            'ok' => false,
+            'error' => 'This event has no seminar session assigned to your course/year level.',
+        ], 403);
     }
+    if ($splitAttendance && count($eligibleSessions) !== 1) {
+        json_response([
+            'ok' => false,
+            'error' => 'Your event must assign you to exactly one seminar session. Contact the event organizer.',
+        ], 409);
+    }
+
     $simpleOut = function_exists('certificate_auto_student_has_checkout_simple')
         ? certificate_auto_student_has_checkout_simple($eventId, $studentId, $headers)
         : evaluation_has_simple_attendance($eventId, $studentId, $headers);
 
-    if ($usesSessions && $validSessionCount >= 2) {
-        $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
-        // Multi-seminar (2+): unlock only after last seminar (Seminar 2) time-out.
-        $final = evaluation_final_seminar_for_event($eventId);
-        if ($final !== null) {
-            $finalId = trim((string) ($final['id'] ?? ''));
-            $eventEligible = $finalId !== '' && in_array($finalId, $attendedSessionIds, true);
-        } elseif (evaluation_event_expects_two_seminars($eventId)) {
-            $eventEligible = false;
-        } else {
-            $eventEligible = count($attendedSessionIds) > 0;
-        }
-    } elseif ($usesSessions) {
-        $attendedSessionIds = evaluation_attended_session_ids($sessions, $studentId, $headers);
-        $eventEligible = $simpleOut || count($attendedSessionIds) > 0;
+    if ($usesSessions) {
+        $attendedSessionIds = evaluation_attended_session_ids($eligibleSessions, $studentId, $headers);
+        $eventEligible = event_student_meets_session_attendance_rule(
+            $event,
+            $eligibleSessions,
+            $attendedSessionIds
+        );
     } else {
         $eventEligible = $simpleOut || evaluation_has_simple_attendance($eventId, $studentId, $headers);
     }
 
     if (!$eventEligible) {
-        $finalGate = $usesSessions ? evaluation_final_seminar_for_event($eventId) : null;
-        $msg = $finalGate !== null
-            ? 'Evaluation opens only after you time out of the final seminar.'
+        $msg = $usesSessions
+            ? (normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all') === 'all'
+                ? 'Time out of every seminar assigned to you before submitting the evaluation.'
+                : 'Time out of at least one seminar assigned to you before submitting the evaluation.')
             : 'Only attendees who timed out can submit evaluation for this event.';
         json_response(['ok' => false, 'error' => $msg], 403);
     }
@@ -361,7 +373,12 @@ try {
             if ($sectionSessionId === '') {
                 json_response(['ok' => false, 'error' => 'Seminar scope is missing session_id.'], 400);
             }
-            if (!in_array($sectionSessionId, $attendedSessionIds, true)) {
+            $eligibleSessionIds = array_map(
+                static fn(array $row): string => trim((string) ($row['id'] ?? '')),
+                $eligibleSessions
+            );
+            if (!in_array($sectionSessionId, $eligibleSessionIds, true)
+                || !in_array($sectionSessionId, $attendedSessionIds, true)) {
                 json_response(['ok' => false, 'error' => 'You can only answer seminar evaluation for seminars you attended.'], 403);
             }
 

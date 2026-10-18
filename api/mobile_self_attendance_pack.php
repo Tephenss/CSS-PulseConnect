@@ -12,6 +12,8 @@ require_once __DIR__ . '/../includes/json.php';
 require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/event_attendance_windows.php';
 require_once __DIR__ . '/../includes/storage_signed.php';
@@ -76,10 +78,13 @@ if (is_array($userRow)) {
 
 $regSelectCandidates = [
     'id,registered_at,student_id,event_id,'
-        . 'events(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time,early_out_enabled_at),'
+        . 'events(id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,session_attendance_rule,grace_time,early_out_enabled_at),'
         . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))',
     'id,registered_at,student_id,event_id,'
-        . 'events(id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time),'
+        . 'events(id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,session_attendance_rule,grace_time),'
+        . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))',
+    'id,registered_at,student_id,event_id,'
+        . 'events(id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,grace_time),'
         . 'tickets(id,token,attendance(id,status,check_in_at,check_out_at,last_scanned_at))',
     'id,registered_at,student_id,event_id,'
         . 'events(id,title,status,start_at,end_at,location,grace_time),'
@@ -126,6 +131,7 @@ foreach ($regRows as $row) {
 }
 
 $sessionsByEvent = fetch_event_sessions_map(array_keys($eventIds), $headers);
+$studentProfile = fetch_student_profile_by_id($userId, $headers);
 
 // Enrich sessions with early_out_enabled_at when available.
 foreach ($sessionsByEvent as $eid => &$sessionList) {
@@ -163,6 +169,7 @@ foreach ($sessionsByEvent as $eid => &$sessionList) {
 unset($sessionList);
 
 $packEvents = [];
+$packedEventIds = [];
 foreach ($regRows as $row) {
     if (!is_array($row)) {
         continue;
@@ -192,6 +199,12 @@ foreach ($regRows as $row) {
     if (!is_array($ticket) || empty($ticket['id'])) {
         continue;
     }
+    // The query is newest-first. Do not return an older ticket/session assignment
+    // for the same event after a student re-registers.
+    if (isset($packedEventIds[$eventId])) {
+        continue;
+    }
+    $packedEventIds[$eventId] = true;
     $ticketId = (string) $ticket['id'];
 
     $attendanceRaw = $ticket['attendance'] ?? null;
@@ -204,11 +217,28 @@ foreach ($regRows as $row) {
         }
     }
 
-    $sessions = $sessionsByEvent[$eventId] ?? [];
-    if (!is_array($sessions)) {
-        $sessions = [];
+    $allSessions = $sessionsByEvent[$eventId] ?? [];
+    if (!is_array($allSessions)) {
+        $allSessions = [];
     }
-    $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+    $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $allSessions]));
+    $splitAttendance = $usesSessions
+        && event_uses_split_session_attendance(array_merge($event, ['sessions' => $allSessions]));
+    $eligibleSessions = $splitAttendance
+        ? (is_array($studentProfile)
+            ? event_matching_sessions_for_registration(
+                array_merge($event, ['sessions' => $allSessions]),
+                $allSessions,
+                $studentProfile,
+                $eventId,
+                (string) ($row['id'] ?? ''),
+                $headers
+            )
+            : [])
+        : $allSessions;
+    $sessionAssignmentValid = !$splitAttendance || count($eligibleSessions) === 1;
+    // Fail closed for malformed split assignments instead of exposing both seminar QR paths.
+    $sessions = $sessionAssignmentValid ? $eligibleSessions : [];
 
     $sessionAttendanceById = [];
     if ($usesSessions && $ticketId !== '') {
@@ -257,6 +287,21 @@ foreach ($regRows as $row) {
         ];
     }
 
+    if ($splitAttendance) {
+        $assignedSessionId = count($slimSessions) === 1
+            ? trim((string) ($slimSessions[0]['id'] ?? ''))
+            : '';
+        $attendance = $assignedSessionId !== ''
+            ? ($sessionAttendanceById[$assignedSessionId] ?? null)
+            : null;
+    }
+
+    $participantEventStructure = (string) ($event['event_structure'] ?? '');
+    if ($splitAttendance || count($slimSessions) !== count($allSessions)) {
+        $participantEventStructure = count($slimSessions) > 1 ? 'two_seminars' : 'one_seminar';
+    }
+    $participantSessionCount = count($slimSessions);
+
     $eventEarlyOut = null;
     if (attendance_early_out_is_active((string) ($event['early_out_enabled_at'] ?? ''), $now)) {
         $eventEarlyOut = (string) $event['early_out_enabled_at'];
@@ -270,10 +315,17 @@ foreach ($regRows as $row) {
         'end_at' => (string) ($event['end_at'] ?? ''),
         'location' => (string) ($event['location'] ?? ''),
         'event_mode' => (string) ($event['event_mode'] ?? ''),
-        'event_structure' => (string) ($event['event_structure'] ?? ''),
+        'event_structure' => $participantEventStructure,
+        'total_event_structure' => ($splitAttendance || count($slimSessions) !== count($allSessions))
+            ? $participantEventStructure
+            : null,
         'grace_time' => simple_event_grace_minutes($event),
         'early_out_enabled_at' => $eventEarlyOut,
         'uses_sessions' => $usesSessions,
+        'session_attendance_rule' => normalize_session_attendance_rule($event['session_attendance_rule'] ?? 'all'),
+        'total_session_count' => $participantSessionCount,
+        'session_count' => $participantSessionCount,
+        'session_assignment_valid' => $sessionAssignmentValid,
         'qr_payload' => 'PULSE-EVENT-' . $eventId,
         'registration_id' => (string) ($row['id'] ?? ''),
         'ticket_id' => $ticketId,
@@ -285,6 +337,10 @@ foreach ($regRows as $row) {
             'last_scanned_at' => (string) ($attendance['last_scanned_at'] ?? ''),
         ] : null,
         'sessions' => $slimSessions,
+        'eligible_session_ids' => array_values(array_filter(array_map(
+            static fn (array $session): string => trim((string) ($session['id'] ?? '')),
+            $sessions
+        ))),
         'participant_name' => $participantName,
         'participant_photo_url' => $participantPhoto,
         'participant_student_id' => $participantStudentNo !== '' ? $participantStudentNo : $userId,

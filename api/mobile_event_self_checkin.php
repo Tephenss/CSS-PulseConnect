@@ -12,6 +12,8 @@ require_once __DIR__ . '/../includes/mobile_api.php';
 require_once __DIR__ . '/../includes/mobile_session.php';
 require_once __DIR__ . '/../includes/api_rate_limit.php';
 require_once __DIR__ . '/../includes/event_sessions.php';
+require_once __DIR__ . '/../includes/registration_access.php';
+require_once __DIR__ . '/../includes/event_session_targeting.php';
 require_once __DIR__ . '/../includes/scan_context.php';
 require_once __DIR__ . '/../includes/event_attendance_windows.php';
 require_once __DIR__ . '/../includes/mobile_scan_write.php';
@@ -57,6 +59,8 @@ $reprHeaders = [
 // Do not select uses_sessions — column is not present on all DBs; event_uses_sessions()
 // derives seminar mode from event_mode / event_structure.
 $eventSelectCandidates = [
+    'id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,session_attendance_rule,grace_time,early_out_enabled_at',
+    'id,title,status,start_at,end_at,location,event_mode,event_structure,event_for,grace_time,early_out_enabled_at',
     'id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time,early_out_enabled_at',
     'id,title,status,start_at,end_at,location,event_mode,event_structure,grace_time',
     'id,title,status,start_at,end_at,location,event_mode,grace_time',
@@ -125,6 +129,7 @@ $regUrl = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
     . '?select=id,student_id,tickets(id,token)'
     . '&event_id=eq.' . rawurlencode($eventId)
     . '&student_id=eq.' . rawurlencode($userId)
+    . '&order=registered_at.desc'
     . '&limit=1';
 $regRes = supabase_request('GET', $regUrl, $headers);
 $regRows = json_decode((string) ($regRes['body'] ?? ''), true);
@@ -272,6 +277,32 @@ $isPresent = static function (array $row): bool {
 // while events.event_mode is still "simple").
 $sessions = fetch_event_sessions($eventId, $headers);
 $usesSessions = event_uses_sessions(array_merge($event, ['sessions' => $sessions]));
+if ($usesSessions) {
+    $studentProfile = fetch_student_profile_by_id($userId, $headers);
+    $eligibleSessions = event_matching_sessions_for_registration(
+        $event,
+        $sessions,
+        is_array($studentProfile) ? $studentProfile : null,
+        $eventId,
+        $registrationId,
+        $headers
+    );
+    if ($eligibleSessions === []) {
+        json_response([
+            'ok' => false,
+            'error' => 'You are not assigned to any seminar session in this event.',
+            'status' => 'forbidden',
+        ], 403);
+    }
+    if (event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions])) && count($eligibleSessions) !== 1) {
+        json_response([
+            'ok' => false,
+            'error' => 'Your event must assign you to exactly one seminar session. Contact the event organizer.',
+            'status' => 'session_assignment_ambiguous',
+        ], 409);
+    }
+    $sessions = $eligibleSessions;
+}
 if ($usesSessions && empty($sessions)) {
     // Mode says seminar but rows missing — stay seminar-aware with empty list.
     $sessions = [];
@@ -396,7 +427,8 @@ if ($usesSessions) {
             $userId,
             $eventId,
             (string) ($event['title'] ?? ''),
-            $sessionId
+            $sessionId,
+            event_uses_split_session_attendance(array_merge($event, ['sessions' => $sessions]))
         );
         $respond(true, 'checked_out', 'Checked out for ' . $sessionName . '.' . mobile_attendance_queued_suffix($writeOutcome), 200, [
             'session_id' => $sessionId,

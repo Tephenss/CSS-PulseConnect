@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/event_session_targeting.php';
+
 /**
  * Aggregated scanner attendance % (counts only — no PII).
  * Teacher / assigned assistant scanners, online live indicator.
@@ -80,6 +82,296 @@ function mobile_scan_stats_mark_checked_out(array &$checkedOutKeys, array $row):
     }
 }
 
+function mobile_scan_stats_session_registration_count(
+    string $eventId,
+    string $sessionId,
+    array $headers
+): int {
+    if ($eventId === '' || $sessionId === '') {
+        return 0;
+    }
+
+    return max(0, supabase_exact_count(
+        'event_session_registrations',
+        $headers,
+        'event_id=eq.' . rawurlencode($eventId)
+            . '&session_id=eq.' . rawurlencode($sessionId)
+    ));
+}
+
+function mobile_scan_stats_fetch_event_sessions(string $eventId, array $headers): array
+{
+    $columnsToTry = [
+        'id,event_id,title,start_at,end_at,target_participant,registration_limit,scan_window_minutes,sort_order',
+        'id,event_id,title,start_at,end_at,target_participant,scan_window_minutes,sort_order',
+        'id,event_id,title,start_at,end_at,target_participant,scan_window_minutes',
+        'id,event_id,title,start_at,end_at,target_participant',
+        'id,event_id,title,start_at,end_at',
+        'id,event_id,title,start_at',
+    ];
+    foreach ($columnsToTry as $columns) {
+        $url = rtrim(SUPABASE_URL, '/') . '/rest/v1/event_sessions'
+            . '?select=' . rawurlencode($columns)
+            . '&event_id=eq.' . rawurlencode(trim($eventId))
+            . '&limit=10'
+            . (str_contains($columns, 'sort_order')
+                ? '&order=sort_order.asc,start_at.asc'
+                : '&order=start_at.asc');
+        $rows = mobile_scan_stats_fetch_rows($url, $headers);
+        if ($rows === []) {
+            continue;
+        }
+
+        $sessions = [];
+        foreach ($rows as $row) {
+            if (!is_array($row) || trim((string) ($row['id'] ?? '')) === '') {
+                continue;
+            }
+            $row['registration_limit'] = isset($row['registration_limit'])
+                ? max(1, (int) $row['registration_limit'])
+                : null;
+            $row['scan_window_minutes'] = max(1, (int) ($row['scan_window_minutes'] ?? 30));
+            $sessions[] = $row;
+        }
+        if ($sessions !== []) {
+            return $sessions;
+        }
+    }
+
+    return [];
+}
+
+/** @return array{event:array,sessions:array}|null */
+function mobile_scan_stats_split_event_context(string $eventId, array $headers): ?array
+{
+    static $cache = [];
+    $eventId = trim($eventId);
+    if ($eventId === '') {
+        return null;
+    }
+    if (array_key_exists($eventId, $cache)) {
+        return $cache[$eventId];
+    }
+
+    $event = null;
+    foreach ([
+        'id,event_for,session_attendance_rule,registration_limit',
+        'id,event_for,session_attendance_rule',
+        'id,event_for,registration_limit',
+        'id,event_for',
+    ] as $columns) {
+        $eventRows = mobile_scan_stats_fetch_rows(
+            rtrim(SUPABASE_URL, '/') . '/rest/v1/events'
+                . '?select=' . rawurlencode($columns)
+                . '&id=eq.' . rawurlencode($eventId)
+                . '&limit=1',
+            $headers
+        );
+        if (isset($eventRows[0]) && is_array($eventRows[0])) {
+            $event = $eventRows[0];
+            break;
+        }
+    }
+    if (!is_array($event)) {
+        $cache[$eventId] = null;
+        return null;
+    }
+
+    $sessions = mobile_scan_stats_fetch_event_sessions($eventId, $headers);
+    $eventWithSessions = $event;
+    $eventWithSessions['sessions'] = $sessions;
+    $distinctTargets = [];
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $target = strtoupper(trim((string) ($session['target_participant'] ?? '')));
+        if ($target !== '') {
+            $distinctTargets[$target] = true;
+        }
+    }
+    $hasDistinctSeminarTargets = count($sessions) === 2 && count($distinctTargets) > 1;
+    $hasPerSeminarCapacity = count($sessions) === 2 && array_reduce(
+        $sessions,
+        static fn (bool $found, array $session): bool => $found
+            || (int) ($session['registration_limit'] ?? 0) > 0,
+        false
+    );
+    if (!event_uses_split_session_attendance($eventWithSessions)
+        && !$hasDistinctSeminarTargets
+        && !$hasPerSeminarCapacity) {
+        $cache[$eventId] = null;
+        return null;
+    }
+
+    $cache[$eventId] = [
+        'event' => $event,
+        'sessions' => $sessions,
+    ];
+    return $cache[$eventId];
+}
+
+function mobile_scan_stats_resolve_split_session_id(
+    string $eventId,
+    string $requestedSessionId,
+    array $headers,
+    string $mode
+): ?string {
+    $context = mobile_scan_stats_split_event_context($eventId, $headers);
+    if ($context === null) {
+        return null;
+    }
+
+    $requestedSessionId = trim($requestedSessionId);
+    if ($requestedSessionId !== '') {
+        return $requestedSessionId;
+    }
+
+    $sessions = $context['sessions'];
+    if (count($sessions) !== 2) {
+        return '';
+    }
+
+    $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    $open = [];
+    $upcoming = [];
+    $started = [];
+    foreach ($sessions as $session) {
+        if (!is_array($session)) {
+            continue;
+        }
+        $sessionId = trim((string) ($session['id'] ?? ''));
+        if ($sessionId === '') {
+            continue;
+        }
+        try {
+            $startAt = new DateTimeImmutable((string) ($session['start_at'] ?? ''));
+        } catch (Throwable $e) {
+            continue;
+        }
+
+        $startTimestamp = $startAt->getTimestamp();
+        if ($startAt > $now) {
+            $upcoming[] = ['id' => $sessionId, 'start' => $startTimestamp];
+            continue;
+        }
+        $started[] = ['id' => $sessionId, 'start' => $startTimestamp];
+
+        $windowMinutes = max(1, (int) ($session['scan_window_minutes'] ?? 30));
+        if ($now <= $startAt->modify('+' . $windowMinutes . ' minutes')) {
+            $open[] = ['id' => $sessionId, 'start' => $startTimestamp];
+        }
+    }
+
+    if (strtolower(trim($mode)) === 'check_out' && $started !== []) {
+        usort($started, static fn (array $a, array $b): int => $b['start'] <=> $a['start']);
+        return $started[0]['id'];
+    }
+    if (count($open) === 1) {
+        return $open[0]['id'];
+    }
+    if (count($open) > 1) {
+        return '';
+    }
+    if ($upcoming !== []) {
+        usort($upcoming, static fn (array $a, array $b): int => $a['start'] <=> $b['start']);
+        return $upcoming[0]['id'];
+    }
+    if ($started !== []) {
+        usort($started, static fn (array $a, array $b): int => $b['start'] <=> $a['start']);
+        return $started[0]['id'];
+    }
+    return '';
+}
+
+/**
+ * Return the number assigned to the active split seminar, or null for events
+ * that should retain the legacy event-wide denominator.
+ */
+function mobile_scan_stats_split_session_total(
+    string $eventId,
+    string $sessionId,
+    array $headers,
+    int $eventRegistrationTotal
+): ?int {
+    $context = mobile_scan_stats_split_event_context($eventId, $headers);
+    if ($context === null) {
+        return null;
+    }
+    $sessions = $context['sessions'];
+    if ($sessionId === '' || count($sessions) !== 2) {
+        return 0;
+    }
+
+    $activeSession = null;
+    $explicitSessions = [];
+    foreach ($sessions as $session) {
+        $target = trim((string) ($session['target_participant'] ?? ''));
+        if ($target !== '') {
+            $explicitSessions[] = $session;
+        }
+        if ((string) ($session['id'] ?? '') === $sessionId) {
+            $activeSession = $session;
+        }
+    }
+    if (!is_array($activeSession)) {
+        return 0;
+    }
+
+    $sessionLimitRaw = trim((string) ($activeSession['registration_limit'] ?? ''));
+    if ($sessionLimitRaw !== '' && preg_match('/\A[1-9]\d{0,3}\z/', $sessionLimitRaw)) {
+        return (int) $sessionLimitRaw;
+    }
+
+    // Registration capacity also falls back to the event-level student limit
+    // when a seminar does not have its own allocation.
+    $eventLimitRaw = trim((string) ($context['event']['registration_limit'] ?? ''));
+    if ($eventLimitRaw !== '' && preg_match('/\A[1-9]\d{0,3}\z/', $eventLimitRaw)) {
+        return (int) $eventLimitRaw;
+    }
+
+    // A saved legacy split may have one blank target; that session represents
+    // the complement, so subtract the explicitly targeted seminar's roster.
+    if (count($explicitSessions) === 1) {
+        $activeTarget = trim((string) ($activeSession['target_participant'] ?? ''));
+        if ($activeTarget === '') {
+            $otherId = trim((string) ($explicitSessions[0]['id'] ?? ''));
+            return max(
+                0,
+                $eventRegistrationTotal
+                    - mobile_scan_stats_session_registration_count($eventId, $otherId, $headers)
+            );
+        }
+    }
+
+    if (count($explicitSessions) === 2) {
+        $activeTarget = trim((string) ($activeSession['target_participant'] ?? ''));
+        $activeCount = mobile_scan_stats_session_registration_count($eventId, $sessionId, $headers);
+        foreach ($explicitSessions as $otherSession) {
+            $otherId = trim((string) ($otherSession['id'] ?? ''));
+            if ($otherId === '' || $otherId === $sessionId) {
+                continue;
+            }
+            $otherTarget = trim((string) ($otherSession['target_participant'] ?? ''));
+            if (event_session_target_is_strict_subset($activeTarget, $otherTarget)) {
+                return $activeCount;
+            }
+            if (event_session_target_is_strict_subset($otherTarget, $activeTarget)) {
+                return max(
+                    0,
+                    $activeCount
+                        - mobile_scan_stats_session_registration_count($eventId, $otherId, $headers)
+                );
+            }
+        }
+        return $activeCount;
+    }
+
+    // When targeting metadata is blank, the saved session roster is the
+    // authoritative seminar-specific denominator.
+    return mobile_scan_stats_session_registration_count($eventId, $sessionId, $headers);
+}
+
 /**
  * In check_out mode, `present` is the completed time-out count and `total`
  * is the number of students who timed in (the only students eligible to time out).
@@ -108,6 +400,16 @@ function mobile_scan_attendance_stats(
         return $empty;
     }
 
+    $resolvedSplitSessionId = mobile_scan_stats_resolve_split_session_id(
+        $eventId,
+        $sessionId,
+        $headers,
+        $mode
+    );
+    if ($resolvedSplitSessionId !== null) {
+        $sessionId = $resolvedSplitSessionId;
+    }
+
     $regRows = mobile_scan_stats_fetch_rows(
         rtrim(SUPABASE_URL, '/') . '/rest/v1/event_registrations'
             . '?select=id'
@@ -126,7 +428,14 @@ function mobile_scan_attendance_stats(
         }
     }
     $regIds = mobile_scan_stats_clean_ids($regIds);
-    $total = count($regIds);
+    $total = max(
+        count($regIds),
+        supabase_exact_count(
+            'event_registrations',
+            $headers,
+            'event_id=eq.' . rawurlencode($eventId)
+        )
+    );
     $presentKeys = [];
     $checkedOutKeys = [];
 
@@ -229,10 +538,21 @@ function mobile_scan_attendance_stats(
         }
     }
 
+    $splitSessionTotal = mobile_scan_stats_split_session_total(
+        $eventId,
+        $sessionId,
+        $headers,
+        $total
+    );
+    $isSplitSessionScoped = $splitSessionTotal !== null;
+    if ($splitSessionTotal !== null) {
+        $total = $splitSessionTotal;
+    }
+
     $present = $mode === 'check_out'
         ? count($checkedOutKeys)
         : count($presentKeys);
-    if ($mode === 'check_out') {
+    if ($mode === 'check_out' && !$isSplitSessionScoped) {
         $total = count($presentKeys);
     }
     if ($present > $total && $total > 0) {
